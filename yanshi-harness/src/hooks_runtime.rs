@@ -38,6 +38,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use yanshi_tool::{
@@ -267,7 +268,7 @@ struct ApprovalCache {
   /// most tools — a session/run-scoped "allow" for e.g. `http` still
   /// blanket-covers every subsequent `http` call, matching the original
   /// coarse `(tool_name, scope)` behavior. For `shell`/`script`/
-  /// `code_exec`/`file`(write) it's `Some(prefix)`: an "allow" earned by
+  /// `code_exec`/`file`(write) it's `Some(sha256)`: an "allow" earned by
   /// one `rm -rf /tmp/build` invocation must not silently cover a later
   /// `rm -rf /` in the same session just because both are `shell` calls.
   cached: HashMap<(String, Option<String>, ApprovalScope), ApprovalOutcome>,
@@ -308,28 +309,39 @@ impl ApprovalCache {
 /// do (W1.7). `None` for every other tool, which keeps the original
 /// coarse `(tool_name, scope)` caching behavior unchanged.
 ///
-/// The digest is a bounded literal prefix of the risk-bearing field, not
-/// a hash — two calls whose prefixes happen to collide within
-/// `DIGEST_PREFIX_CHARS` still share a cache entry. That's an accepted
-/// granularity/size tradeoff, not a correctness bug: it can only ever
-/// make the cache *more* conservative than exact-match keying, never
-/// less (it still fully replaces the pre-fix "any command, any path"
-/// blanket).
+/// The digest is a SHA-256 over the *whole* risk-bearing field(s). An
+/// earlier version keyed on a 64-char literal prefix, which is strictly
+/// broader than exact matching: `code_exec` payloads routinely share
+/// their opening `import` lines, so one session-scoped allow covered any
+/// later code with the same preamble (eval 2026-10-07 S3). `script` also
+/// folds in `args`, since the same script with different args is a
+/// different action.
 fn approval_cache_digest(tool: &str, params: &serde_json::Value) -> Option<String> {
-  const DIGEST_PREFIX_CHARS: usize = 64;
-  let field = match tool {
-    "shell" => params.get("command").and_then(serde_json::Value::as_str)?,
-    "script" => params.get("script").and_then(serde_json::Value::as_str)?,
-    "code_exec" => params.get("code").and_then(serde_json::Value::as_str)?,
+  let field = |name: &str| params.get(name).and_then(serde_json::Value::as_str);
+  let mut hasher = Sha256::new();
+  match tool {
+    "shell" => hasher.update(field("command")?),
+    "code_exec" => hasher.update(field("code")?),
+    "script" => {
+      hasher.update(field("script")?);
+      // NUL can't appear in a script path, so the boundary is unambiguous.
+      hasher.update([0]);
+      hasher.update(
+        params
+          .get("args")
+          .map(|args| args.to_string())
+          .unwrap_or_default(),
+      );
+    }
     "file" => {
-      if params.get("operation").and_then(serde_json::Value::as_str) != Some("write") {
+      if field("operation") != Some("write") {
         return None;
       }
-      params.get("path").and_then(serde_json::Value::as_str)?
+      hasher.update(field("path")?)
     }
     _ => return None,
-  };
-  Some(field.chars().take(DIGEST_PREFIX_CHARS).collect())
+  }
+  Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Tool decorator emitted by [`wrap_registry`]. Implements
@@ -1280,6 +1292,55 @@ mod tests {
     );
 
     assert_eq!(*counter.lock().unwrap(), 3);
+  }
+
+  /// Eval 2026-10-07 S3: the digest used to be a 64-char literal prefix,
+  /// so two `code_exec` payloads sharing their import preamble shared one
+  /// session-scoped approval. Likewise `script` ignored `args`.
+  #[tokio::test]
+  async fn approval_cache_does_not_collide_on_shared_prefix_or_args() {
+    let preamble = "import os\nimport sys\nimport json\nimport pathlib\nimport subprocess\n";
+    assert!(preamble.len() > 64);
+    for (tool, first, second) in [
+      (
+        "code_exec",
+        serde_json::json!({"code": format!("{preamble}print('hi')")}),
+        serde_json::json!({"code": format!("{preamble}subprocess.run(['rm', '-rf', '/'])")}),
+      ),
+      (
+        "script",
+        serde_json::json!({"script": "cleanup.py", "args": {"dir": "/tmp/build"}}),
+        serde_json::json!({"script": "cleanup.py", "args": {"dir": "/"}}),
+      ),
+    ] {
+      let (probe, counter) = ProbeTool::new(tool, ToolIdempotency::NonIdempotent);
+      let registry = build_registry(probe);
+      let sinks =
+        SinkChain::new().push(Arc::new(InMemoryEventSink::new()) as Arc<dyn HarnessEventSink>);
+      let approval_calls = Arc::new(std::sync::Mutex::new(0_usize));
+      let approval = Arc::new(ScopedAllowOnceProvider {
+        scope: ApprovalScope::Session,
+        calls: approval_calls.clone(),
+      });
+      let config =
+        HookConfig::new("sess-1", approval, sinks).with_pre_hook(Arc::new(RequireApprovalHook));
+      let registry = wrap_registry(registry, config);
+
+      registry.execute(tool, first.clone()).await.unwrap();
+      registry.execute(tool, first).await.unwrap();
+      assert_eq!(
+        *approval_calls.lock().unwrap(),
+        1,
+        "{tool}: identical call reuses approval"
+      );
+      registry.execute(tool, second).await.unwrap();
+      assert_eq!(
+        *approval_calls.lock().unwrap(),
+        2,
+        "{tool}: different call must re-prompt"
+      );
+      assert_eq!(*counter.lock().unwrap(), 3);
+    }
   }
 
   /// W1.7: same coarse-cache bug as shell, for `file` write calls — a
