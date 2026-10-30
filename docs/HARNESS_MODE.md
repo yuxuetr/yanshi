@@ -259,7 +259,9 @@ The wrapper:
 3. Merges the per-hook decisions (`Deny` > `RequireApproval` >
    `Allow`).
 4. **Production escalation**: when `HarnessProfile::Production` is
-   active and the call's idempotency is `NonIdempotent`, the wrapper
+   active and the call's idempotency is anything but `Idempotent`
+   (`NonIdempotent` or `Unknown` — the latter is the default for MCP,
+   agent, workflow and modality tools), the wrapper
    escalates even an `Allow` to `RequireApproval` with risk
    `Critical` so production runs are fail-closed by default
    (HARNESS_MODE_EVOLUTION Risk 2).

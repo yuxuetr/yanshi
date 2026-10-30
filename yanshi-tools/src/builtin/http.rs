@@ -214,9 +214,12 @@ impl Tool for HttpTool {
       .to_uppercase()
       .as_str()
     {
-      // RFC 7231 idempotent / safe methods.
-      "GET" | "HEAD" | "PUT" | "DELETE" => ToolIdempotency::Idempotent,
-      "POST" | "PATCH" => ToolIdempotency::NonIdempotent,
+      // Only the RFC 7231 *safe* methods. PUT/DELETE are idempotent on the
+      // wire but mutate remote state, and `Idempotent` here also means
+      // "no approval under the production profile, may run in a parallel
+      // batch, may be auto-replayed on resume".
+      "GET" | "HEAD" => ToolIdempotency::Idempotent,
+      "POST" | "PATCH" | "PUT" | "DELETE" => ToolIdempotency::NonIdempotent,
       _ => ToolIdempotency::Unknown,
     }
   }
@@ -459,6 +462,26 @@ mod tests {
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
   };
+
+  #[test]
+  fn only_safe_methods_are_idempotent() {
+    let tool = HttpTool::new(Arc::new(SandboxPolicy::default())).unwrap();
+    for (method, expected) in [
+      ("GET", ToolIdempotency::Idempotent),
+      ("head", ToolIdempotency::Idempotent),
+      ("PUT", ToolIdempotency::NonIdempotent),
+      ("DELETE", ToolIdempotency::NonIdempotent),
+      ("POST", ToolIdempotency::NonIdempotent),
+      ("PATCH", ToolIdempotency::NonIdempotent),
+      ("OPTIONS", ToolIdempotency::Unknown),
+    ] {
+      assert_eq!(
+        tool.idempotency(&json!({"method": method})),
+        expected,
+        "{method}"
+      );
+    }
+  }
 
   /// `.with_no_proxy()` is required because a developer or CI runner
   /// with a system HTTP proxy (Clash / V2Ray / corporate proxy) would

@@ -531,10 +531,12 @@ impl HookedTool {
     pre_decision: PreToolDecision,
   ) -> Result<Proceed, HarnessError> {
     // Fail-closed escalation: production profile demands explicit
-    // approval for any NonIdempotent call, regardless of what the
-    // pre-hooks said.
+    // approval for any call not *declared* Idempotent, regardless of what
+    // the pre-hooks said. `Unknown` is the default for MCP / agent /
+    // workflow / modality tools, so treating it as safe would wave through
+    // most side-effecting calls.
     let escalation = matches!(self.config.profile, HarnessProfile::Production)
-      && matches!(pending.idempotency, ToolIdempotency::NonIdempotent);
+      && !matches!(pending.idempotency, ToolIdempotency::Idempotent);
 
     let need_approval = match pre_decision {
       PreToolDecision::Allow => {
@@ -1049,6 +1051,33 @@ mod tests {
         .iter()
         .any(|event| matches!(event.body, HarnessEventBody::ApprovalRequested(_)))
     );
+  }
+
+  /// Eval 2026-10-07 S4: `Unknown` is the default for MCP / agent /
+  /// workflow / modality tools, so the production profile must treat it
+  /// like `NonIdempotent`; only a declared `Idempotent` call skips approval.
+  #[tokio::test]
+  async fn production_profile_escalates_everything_but_declared_idempotent() {
+    for (idempotency, expect_escalation) in [
+      (ToolIdempotency::Unknown, true),
+      (ToolIdempotency::NonIdempotent, true),
+      (ToolIdempotency::Idempotent, false),
+    ] {
+      let (tool, counter) = ProbeTool::new("probe", idempotency);
+      let registry = build_registry(tool);
+      let sinks =
+        SinkChain::new().push(Arc::new(InMemoryEventSink::new()) as Arc<dyn HarnessEventSink>);
+      let config = HookConfig::new("sess-1", Arc::new(AutoDenyApprovalProvider::new()), sinks)
+        .with_profile(HarnessProfile::Production);
+      let registry = wrap_registry(registry, config);
+      let result = registry.execute("probe", serde_json::json!({})).await;
+      assert_eq!(
+        matches!(result, Err(ToolError::PolicyDenied { .. })),
+        expect_escalation,
+        "{idempotency:?}: {result:?}"
+      );
+      assert_eq!(*counter.lock().unwrap(), usize::from(!expect_escalation));
+    }
   }
 
   /// S4.2 follow-up: `production_profile_escalates_non_idempotent_tools`
