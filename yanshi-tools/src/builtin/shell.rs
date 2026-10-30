@@ -145,6 +145,7 @@ impl Tool for ShellTool {
       .map_err(|err| ToolError::SandboxViolation {
         message: format!("OS sandbox preparation failed: {err}"),
       })?;
+    scrub_inherited_env(&mut cmd);
 
     let output = tokio::time::timeout(timeout, cmd.output())
       .await
@@ -403,6 +404,40 @@ fn extract_shell_segments(command: &str) -> Vec<String> {
   segments
 }
 
+/// Variables a sandboxed child may inherit from the host. Everything else
+/// (API keys, `DATABASE_URL`, gateway tokens, ...) is dropped: the child's
+/// output flows back to the LLM vendor and into traces, so an inherited
+/// secret is an exfiltrated secret. Same stance as the MCP stdio and skill
+/// validator env allowlists.
+pub(crate) const CHILD_ENV_ALLOWLIST: &[&str] = &[
+  "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TERM",
+];
+
+/// Drop the host environment from `cmd`, keeping only [`CHILD_ENV_ALLOWLIST`]
+/// plus any variable already set explicitly on `cmd`. Call it *after*
+/// `SandboxBackend::wrap_command`: the macOS backend rebuilds the command
+/// and only carries explicit vars over, so an earlier `env_clear()` would be
+/// silently lost and the wrapper would inherit everything again.
+pub(crate) fn scrub_inherited_env(cmd: &mut tokio::process::Command) {
+  let explicit: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = cmd
+    .as_std()
+    .get_envs()
+    .map(|(k, v)| (k.to_os_string(), v.map(|v| v.to_os_string())))
+    .collect();
+  cmd.env_clear();
+  for key in CHILD_ENV_ALLOWLIST {
+    if let Some(value) = std::env::var_os(key) {
+      cmd.env(key, value);
+    }
+  }
+  for (key, value) in explicit {
+    match value {
+      Some(value) => cmd.env(key, value),
+      None => cmd.env_remove(key),
+    };
+  }
+}
+
 /// Project a [`SandboxPolicy`] into the [`SandboxScope`] consumed by OS-level
 /// backends. We treat `allowed_paths` as both read- and write-allowed because
 /// the in-process layer does not split read vs. write at policy level — that
@@ -444,6 +479,26 @@ mod tests {
       .await
       .unwrap();
     assert!(result.content.contains("hello"));
+  }
+
+  #[tokio::test]
+  async fn child_does_not_inherit_host_secrets() {
+    // `cargo test` exports CARGO_MANIFEST_DIR into this process; it stands
+    // in for an API key or DATABASE_URL a gateway host would carry.
+    assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
+    let policy = SandboxPolicy {
+      allowed_commands: vec!["env".to_string()],
+      ..SandboxPolicy::default()
+    };
+    let tool = ShellTool::new(Arc::new(policy)).with_os_sandbox();
+    let result = tool.execute(json!({"command": "env"})).await.unwrap();
+    assert!(!result.is_error, "{}", result.content);
+    assert!(
+      !result.content.contains("CARGO_MANIFEST_DIR="),
+      "host env leaked into child: {}",
+      result.content
+    );
+    assert!(result.content.contains("PATH="), "{}", result.content);
   }
 
   #[tokio::test]

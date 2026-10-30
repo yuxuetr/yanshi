@@ -338,6 +338,7 @@ impl Tool for ScriptTool {
       .map_err(|err| ToolError::SandboxViolation {
         message: format!("OS sandbox preparation failed: {err}"),
       })?;
+    super::shell::scrub_inherited_env(&mut cmd);
 
     // Stdio must be configured *after* `wrap_command`: an enforcing
     // backend (e.g. macOS `sandbox-exec`) may rebuild the underlying
