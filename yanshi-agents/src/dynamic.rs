@@ -184,6 +184,65 @@ impl AsyncNode for PrecomputedResultNode {
   }
 }
 
+/// Suffix of the no-op node inserted after every `run_if` step that
+/// something depends on. See [`compile_plan_to_flow_with_precomputed_and_governance`].
+const SETTLED_SUFFIX: &str = "::settled";
+
+/// An `agent` step: `AgentNode` reads only its `message` input, so the
+/// prompt alone would leave the sub-agent blind to the outputs it was
+/// ordered after (eval 2026-10-07 D2). Append whichever dependency
+/// outputs arrived (a `run_if`-skipped dependency contributes nothing).
+struct AgentStepNode {
+  inner: AgentNode,
+  prompt: String,
+  depends_on: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl AsyncNode for AgentStepNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let message = compose_agent_message(&self.prompt, &self.depends_on, inputs);
+    let mut inputs = inputs.clone();
+    inputs.insert(
+      "message".to_string(),
+      FlowValue::Json(Value::String(message)),
+    );
+    self.inner.execute(&inputs).await
+  }
+}
+
+/// The state pool restricted to the plan's own steps, dropping the
+/// internal `::settled` barrier nodes.
+pub fn plan_step_results(
+  plan: &WorkflowPlan,
+  mut state: HashMap<String, AsyncNodeResult>,
+) -> HashMap<String, AsyncNodeResult> {
+  let ids: HashSet<&str> = plan.steps.iter().map(|step| step.id.as_str()).collect();
+  state.retain(|id, _| ids.contains(id.as_str()));
+  state
+}
+
+fn compose_agent_message(prompt: &str, depends_on: &[String], inputs: &AsyncNodeInputs) -> String {
+  let context: Vec<String> = depends_on
+    .iter()
+    .filter_map(|dependency| {
+      let rendered = match inputs.get(dependency)? {
+        FlowValue::Json(Value::String(text)) => text.clone(),
+        FlowValue::Json(value) => value.to_string(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+      };
+      Some(format!("[{dependency}]\n{rendered}"))
+    })
+    .collect();
+  if context.is_empty() {
+    return prompt.to_string();
+  }
+  format!(
+    "{prompt}\n\nOutputs of the steps this one depends on:\n\n{}",
+    context.join("\n\n")
+  )
+}
+
 /// Parent-flow governance forwarded into every `agent`-kind plan step
 /// (W2.3), so a dynamic-plan sub-agent is cancellable, budget-constrained,
 /// and Harness-visible instead of running in an isolated bubble with only
@@ -306,7 +365,21 @@ pub fn compile_plan_to_flow_with_precomputed_and_governance(
     .map(|step| (step.id.as_str(), step.output_key()))
     .collect();
 
-  let nodes = plan
+  // A dependency that carries `run_if` may be skipped. Core `Flow` fails a
+  // node whose *listed* dependency it maps from was skipped, which used to
+  // fail every step downstream of a benign skip (eval 2026-10-07 D1).
+  // Instead the dependent orders itself after a no-op `<dep>::settled`
+  // node and maps from `<dep>` without listing it — an unlisted mapping
+  // source is optional in `Flow`, and the barrier keeps the ordering.
+  let skippable: HashSet<&str> = plan
+    .steps
+    .iter()
+    .filter(|step| step.run_if.is_some() && !precomputed.contains_key(&step.id))
+    .map(|step| step.id.as_str())
+    .collect();
+  let settled = |dependency: &str| format!("{dependency}{SETTLED_SUFFIX}");
+
+  let mut nodes: Vec<GraphNode> = plan
     .steps
     .iter()
     .map(|step| {
@@ -375,27 +448,56 @@ pub fn compile_plan_to_flow_with_precomputed_and_governance(
                 governance.event_sink.clone(),
                 governance.limits.clone(),
               );
-              // AgentNode reads its `message` input; dependency outputs gate
-              // ordering (and are available in the pool) but the message is static.
-              let initial = HashMap::from([(
-                "message".to_string(),
-                FlowValue::Json(Value::String(prompt.to_string())),
-              )]);
-              (NodeType::Standard(Arc::new(node)), initial)
+              let node = AgentStepNode {
+                inner: node,
+                prompt: prompt.to_string(),
+                depends_on: step.depends_on.clone(),
+              };
+              (NodeType::Standard(Arc::new(node)), HashMap::new())
             }
           }
         };
 
+      let dependencies = step
+        .depends_on
+        .iter()
+        .map(|dependency| {
+          if skippable.contains(dependency.as_str()) {
+            settled(dependency)
+          } else {
+            dependency.clone()
+          }
+        })
+        .collect();
+
       GraphNode {
         id: step.id.clone(),
         node_type,
-        dependencies: step.depends_on.clone(),
+        dependencies,
         input_mapping,
         run_if: step.run_if.clone(),
         initial_inputs,
       }
     })
     .collect();
+
+  let depended_on: HashSet<&str> = plan
+    .steps
+    .iter()
+    .flat_map(|step| step.depends_on.iter().map(String::as_str))
+    .collect();
+  for id in skippable.intersection(&depended_on) {
+    nodes.push(GraphNode {
+      id: settled(id),
+      node_type: NodeType::Standard(Arc::new(PrecomputedResultNode {
+        value: HashMap::new(),
+      })),
+      dependencies: vec![(*id).to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    });
+  }
 
   Ok(Flow::new(nodes))
 }
@@ -510,7 +612,8 @@ impl DynamicWorkflowAgent {
       &HashMap::new(),
       &self.governance,
     )?;
-    Ok(self.runner.run(&flow, HashMap::new()).await?)
+    let state = self.runner.run(&flow, HashMap::new()).await?;
+    Ok(plan_step_results(&plan, state))
   }
 
   /// Like [`Self::run`], but recovers from node failures instead of
@@ -554,6 +657,12 @@ impl DynamicWorkflowAgent {
             precomputed.insert(step.id.clone(), value.clone());
             completed_steps.insert(step.id.clone(), step.clone());
           }
+          // A `run_if` skip is a decision, not a failure: no replan. Kept
+          // in the plan (not precomputed) so a revised plan may still
+          // depend on it and its `run_if` is evaluated again.
+          Some(Err(YanshiError::NodeSkipped)) => {
+            completed_steps.insert(step.id.clone(), step.clone());
+          }
           Some(Err(err)) => {
             failures.push((step.id.clone(), err.to_string()));
             outstanding = true;
@@ -566,7 +675,7 @@ impl DynamicWorkflowAgent {
 
       if !outstanding || revisions >= max_replans {
         return Ok(DynamicWorkflowRunOutcome {
-          state,
+          state: plan_step_results(&plan, state),
           plan,
           revisions,
         });
@@ -814,6 +923,74 @@ mod tests {
       "a run_if that evaluates true must not skip the step: {:?}",
       state.get("a")
     );
+  }
+
+  /// Eval 2026-10-07 D1: a skipped dependency used to fail every
+  /// downstream step (`DependencyNotMet`) and trigger a replan.
+  #[tokio::test]
+  async fn skipped_dependency_leaves_downstream_steps_running() {
+    let plan = WorkflowPlan {
+      steps: vec![
+        WorkflowPlanStep {
+          id: "maybe".into(),
+          kind: PlanStepKind::Tool,
+          tool: "echo".into(),
+          params: json!({"v": "M"}),
+          depends_on: vec![],
+          run_if: Some("false".into()),
+        },
+        WorkflowPlanStep {
+          id: "always".into(),
+          kind: PlanStepKind::Tool,
+          tool: "echo".into(),
+          params: json!({"v": "A"}),
+          depends_on: vec![],
+          run_if: None,
+        },
+        WorkflowPlanStep {
+          id: "join".into(),
+          kind: PlanStepKind::Tool,
+          tool: "echo".into(),
+          params: json!({}),
+          depends_on: vec!["maybe".into(), "always".into()],
+          run_if: None,
+        },
+      ],
+    };
+    let flow = compile_plan_to_flow(&plan, registry_with_echo()).expect("compile");
+    for runner in [CoreFlowRunner::serial(), CoreFlowRunner::concurrent(8)] {
+      let state = runner.run(&flow, HashMap::new()).await.expect("run");
+      assert!(matches!(
+        state.get("maybe"),
+        Some(Err(YanshiError::NodeSkipped))
+      ));
+      let join = result_text(&state, "join");
+      assert!(join.contains("\"always\":"), "{join}");
+      assert!(!join.contains("\"maybe\":"), "{join}");
+    }
+  }
+
+  /// Eval 2026-10-07 D2: an agent step only ever saw its static prompt.
+  #[test]
+  fn agent_message_carries_the_dependency_outputs_that_arrived() {
+    let inputs: AsyncNodeInputs = HashMap::from([
+      (
+        "research".to_string(),
+        FlowValue::Json(json!("three findings")),
+      ),
+      ("stats".to_string(), FlowValue::Json(json!({"n": 3}))),
+    ]);
+    let deps = vec![
+      "research".to_string(),
+      "stats".to_string(),
+      "skipped".to_string(),
+    ];
+    let message = compose_agent_message("Summarise.", &deps, &inputs);
+    assert!(message.starts_with("Summarise."));
+    assert!(message.contains("[research]\nthree findings"), "{message}");
+    assert!(message.contains("[stats]\n{\"n\":3}"), "{message}");
+    assert!(!message.contains("[skipped]"), "{message}");
+    assert_eq!(compose_agent_message("Solo.", &[], &inputs), "Solo.");
   }
 
   #[test]
@@ -1260,6 +1437,32 @@ mod tests {
   /// `max_replans` revisions and returns the last (partial) state rather
   /// than looping forever or erroring out — same "no top-level Err for
   /// node failures" contract as `run`.
+  /// Eval 2026-10-07 D1: a `run_if` skip used to count as a failure and
+  /// trigger a pointless replan.
+  #[tokio::test]
+  async fn run_with_replan_does_not_replan_for_a_skipped_step() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    let _responses_guard = init_mock_model_with_responses(
+      "mock-replan-skip",
+      &[r#"{"steps":[
+          {"id":"a","tool":"echo","params":{"v":"A"},"run_if":"false"},
+          {"id":"b","tool":"echo","params":{},"depends_on":["a"]}
+        ]}"#],
+    )
+    .await;
+    let agent = DynamicWorkflowAgent::new(
+      "mock-replan-skip",
+      registry_with_echo(),
+      Arc::new(CoreFlowRunner::concurrent(8)),
+    );
+    let outcome = agent
+      .run_with_replan("maybe a, then b", 3)
+      .await
+      .expect("run");
+    assert_eq!(outcome.revisions, 0);
+    assert!(outcome.state.get("b").is_some_and(|r| r.is_ok()));
+  }
+
   #[tokio::test]
   async fn run_with_replan_stops_after_max_replans_and_returns_partial_state() {
     let _guard = crate::LLM_TEST_LOCK.lock().await;

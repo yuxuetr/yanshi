@@ -50,6 +50,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use yanshi_agents::dynamic::{
   DynamicWorkflowAgent, DynamicWorkflowRunOutcome, WorkflowPlan, compile_plan_to_flow,
+  plan_step_results,
 };
 use yanshi_core::async_node::AsyncNodeResult;
 use yanshi_core::{FlowExecutionConfig, FlowExt, FlowValue};
@@ -198,6 +199,7 @@ pub async fn execute(
       )
       .await
       .context("executing the compiled dynamic workflow failed")?;
+    let state = plan_step_results(&plan, state);
     (plan, state, 0usize)
   };
 
@@ -223,7 +225,11 @@ pub async fn execute(
   }
 
   // Surface a non-zero exit if any node failed, so shell consumers can branch.
-  if state.values().any(|r| r.is_err()) {
+  // A `run_if` skip is the plan's own decision, not a failure.
+  if state
+    .values()
+    .any(|r| matches!(r, Err(err) if !matches!(err, yanshi_core::YanshiError::NodeSkipped)))
+  {
     anyhow::bail!("one or more workflow steps failed (see results above)");
   }
   Ok(())
