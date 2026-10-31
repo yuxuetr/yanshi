@@ -29,6 +29,11 @@ use crate::common::{
 
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 5;
 const DEFAULT_MAX_WAIT_SECS: u64 = 300;
+/// Bounds on the LLM-chosen polling. Polling runs locally, so nothing else
+/// stops a `0` interval from hammering the vendor or a huge wait from
+/// parking the call (eval 2026-10-07 L6).
+const POLL_INTERVAL_SECS: std::ops::RangeInclusive<u64> = 1..=60;
+const MAX_WAIT_SECS: std::ops::RangeInclusive<u64> = 1..=1800;
 
 /// Generate a video from a text prompt via any text-to-video-capable
 /// model declared in the model registry, waiting for the (typically
@@ -90,11 +95,15 @@ impl Tool for Text2VideoTool {
         },
         "poll_interval_secs": {
           "type": "integer",
-          "description": "How often to poll job status, in seconds. Defaults to 5."
+          "minimum": 1,
+          "maximum": 60,
+          "description": "How often to poll job status, in seconds (1-60). Defaults to 5."
         },
         "max_wait_secs": {
           "type": "integer",
-          "description": "Maximum time to wait for the job to finish, in seconds, before failing. Defaults to 300 (5 minutes)."
+          "minimum": 1,
+          "maximum": 1800,
+          "description": "Maximum time to wait for the job to finish, in seconds (1-1800), before failing. Defaults to 300 (5 minutes)."
         }
       },
       "required": ["model", "prompt"]
@@ -108,6 +117,18 @@ impl Tool for Text2VideoTool {
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
     let model = required_str(&params, "model")?;
     let prompt = required_str(&params, "prompt")?.to_string();
+    let poll_interval = Duration::from_secs(bounded_secs(
+      &params,
+      "poll_interval_secs",
+      DEFAULT_POLL_INTERVAL_SECS,
+      POLL_INTERVAL_SECS,
+    )?);
+    let max_wait = Duration::from_secs(bounded_secs(
+      &params,
+      "max_wait_secs",
+      DEFAULT_MAX_WAIT_SECS,
+      MAX_WAIT_SECS,
+    )?);
 
     let provider = Yanshi::text2video_for(model)
       .await
@@ -122,17 +143,6 @@ impl Tool for Text2VideoTool {
       seed: params["seed"].as_i64(),
       extra: None,
     };
-
-    let poll_interval = Duration::from_secs(
-      optional_u32(&params, "poll_interval_secs")
-        .map(u64::from)
-        .unwrap_or(DEFAULT_POLL_INTERVAL_SECS),
-    );
-    let max_wait = Duration::from_secs(
-      optional_u32(&params, "max_wait_secs")
-        .map(u64::from)
-        .unwrap_or(DEFAULT_MAX_WAIT_SECS),
-    );
 
     match provider
       .generate_and_wait(request, poll_interval, max_wait)
@@ -169,6 +179,27 @@ impl Tool for Text2VideoTool {
   }
 }
 
+fn bounded_secs(
+  params: &Value,
+  field: &str,
+  default: u64,
+  range: std::ops::RangeInclusive<u64>,
+) -> Result<u64, ToolError> {
+  let Some(raw) = params.get(field).filter(|value| !value.is_null()) else {
+    return Ok(default);
+  };
+  raw
+    .as_u64()
+    .filter(|secs| range.contains(secs))
+    .ok_or_else(|| ToolError::InvalidParams {
+      message: format!(
+        "`{field}` must be an integer from {} to {}, got {raw}",
+        range.start(),
+        range.end()
+      ),
+    })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -191,5 +222,27 @@ mod tests {
       .await
       .expect_err("unknown model must fail resolution, not panic or hang");
     assert!(matches!(err, ToolError::InvalidParams { .. }));
+  }
+
+  /// Eval 2026-10-07 L6: `poll_interval_secs: 0` busy-polled the vendor and
+  /// a huge `max_wait_secs` parked the tool call indefinitely.
+  #[tokio::test]
+  async fn execute_rejects_out_of_range_polling() {
+    let tool = Text2VideoTool::new();
+    for (field, value) in [
+      ("poll_interval_secs", 0),
+      ("poll_interval_secs", 61),
+      ("max_wait_secs", 0),
+      ("max_wait_secs", 1_801),
+    ] {
+      let err = tool
+        .execute(json!({"model": "veo-3.1-generate-preview", "prompt": "a cat", field: value}))
+        .await
+        .expect_err("out-of-range polling must fail params validation");
+      assert!(
+        matches!(&err, ToolError::InvalidParams { message } if message.contains(field)),
+        "{field}={value}: {err:?}"
+      );
+    }
   }
 }

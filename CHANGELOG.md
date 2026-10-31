@@ -106,6 +106,9 @@ _New entries go here. Will roll into the next tag (likely
   tool-running nodes (`shell`, `file`, `http`, `mcp`, `plugin`, the agent
   types, including inside `map`/`while`). Their tools bypass harness
   approval, so the profile governed none of them while appearing to.
+- The `text_to_video` tool rejects `poll_interval_secs` outside 1-60 and
+  `max_wait_secs` outside 1-1800. Both are LLM-chosen and enforced only
+  locally: `0` busy-polled the vendor and a huge wait parked the call.
 - The CLI approval prompt no longer loses the answer typed after a
   timed-out prompt: the expired prompt's stdin read stayed pending and
   consumed it. The next prompt takes that read over, a late answer to
