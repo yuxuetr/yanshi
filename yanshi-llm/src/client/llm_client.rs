@@ -1186,7 +1186,10 @@ mod retry_transient_tests {
     });
     tokio::pin!(call);
     // First attempt fails and starts the backoff sleep.
-    assert!(matches!(futures::poll!(&mut call), std::task::Poll::Pending));
+    assert!(matches!(
+      futures::poll!(&mut call),
+      std::task::Poll::Pending
+    ));
     tokio::time::advance(std::time::Duration::from_millis(MAX_RETRY_WAIT_MS)).await;
     assert!(
       matches!(futures::poll!(&mut call), std::task::Poll::Ready(Ok(()))),
