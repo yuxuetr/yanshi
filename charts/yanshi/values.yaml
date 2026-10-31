@@ -1,23 +1,14 @@
 # U1.2: YANSHI_SECURITY_PROFILE for the gateway process. Defaults to
-# `local` so existing installs keep their current (permissive) behavior
-# on `helm upgrade`.
+# `production` (eval 2026-10-07 S1): the fail-closed posture — explicit
+# CORS allow-list, fail-closed worker admission — is the right default
+# for anything reachable by more than one tenant. Set `local` only for
+# a single trusted operator.
 #
-# V3.1: a missing bearer token now fails startup (CrashLoopBackOff)
-# under EVERY profile, not just `production` — a pod's containerPort is
-# never loopback-only, so the gateway refuses to run unauthenticated
-# regardless of `securityProfile`. Set `secretEnv.YANSHI_API_TOKEN`
-# (or `existingSecret` with an `YANSHI_API_TOKEN` key) below before
-# installing; see docs/DEPLOYMENT.md § Security profile.
-#
-# PRODUCTION DEPLOYMENTS SHOULD STILL SET THIS TO `production` EXPLICITLY
-# (`--set securityProfile=production`) for the rest of its fail-closed
-# posture, which the token check alone does not cover:
-#   - CORS stays permissive instead of an explicit origin allow-list;
-#   - if you also enable a worker gRPC control plane, worker admission
-#     policy is NOT fail-closed under `local`.
-# See docs/DEPLOYMENT.md § Security profile and docs/SECURITY_PROFILES.md
-# for the full defaults table.
-securityProfile: local
+# V3.1: a missing bearer token fails startup under EVERY profile. Set
+# `secretEnv.YANSHI_API_TOKEN` (or `existingSecret` with an
+# `YANSHI_API_TOKEN` key) below before installing; see
+# docs/DEPLOYMENT.md § Security profile and docs/SECURITY_PROFILES.md.
+securityProfile: production
 
 replicaCount: 1
 
@@ -74,6 +65,14 @@ containerPort: 3000
 env:
   RUST_LOG: info
   PORT: "3000"
+  # Gateway ceiling on what a submitted workflow / harness session may
+  # touch on the host (docs/DEPLOYMENT.md § Gateway policy). Unset means
+  # deny: shell/file/mcp/plugin/agent/skill_agent/multi_agent nodes are
+  # rejected and no host path (allowed_paths, workspace_root,
+  # checkpoint_dir) is accepted. Comma-separated.
+  # YANSHI_GATEWAY_HOST_NODE_TYPES: "file"
+  # YANSHI_GATEWAY_ALLOWED_COMMANDS: "git,ls"
+  # YANSHI_GATEWAY_PATH_ROOTS: "/srv/yanshi/work"
 
 secretEnv:
   DATABASE_URL: ""

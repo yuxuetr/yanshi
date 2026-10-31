@@ -143,12 +143,19 @@ async fn distributed_with_an_unsupported_node_type_returns_400() {
     eprintln!("skipping distributed_with_an_unsupported_node_type_returns_400");
     return;
   };
-  let state = with_control_plane(state);
+  // Enable `shell` in the gateway policy so the request gets past it and
+  // reaches the distributed validation this test is about.
+  let state =
+    with_control_plane(state).with_gateway_policy(yanshi_server::gateway_policy::GatewayPolicy {
+      host_node_types: ["shell".to_string()].into(),
+      allowed_commands: ["echo".to_string()].into(),
+      path_roots: vec!["/tmp".into()],
+    });
   // `shell` is a real, schema-known node type (so it passes
   // `parse_workflow_definition`'s validation and reaches
   // `validate_distributed_flow`) but isn't in the worker-supported
   // distributed allowlist.
-  let workflow = "name: t\nnodes:\n  - id: n1\n    type: shell\n    parameters:\n      command: \"echo hi\"\n      allowed_commands: [\"echo\"]\n";
+  let workflow = "name: t\nnodes:\n  - id: n1\n    type: shell\n    parameters:\n      command: \"echo hi\"\n      allowed_commands: [\"echo\"]\n      allowed_paths: [\"/tmp\"]\n";
   let (status, body) = submit(
     state,
     json!({"workflow": workflow, "execution_mode": "distributed"}),

@@ -124,7 +124,10 @@ path = "shell-harness-skill"
     );
   }
 
-  let state = AppState::new(db);
+  let state = AppState::new(db).with_gateway_policy(yanshi_server::gateway_policy::GatewayPolicy {
+    path_roots: vec!["/tmp".into(), std::env::temp_dir()],
+    ..Default::default()
+  });
   let live = LiveHarnessExecutor::new(state.approval_registry.clone(), Duration::from_secs(60));
   let state = state
     .with_harness_executor(Arc::new(live))

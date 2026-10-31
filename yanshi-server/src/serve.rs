@@ -124,6 +124,8 @@ pub enum ServeError {
   Auth(#[from] AuthConfigError),
   #[error(transparent)]
   HttpConfig(#[from] ServerHttpConfigError),
+  #[error("gateway policy configuration error: {0}")]
+  GatewayPolicy(String),
   #[error("failed to bind {bind}: {source}")]
   Bind {
     bind: SocketAddr,
@@ -499,7 +501,11 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     })
     .transpose()?;
 
+  let gateway_policy =
+    crate::gateway_policy::GatewayPolicy::from_env().map_err(ServeError::GatewayPolicy)?;
+  info!(?gateway_policy, "gateway policy loaded");
   let state = AppState::new(db.clone())
+    .with_gateway_policy(gateway_policy)
     .with_security_defaults(security_defaults)
     .with_run_max_concurrency(run_max_concurrency)
     .with_auth(auth)

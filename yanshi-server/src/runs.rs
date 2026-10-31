@@ -1207,6 +1207,16 @@ pub async fn submit_run(
     None => (None, None),
   };
 
+  // Eval 2026-10-07 S1: the submitter is a tenant, not the operator, so
+  // the workflow's own sandbox settings are capped by the gateway policy.
+  // Parse failures fall through to the executor's existing error path.
+  if let Ok(flow_def) = yanshi_config::executor::parse_workflow_definition(&workflow) {
+    state
+      .gateway_policy
+      .check_workflow(&flow_def)
+      .map_err(ApiError::BadRequest)?;
+  }
+
   let tenant_id = tenant.as_str().to_string();
   // Q1.4.3: refuse to accept a body tenant_id that disagrees with the
   // auth-bound tenant. We don't silently override (that masks bugs in
@@ -1586,6 +1596,11 @@ pub async fn get_run_resume_plan(
 
   let mut config = CheckpointConfig::default();
   if let Some(dir) = params.checkpoint_dir.as_ref() {
+    // Eval 2026-10-07 S7: the server reads whatever directory this names.
+    state
+      .gateway_policy
+      .check_path("checkpoint_dir", dir)
+      .map_err(ApiError::BadRequest)?;
     config = config.with_checkpoint_dir(PathBuf::from(dir));
   }
   let manager = CheckpointManager::new(config)

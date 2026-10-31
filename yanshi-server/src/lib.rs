@@ -31,6 +31,7 @@ pub mod distributed_run;
 pub mod error;
 pub mod events_filter;
 pub mod events_stream;
+pub mod gateway_policy;
 pub mod harness;
 pub mod harness_approval;
 pub mod harness_live;
@@ -181,6 +182,10 @@ pub struct AppState {
   /// `worker_grpc::serve_worker_grpc`'s listener task shares).
   pub worker_control_plane:
     Option<Arc<scheduler::AuthenticatedControlPlane<scheduler::InMemoryWorkerProtocol>>>,
+  /// Eval 2026-10-07 S1/S2/S7: operator ceiling on host-reaching node
+  /// types, shell commands and host paths a tenant may name. Defaults to
+  /// deny-all; `serve::run` loads it from the environment.
+  pub gateway_policy: gateway_policy::GatewayPolicy,
 }
 
 impl std::fmt::Debug for AppState {
@@ -223,6 +228,7 @@ impl AppState {
       run_admission_registry: run_admission_registry_for(&SecurityProfile::default().defaults()),
       run_max_concurrency: DEFAULT_RUN_MAX_CONCURRENCY,
       worker_control_plane: None,
+      gateway_policy: gateway_policy::GatewayPolicy::default(),
     }
   }
 
@@ -246,6 +252,12 @@ impl AppState {
   /// Attach a custom run executor (e.g. wired to `yanshi-core::Flow`).
   pub fn with_executor(mut self, executor: Arc<dyn RunExecutor>) -> Self {
     self.executor = executor;
+    self
+  }
+
+  /// Attach the operator's gateway ceiling. Defaults to deny-all.
+  pub fn with_gateway_policy(mut self, policy: gateway_policy::GatewayPolicy) -> Self {
+    self.gateway_policy = policy;
     self
   }
 

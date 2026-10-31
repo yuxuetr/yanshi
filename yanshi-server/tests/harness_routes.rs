@@ -38,7 +38,12 @@ async fn fresh_state() -> Option<AppState> {
   // to wipe other concurrent test binaries' seeded rows mid-run and
   // caused flakes in PG-parallel CI. Matches the `yanshi-db/tests/
   // repositories.rs::fresh_db` rationale.
-  Some(AppState::new(db))
+  Some(
+    AppState::new(db).with_gateway_policy(yanshi_server::gateway_policy::GatewayPolicy {
+      path_roots: vec!["/tmp".into(), std::env::temp_dir()],
+      ..Default::default()
+    }),
+  )
 }
 
 async fn body_json(response: axum::response::Response) -> Value {

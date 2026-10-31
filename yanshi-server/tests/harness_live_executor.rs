@@ -68,7 +68,10 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
   // (set below) and only reads back its own session id. Wiping the
   // table here used to race other parallel test binaries.
 
-  let state = AppState::new(db);
+  let state = AppState::new(db).with_gateway_policy(yanshi_server::gateway_policy::GatewayPolicy {
+    path_roots: vec!["/tmp".into(), std::env::temp_dir()],
+    ..Default::default()
+  });
   let live = LiveHarnessExecutor::new(state.approval_registry.clone(), Duration::from_secs(60));
   let state = state.with_harness_executor(Arc::new(live));
   let app = create_router(state.clone());

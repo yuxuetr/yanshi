@@ -642,6 +642,12 @@ pub async fn submit_harness_session(
       "`workspace_root` must be a non-empty path".into(),
     ));
   }
+  // Eval 2026-10-07 S2: the session's file tool is scoped to this root,
+  // so `/` would expose the whole host (incl. /proc/self/environ).
+  state
+    .gateway_policy
+    .check_path("workspace_root", workspace_root)
+    .map_err(ApiError::BadRequest)?;
 
   let session_id = Uuid::new_v4();
   let tenant_id = tenant.as_str().to_string();

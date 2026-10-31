@@ -84,8 +84,11 @@ Prefer `existingSecret` in shared environments so credentials do not live in Hel
 
 ### Security profile (U1.2)
 
-`values.yaml` ships `securityProfile: local` by default so existing
-installs keep their current behavior across `helm upgrade`.
+`values.yaml` ships `securityProfile: production` by default (changed
+from `local` after the 2026-10-07 evaluation, S1). Set
+`--set securityProfile=local` only for a single trusted operator; an
+existing install that relied on the old default changes posture on
+`helm upgrade` (CORS narrows to `YANSHI_CORS_ALLOWED_ORIGINS`).
 
 **V3.1:** a missing `YANSHI_API_TOKEN` now fails startup
 (`CrashLoopBackOff`) under *every* profile, not just `production` — a
@@ -134,6 +137,34 @@ instead of permissive (see `YANSHI_CORS_ALLOWED_ORIGINS` above);
 and if you also enable the worker gRPC control plane (T1.2,
 `--worker-grpc`), worker admission becomes fail-closed. See
 `docs/SECURITY_PROFILES.md` for the full per-profile defaults table.
+
+### Gateway policy (eval 2026-10-07 S1/S2/S7)
+
+A workflow YAML carries its own sandbox settings (`allowed_commands`,
+`allowed_paths`), and several node types run host processes or load code
+from a path the YAML names. On the CLI the author is the operator; on
+the gateway the author is any token holder. The gateway therefore caps
+what a request may name, and **denies everything by default**:
+
+| Env var (comma-separated) | Caps | Unset |
+|---|---|---|
+| `YANSHI_GATEWAY_HOST_NODE_TYPES` | which of `shell`, `file`, `mcp`, `plugin`, `agent`, `skill_agent`, `multi_agent` a `POST /v1/runs` workflow may use | all rejected (400) |
+| `YANSHI_GATEWAY_ALLOWED_COMMANDS` | the most a `shell` node's `allowed_commands` may list | every shell command rejected |
+| `YANSHI_GATEWAY_PATH_ROOTS` | absolute roots that every `allowed_paths` entry, harness `workspace_root` and resume-plan `checkpoint_dir` must sit under | every host path rejected — so harness sessions need this set |
+
+Nested `map` / `while` nodes are checked too. `shell` nodes on the
+gateway must declare `allowed_paths`. Containment is lexical (`..` is
+refused), so keep symlinks out of the roots. The gateway refuses to start
+on a relative root or an unknown node type. Skills run through
+`/v1/skills/{name}:run` come from the operator's catalog and are not
+affected.
+
+```bash
+helm install yanshi charts/yanshi \
+  --set existingSecret=yanshi-db \
+  --set env.YANSHI_GATEWAY_PATH_ROOTS=/srv/yanshi/work \
+  --set env.YANSHI_GATEWAY_HOST_NODE_TYPES=file
+```
 
 ### PORT and PaaS-style public binding (V3.1)
 
