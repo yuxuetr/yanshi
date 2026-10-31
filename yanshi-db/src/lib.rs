@@ -13,7 +13,7 @@ pub use models::{
   NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep,
   NewUserPreference, Run, RunStatus, SkillInstall, Step, UserPreference,
 };
-pub use notify::{NotifyListener, notify};
+pub use notify::{Notice, NotifyListener, notify};
 pub use repo::{
   AdmissionOutcome, ApprovalIntentRepo, ArtifactRepo, EventRepo, HarnessEventRepo,
   HarnessSessionRepo, McpSessionRepo, PgApprovalIntentRepo, PgArtifactRepo, PgEventRepo,

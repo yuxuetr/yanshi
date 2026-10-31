@@ -59,6 +59,10 @@ pub trait RunRepo: Send + Sync {
   /// cross-replica mechanism.
   async fn record_cancellation_intent(&self, run_id: Uuid, tenant_id: &str) -> Result<(), DbError>;
 
+  /// Which of `run_ids` have a recorded cancellation intent. Lets a
+  /// replica resync after missing NOTIFYs (eval 2026-10-07 P3).
+  async fn cancellation_intents_among(&self, run_ids: &[Uuid]) -> Result<Vec<Uuid>, DbError>;
+
   /// W4.2f: cluster-wide admission check + row creation, atomically.
   ///
   /// Replaces the per-process `RunAdmissionRegistry` as the source of
@@ -409,6 +413,18 @@ impl RunRepo for PgRunRepo {
     .execute(&self.pool)
     .await?;
     Ok(())
+  }
+
+  async fn cancellation_intents_among(&self, run_ids: &[Uuid]) -> Result<Vec<Uuid>, DbError> {
+    if run_ids.is_empty() {
+      return Ok(Vec::new());
+    }
+    Ok(
+      sqlx::query_scalar("SELECT run_id FROM run_cancellation_intents WHERE run_id = ANY($1)")
+        .bind(run_ids)
+        .fetch_all(&self.pool)
+        .await?,
+    )
   }
 
   async fn create_if_admitted(

@@ -46,7 +46,7 @@ use yanshi_tools::ToolRegistry;
 
 use crate::events_stream::broker_finalize_grace;
 use yanshi_db::{
-  EventRepo, NewEvent, NewRun, NotifyListener, Repositories, Run, RunRepo, RunStatus,
+  EventRepo, NewEvent, NewRun, Notice, NotifyListener, Repositories, Run, RunRepo, RunStatus,
 };
 
 use crate::AppState;
@@ -279,6 +279,11 @@ impl RunCancellationRegistry {
     true
   }
 
+  /// Runs whose executor task lives on this replica.
+  pub fn active_run_ids(&self) -> Vec<Uuid> {
+    self.lock_inner().keys().copied().collect()
+  }
+
   pub fn complete(&self, run_id: Uuid) {
     let mut entries = self.lock_inner();
     entries.remove(&run_id);
@@ -289,14 +294,16 @@ impl RunCancellationRegistry {
 /// replica at boot (mirrors `serve::spawn_cleanup_loop`'s "log and keep
 /// going, never crash the gateway" shape, and
 /// `events_stream::spawn_run_events_listener`'s reconnect posture).
-/// Unlike that events listener, there's no DB catch-up fetch here — the
-/// NOTIFY payload (a bare run_id) is all `RunCancellationRegistry::cancel`
-/// needs, and it's already a safe no-op on every replica that doesn't
-/// hold the entry.
+/// The NOTIFY payload (a bare run_id) is all `RunCancellationRegistry::cancel`
+/// needs, and it's a safe no-op on every replica that doesn't hold the
+/// entry. NOTIFY is at-most-once, so after every (re)connect the listener
+/// also reads `run_cancellation_intents` for the runs it holds (eval
+/// 2026-10-07 P3).
 pub fn spawn_run_cancellation_listener(
   pool: sqlx::PgPool,
   cancellation_registry: RunCancellationRegistry,
 ) {
+  let runs = Repositories::from_pool(pool.clone()).runs;
   tokio::spawn(async move {
     loop {
       let mut listener =
@@ -308,9 +315,14 @@ pub fn spawn_run_cancellation_listener(
             continue;
           }
         };
+      resync_cancellations(&runs, &cancellation_registry).await;
       loop {
-        let (_, payload) = match listener.recv().await {
-          Ok(pair) => pair,
+        let payload = match listener.recv().await {
+          Ok(Notice::Message { payload, .. }) => payload,
+          Ok(Notice::Gap) => {
+            warn!("run cancellation listener: connection dropped, reconnecting and resyncing");
+            break;
+          }
           Err(err) => {
             warn!(error = %err, "run cancellation listener: recv failed, reconnecting");
             break;
@@ -327,6 +339,22 @@ pub fn spawn_run_cancellation_listener(
       }
     }
   });
+}
+
+/// Cancel every local run that has a cancellation intent the listener may
+/// have missed.
+async fn resync_cancellations(runs: &impl RunRepo, registry: &RunCancellationRegistry) {
+  match runs
+    .cancellation_intents_among(&registry.active_run_ids())
+    .await
+  {
+    Ok(ids) => {
+      for run_id in ids {
+        registry.cancel(run_id);
+      }
+    }
+    Err(err) => warn!(error = %err, "run cancellation listener: intent resync failed"),
+  }
 }
 
 /// V3.4: per-tenant admission control for `POST /v1/runs`. Bounds how

@@ -33,7 +33,7 @@ use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::warn;
 use uuid::Uuid;
 
-use yanshi_db::{DbError, EventRepo, NewEvent, NotifyListener, Repositories, RunRepo};
+use yanshi_db::{DbError, EventRepo, NewEvent, Notice, NotifyListener, Repositories, RunRepo};
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -216,6 +216,17 @@ impl EventBroker {
     }
     Some(channel.last_forwarded_seq)
   }
+
+  /// Every `(run_id, baseline)` with a live local subscriber — what a
+  /// resync after a NOTIFY gap has to re-page.
+  pub fn catchup_targets(&self) -> Vec<(Uuid, i64)> {
+    self
+      .lock_inner()
+      .iter()
+      .filter(|(_, channel)| channel.sender.receiver_count() > 0)
+      .map(|(run_id, channel)| (*run_id, channel.last_forwarded_seq))
+      .collect()
+  }
 }
 
 /// Default grace period between publishing the terminal event and
@@ -302,9 +313,16 @@ pub fn spawn_run_events_listener(pool: sqlx::PgPool, repos: Repositories, broker
           continue;
         }
       };
+      // NOTIFY is at-most-once: re-page every locally streamed run once
+      // we're listening again, so nothing sent while we weren't is lost.
+      resync_run_events(&repos, &broker).await;
       loop {
-        let (_, payload) = match listener.recv().await {
-          Ok(pair) => pair,
+        let payload = match listener.recv().await {
+          Ok(Notice::Message { payload, .. }) => payload,
+          Ok(Notice::Gap) => {
+            warn!("run events listener: connection dropped, reconnecting and resyncing");
+            break;
+          }
           Err(err) => {
             warn!(error = %err, "run events listener: recv failed, reconnecting");
             break;
@@ -345,6 +363,22 @@ pub fn spawn_run_events_listener(pool: sqlx::PgPool, repos: Repositories, broker
 
 /// Pages `EventRepo::list_after` starting from `after_seq` and republishes
 /// every returned row into `broker`'s local channel for `run_id`.
+async fn resync_run_events(repos: &Repositories, broker: &EventBroker) {
+  for (run_id, baseline) in broker.catchup_targets() {
+    let tenant_id = match repos.runs.get(run_id).await {
+      Ok(Some(run)) => run.tenant_id,
+      Ok(None) => continue,
+      Err(err) => {
+        warn!(%run_id, error = %err, "run events listener: resync lookup failed");
+        continue;
+      }
+    };
+    if let Err(err) = catch_up_run_events(repos, broker, &tenant_id, run_id, baseline).await {
+      warn!(%run_id, error = %err, "run events listener: resync fetch failed");
+    }
+  }
+}
+
 async fn catch_up_run_events(
   repos: &Repositories,
   broker: &EventBroker,

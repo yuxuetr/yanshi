@@ -33,8 +33,7 @@ pub async fn notify(pool: &PgPool, channel: &str, payload: &str) -> Result<(), D
 
 /// Subscribes to one or more channels and yields `(channel, payload)`
 /// pairs as they arrive. A thin wrapper around [`PgListener`] so callers
-/// have a single `recv`-style loop point, and a stable place to add
-/// reconnect/backoff behavior later without touching call sites.
+/// have a single `recv`-style loop point.
 pub struct NotifyListener {
   inner: PgListener,
 }
@@ -52,14 +51,31 @@ impl NotifyListener {
     Ok(Self { inner })
   }
 
-  /// Wait for the next notification. Returns `(channel, payload)`.
-  pub async fn recv(&mut self) -> Result<(String, String), DbError> {
-    let notification = self.inner.recv().await?;
-    Ok((
-      notification.channel().to_string(),
-      notification.payload().to_string(),
-    ))
+  /// Wait for the next notification, or report that the connection
+  /// dropped. After a [`Notice::Gap`] the next call reconnects and
+  /// re-subscribes; anything sent in between is gone, so the caller must
+  /// resync its state from the database.
+  pub async fn recv(&mut self) -> Result<Notice, DbError> {
+    Ok(match self.inner.try_recv().await? {
+      Some(notification) => Notice::Message {
+        channel: notification.channel().to_string(),
+        payload: notification.payload().to_string(),
+      },
+      None => Notice::Gap,
+    })
   }
+}
+
+/// What [`NotifyListener::recv`] yields. NOTIFY is at-most-once, so a
+/// consumer treats the DB as the source of truth and a `Gap` as "resync".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Notice {
+  Message {
+    channel: String,
+    payload: String,
+  },
+  /// The LISTEN connection dropped; notifications may have been missed.
+  Gap,
 }
 
 #[cfg(test)]
@@ -96,21 +112,17 @@ mod tests {
 
     notify(&pool, &channel, "hello").await.expect("notify");
 
-    let (chan_a, payload_a) =
-      tokio::time::timeout(std::time::Duration::from_secs(5), listener_a.recv())
+    let expected = Notice::Message {
+      channel: channel.clone(),
+      payload: "hello".to_string(),
+    };
+    for listener in [&mut listener_a, &mut listener_b] {
+      let notice = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
         .await
-        .expect("listener a timed out")
-        .expect("listener a recv");
-    let (chan_b, payload_b) =
-      tokio::time::timeout(std::time::Duration::from_secs(5), listener_b.recv())
-        .await
-        .expect("listener b timed out")
-        .expect("listener b recv");
-
-    assert_eq!(chan_a, channel);
-    assert_eq!(payload_a, "hello");
-    assert_eq!(chan_b, channel);
-    assert_eq!(payload_b, "hello");
+        .expect("listener timed out")
+        .expect("listener recv");
+      assert_eq!(notice, expected);
+    }
   }
 
   /// A listener subscribed to a *different* channel must not see a
@@ -140,11 +152,62 @@ mod tests {
       .await
       .expect("notify subscribed channel");
 
-    let (chan, payload) = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
+    let notice = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
       .await
       .expect("listener timed out")
       .expect("listener recv");
-    assert_eq!(chan, channel_a);
-    assert_eq!(payload, "expected");
+    assert_eq!(
+      notice,
+      Notice::Message {
+        channel: channel_a,
+        payload: "expected".to_string(),
+      }
+    );
+  }
+
+  /// Eval 2026-10-07 P3: a dropped LISTEN connection must surface as a
+  /// gap. `PgListener::recv` reconnects silently and loses whatever was
+  /// sent in between, so callers could never resync.
+  #[tokio::test]
+  async fn dropped_connection_surfaces_as_a_gap() {
+    let Some(url) = live_url() else {
+      eprintln!("skipping dropped_connection_surfaces_as_a_gap: no DB url");
+      return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+      .max_connections(2)
+      .connect(&url)
+      .await
+      .expect("connect");
+    let channel = format!("yanshi_test_{}", uuid::Uuid::new_v4().simple());
+    let mut listener = NotifyListener::connect(&pool, &[&channel])
+      .await
+      .expect("listener");
+
+    let killed: i64 = sqlx::query_scalar(
+      "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE query = $1",
+    )
+    .bind(format!("LISTEN \"{channel}\""))
+    .fetch_one(&pool)
+    .await
+    .expect("terminate listener backend");
+    assert_eq!(killed, 1, "exactly the listener's backend");
+
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
+      .await
+      .expect("a gap must be reported, not swallowed")
+      .expect("recv");
+    assert!(matches!(first, Notice::Gap), "got {first:?}");
+
+    // The next call reconnects and re-subscribes.
+    notify(&pool, &channel, "after").await.expect("notify");
+    let next = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
+      .await
+      .expect("listener timed out after reconnect")
+      .expect("recv");
+    assert!(
+      matches!(&next, Notice::Message { payload, .. } if payload == "after"),
+      "got {next:?}"
+    );
   }
 }

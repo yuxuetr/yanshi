@@ -44,7 +44,7 @@ use yanshi_agents::AgentCancellationToken;
 
 use yanshi_db::{
   DbError, HarnessEventRepo, HarnessSession, HarnessSessionRepo, HarnessSessionStatus,
-  NewHarnessSession, NewHarnessSessionEvent, NotifyListener, Repositories,
+  NewHarnessSession, NewHarnessSessionEvent, Notice, NotifyListener, Repositories,
 };
 
 use crate::AppState;
@@ -218,6 +218,16 @@ impl HarnessEventBroker {
     }
     Some(channel.last_forwarded_seq)
   }
+
+  /// Mirrors `EventBroker::catchup_targets`.
+  pub fn catchup_targets(&self) -> Vec<(Uuid, i64)> {
+    self
+      .lock_inner()
+      .iter()
+      .filter(|(_, channel)| channel.sender.receiver_count() > 0)
+      .map(|(session_id, channel)| (*session_id, channel.last_forwarded_seq))
+      .collect()
+  }
 }
 
 /// Persist + publish a harness event in one shot. Mirrors
@@ -286,9 +296,23 @@ pub fn spawn_harness_events_listener(
             continue;
           }
         };
+      // See `events_stream::spawn_run_events_listener`: resync after
+      // every (re)connect because NOTIFY is at-most-once.
+      for (session_id, baseline) in broker.catchup_targets() {
+        if let Ok(Some(session)) = repos.harness_sessions.get(session_id).await
+          && let Err(err) =
+            catch_up_harness_events(&repos, &broker, &session.tenant_id, session_id, baseline).await
+        {
+          warn!(%session_id, error = %err, "harness events listener: resync fetch failed");
+        }
+      }
       loop {
-        let (_, payload) = match listener.recv().await {
-          Ok(pair) => pair,
+        let payload = match listener.recv().await {
+          Ok(Notice::Message { payload, .. }) => payload,
+          Ok(Notice::Gap) => {
+            warn!("harness events listener: connection dropped, reconnecting and resyncing");
+            break;
+          }
           Err(err) => {
             warn!(error = %err, "harness events listener: recv failed, reconnecting");
             break;

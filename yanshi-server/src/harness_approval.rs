@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 use tracing::warn;
 
-use yanshi_db::{ApprovalIntentRepo, HarnessEventRepo, HarnessSessionRepo, NotifyListener};
+use yanshi_db::{ApprovalIntentRepo, HarnessEventRepo, HarnessSessionRepo, Notice, NotifyListener};
 use yanshi_harness::{
   ApprovalDecision, ApprovalOutcome, ApprovalProvider, ApprovalRequest, ApprovalScope, HarnessError,
 };
@@ -88,8 +88,12 @@ pub fn spawn_approval_decision_listener(
           }
         };
       loop {
-        let (_, payload) = match listener.recv().await {
-          Ok(pair) => pair,
+        let payload = match listener.recv().await {
+          Ok(Notice::Message { payload, .. }) => payload,
+          Ok(Notice::Gap) => {
+            warn!("approval decision listener: connection dropped, reconnecting");
+            break;
+          }
           Err(err) => {
             warn!(error = %err, "approval decision listener: recv failed, reconnecting");
             break;
