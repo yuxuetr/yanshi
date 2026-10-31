@@ -555,6 +555,30 @@ async fn open_persistent_harness_memory(
   Ok(Box::new(store))
 }
 
+/// sqlx pools must not cross Tokio runtimes. A connection dropped on the
+/// session's inner runtime schedules its return to the pool on *that*
+/// runtime, which shuts down before the task runs. The slot then leaks
+/// for good: the shared pool drained one session at a time, until
+/// `handle_live_failure`'s status write hit `PoolTimedOut` and the session
+/// stayed `running` forever. Give the inner runtime its own small pool
+/// (same connect options) and close it before the runtime exits.
+async fn with_session_local_pool(
+  mut inputs: RunInputs,
+) -> Result<(RunInputs, sqlx::PgPool), LiveExecutorError> {
+  let options = inputs.repos.harness_sessions.pool.connect_options();
+  let pool = sqlx::postgres::PgPoolOptions::new()
+    .max_connections(SESSION_POOL_CONNECTIONS)
+    .connect_with((*options).clone())
+    .await
+    .map_err(yanshi_db::DbError::from)?;
+  inputs.repos = Repositories::from_pool(pool.clone());
+  Ok((inputs, pool))
+}
+
+/// Event sink, checkpointer and approvals of one session write serially
+/// behind the emit lock; two connections leave room for one overlap.
+const SESSION_POOL_CONNECTIONS: u32 = 2;
+
 async fn run_harness_blocking(
   executor: LiveHarnessExecutor,
   inputs: RunInputs,
@@ -568,7 +592,12 @@ async fn run_harness_blocking(
           "failed to build inner runtime: {err}"
         )))
       })?;
-    rt.block_on(run_harness_inner(executor, inputs))
+    rt.block_on(async move {
+      let (inputs, pool) = with_session_local_pool(inputs).await?;
+      let result = run_harness_inner(executor, inputs).await;
+      pool.close().await;
+      result
+    })
   });
   match join.await {
     Ok(result) => result,
@@ -667,9 +696,12 @@ async fn run_harness_resume_blocking(
           "failed to build inner runtime: {err}"
         )))
       })?;
-    rt.block_on(run_harness_resume_inner(
-      executor, inputs, checkpoint, answer,
-    ))
+    rt.block_on(async move {
+      let (inputs, pool) = with_session_local_pool(inputs).await?;
+      let result = run_harness_resume_inner(executor, inputs, checkpoint, answer).await;
+      pool.close().await;
+      result
+    })
   });
   match join.await {
     Ok(result) => result,
