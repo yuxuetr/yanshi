@@ -8,7 +8,7 @@
 //! before the runtime lands.
 //!
 //! The Harness Mode design is documented in [`docs/HARNESS_MODE.md`] and
-//! the longer rationale lives in `HARNESS_MODE_EVOLUTION.md`. The
+//! the longer rationale lives in `docs/archive/HARNESS_MODE_EVOLUTION.md`. The
 //! stability tier for every type in this crate is **experimental** until
 //! Phase H1 exercises them end-to-end (see `docs/STABILITY.md`).
 //!

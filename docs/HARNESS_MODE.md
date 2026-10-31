@@ -11,7 +11,7 @@ embedded Web UI.
 
 This document is the **implementation spec** owned by Phase H0+ work in
 `TODOs.md` (segment `P-H`). The longer rationale that motivates the
-design lives in `HARNESS_MODE_EVOLUTION.md`.
+design lives in `docs/archive/HARNESS_MODE_EVOLUTION.md`.
 
 ## Scope of this freeze (Phase H0)
 
@@ -634,7 +634,7 @@ cancelled, timeout).
 
 ## Phase plan recap
 
-`HARNESS_MODE_EVOLUTION.md` carries the full plan. `TODOs.md` segment
+`docs/archive/HARNESS_MODE_EVOLUTION.md` carries the full plan. `TODOs.md` segment
 `P-H` is the operational queue. The current ordering:
 
 | Phase | TODO id | Theme | Status |

@@ -235,7 +235,7 @@ fallback chains, cross-cutting cache layer) stage in `docs/ROADMAP_v2.md` §K.
 ### Harness Agent Mode
 
 Yanshi's evolution toward a long-lived, workspace-aware, governable agent
-session pattern. Full design lives in `HARNESS_MODE_EVOLUTION.md`; active
+session pattern. Full design lives in `docs/archive/HARNESS_MODE_EVOLUTION.md`; active
 execution tasks live in `TODOs.md` under the `P-H` parallel track.
 
 The Harness layer must remain additive — it wraps existing `AgentRuntime`,
@@ -260,7 +260,7 @@ Explicit Non-Goals for Harness Mode (preserved here):
 
 - Clone of OpenHarness TUI or provider subscription bridges.
 - UI-first product shell that freezes the protocol before stream-JSON
-  envelopes stabilize (see `HARNESS_MODE_EVOLUTION.md` Risk 5).
+  envelopes stabilize (see `docs/archive/HARNESS_MODE_EVOLUTION.md` Risk 5).
 - Parallel runtime bypassing AgentRuntime / ToolRegistry / Trace contracts
   (Risk 1).
 - Unsafe tool approval defaults that allow mutating tools without explicit

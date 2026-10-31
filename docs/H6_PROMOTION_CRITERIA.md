@@ -5,7 +5,7 @@ Owner: Yanshi core
 Last updated: 2026-05-20
 Closes: P10.10.1 (Medium — v1.x)
 
-`HARNESS_MODE_EVOLUTION.md` §"Phase H6: Advanced Compatibility"
+`docs/archive/HARNESS_MODE_EVOLUTION.md` §"Phase H6: Advanced Compatibility"
 deliberately leaves five items open-ended — they're things we *might*
 do "if user demand appears" but explicitly should not pull en bloc
 into a roadmap commit. P10.10.1 captures that posture in the active
@@ -29,7 +29,7 @@ than speculation.
 
 ## The five H6 items
 
-The TODO list and `HARNESS_MODE_EVOLUTION.md` use slightly different
+The TODO list and `docs/archive/HARNESS_MODE_EVOLUTION.md` use slightly different
 names; this table reconciles them.
 
 | Item | TODO name (P10.10.1) | Evolution-doc name (§H6) |
@@ -308,7 +308,7 @@ won't drift into the roadmap without a per-item review.
 ## References
 
 - `RoadMap.md` §"Later Tracks" / §"Harness Agent Mode" / non-goals.
-- `HARNESS_MODE_EVOLUTION.md` §"Phase H6: Advanced Compatibility".
+- `docs/archive/HARNESS_MODE_EVOLUTION.md` §"Phase H6: Advanced Compatibility".
 - `docs/HARNESS_MODE.md` §"Architectural invariants" — the
   "UI is a client of the protocol" invariant that any TUI
   promotion must respect.
