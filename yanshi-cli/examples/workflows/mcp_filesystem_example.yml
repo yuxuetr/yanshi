@@ -39,8 +39,6 @@ nodes:
   - id: summarize_content
     type: llm
     dependencies: ["read_file"]
-    input_mapping:
-      prompt: "{{ nodes.read_file.outputs.output }}"
     parameters:
       model: "gpt-4"
       system: "You are a helpful assistant that summarizes file contents."

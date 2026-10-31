@@ -95,14 +95,13 @@ nodes:
     type: template
     dependencies: ["suggest_improvements"]
     input_mapping:
-      file_path: "/tmp/example.rs"
       analysis: "{{ nodes.analyze_code_quality.outputs.response }}"
       improvements: "{{ nodes.suggest_improvements.outputs.response }}"
     parameters:
       template: |
         # Code Analysis Report
 
-        **File**: {{ file_path }}
+        **File**: /tmp/example.rs
         **Date**: {{ now() }}
 
         ---
@@ -138,4 +137,4 @@ nodes:
         content: "{{ report_content }}"
       timeout_ms: 30000
       max_retries: 3
-    run_if: "{{ nodes.format_report.outputs.report | length > 0 }}"
+    run_if: "{{ nodes.format_report.outputs.report != \"\" }}"

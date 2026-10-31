@@ -4,7 +4,7 @@ nodes:
   - id: search_loop
     type: while
     parameters:
-      condition: "{{ paper_content == \"\" and attempt < 3 }}"
+      condition: "{{ paper_content == \"\" && attempt < 3 }}"
       max_iterations: 3
       # Initial state for the loop
       attempt: 0
