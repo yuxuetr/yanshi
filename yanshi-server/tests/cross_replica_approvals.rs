@@ -281,3 +281,48 @@ async fn decide_on_nonexistent_request_still_404s_via_either_replica() {
     .unwrap();
   assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+/// Eval 2026-10-07 P3: a decision bigger than Postgres's ~8 KB NOTIFY cap
+/// used to make `pg_notify` fail, so the parked request on the other
+/// replica never resolved. NOTIFY now carries only the ids.
+#[tokio::test]
+async fn oversized_decision_still_reaches_the_owning_replica() {
+  let Some((state_a, state_b)) = two_replica_states().await else {
+    eprintln!("skipping oversized_decision_still_reaches_the_owning_replica");
+    return;
+  };
+  let session_id = insert_running_session(&state_a, "default").await;
+  let request = sample_request(session_id, "req-oversized");
+  persist_approval_requested(&state_a, &request).await;
+  let handle = park_on_replica(&state_a, request).await;
+
+  let decided_by = format!("operator-{}", "b".repeat(9_000));
+  let response = create_router(state_b.clone())
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!(
+          "/v1/harness/sessions/{session_id}/approvals/req-oversized"
+        ))
+        .header("content-type", "application/json")
+        .body(Body::from(
+          serde_json::to_vec(&json!({
+            "decision": "allow",
+            "scope": "once",
+            "decided_by": decided_by,
+          }))
+          .unwrap(),
+        ))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+
+  let decided = tokio::time::timeout(Duration::from_secs(5), handle)
+    .await
+    .expect("replica A's parked request must resolve despite the 8 KB NOTIFY cap")
+    .unwrap()
+    .unwrap();
+  assert_eq!(decided.decided_by, decided_by);
+}

@@ -1079,6 +1079,15 @@ pub trait ApprovalIntentRepo: Send + Sync {
     tenant_id: &str,
     decision: &serde_json::Value,
   ) -> Result<(), DbError>;
+
+  /// The recorded decision for one request, if any. NOTIFY only carries
+  /// the ids (a decision can exceed the ~8 KB payload cap), so the
+  /// receiving replica reads the decision here.
+  async fn decision_intent(
+    &self,
+    session_id: &str,
+    request_id: &str,
+  ) -> Result<Option<serde_json::Value>, DbError>;
 }
 
 #[derive(Clone, Debug)]
@@ -1107,6 +1116,22 @@ impl ApprovalIntentRepo for PgApprovalIntentRepo {
     .execute(&self.pool)
     .await?;
     Ok(())
+  }
+
+  async fn decision_intent(
+    &self,
+    session_id: &str,
+    request_id: &str,
+  ) -> Result<Option<serde_json::Value>, DbError> {
+    Ok(
+      sqlx::query_scalar(
+        "SELECT decision FROM approval_decision_intents WHERE session_id = $1 AND request_id = $2",
+      )
+      .bind(session_id)
+      .bind(request_id)
+      .fetch_optional(&self.pool)
+      .await?,
+    )
   }
 }
 

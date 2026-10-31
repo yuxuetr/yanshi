@@ -60,22 +60,27 @@ use crate::tenant::TenantId;
 /// entries in the same [`PendingApprovalRegistry`].
 pub const APPROVAL_DECISIONS_NOTIFY_CHANNEL: &str = "yanshi_approval_decisions";
 
+/// Ids only: Postgres caps a NOTIFY payload at ~8 KB and a decision
+/// (with its reason) can exceed that, which made `pg_notify` fail and the
+/// decision never reach the owning replica (eval 2026-10-07 P3). The
+/// receiver reads the decision from `approval_decision_intents`.
 #[derive(Debug, Serialize, Deserialize)]
 struct ApprovalDecisionNotifyPayload {
   session_id: String,
   request_id: String,
-  decision: ApprovalDecision,
 }
 
 /// W4.2e: cross-replica approval-decision listener. Spawn one per
 /// gateway replica at boot, mirroring
-/// `crate::runs::spawn_run_cancellation_listener`'s shape exactly — a
-/// bare local-registry call on receipt, harmless no-op on every replica
-/// that isn't holding the parked oneshot.
+/// `crate::runs::spawn_run_cancellation_listener`'s shape: a NOTIFY or,
+/// after every (re)connect, a resync over this replica's parked requests
+/// reads the decision intent and resolves the local entry. A no-op on
+/// every replica that isn't holding the parked oneshot.
 pub fn spawn_approval_decision_listener(
   pool: sqlx::PgPool,
   approval_registry: PendingApprovalRegistry,
 ) {
+  let intents = yanshi_db::Repositories::from_pool(pool.clone()).approval_intents;
   tokio::spawn(async move {
     loop {
       let mut listener =
@@ -87,11 +92,14 @@ pub fn spawn_approval_decision_listener(
             continue;
           }
         };
+      for (session_id, request_id) in approval_registry.pending_keys() {
+        apply_decision_intent(&intents, &approval_registry, &session_id, &request_id).await;
+      }
       loop {
         let payload = match listener.recv().await {
           Ok(Notice::Message { payload, .. }) => payload,
           Ok(Notice::Gap) => {
-            warn!("approval decision listener: connection dropped, reconnecting");
+            warn!("approval decision listener: connection dropped, reconnecting and resyncing");
             break;
           }
           Err(err) => {
@@ -101,8 +109,13 @@ pub fn spawn_approval_decision_listener(
         };
         match serde_json::from_str::<ApprovalDecisionNotifyPayload>(&payload) {
           Ok(parsed) => {
-            let _ =
-              approval_registry.decide(&parsed.session_id, &parsed.request_id, parsed.decision);
+            apply_decision_intent(
+              &intents,
+              &approval_registry,
+              &parsed.session_id,
+              &parsed.request_id,
+            )
+            .await;
           }
           Err(err) => {
             warn!(error = %err, payload = %payload, "approval decision listener: malformed payload, skipping");
@@ -111,6 +124,35 @@ pub fn spawn_approval_decision_listener(
       }
     }
   });
+}
+
+/// Resolve a locally parked request from its recorded decision intent.
+/// Skips the DB read entirely when this replica doesn't hold the entry.
+async fn apply_decision_intent(
+  intents: &impl ApprovalIntentRepo,
+  registry: &PendingApprovalRegistry,
+  session_id: &str,
+  request_id: &str,
+) {
+  if !registry.is_pending(session_id, request_id) {
+    return;
+  }
+  let decision = match intents.decision_intent(session_id, request_id).await {
+    Ok(Some(value)) => value,
+    Ok(None) => return,
+    Err(err) => {
+      warn!(session_id, request_id, error = %err, "approval decision listener: intent read failed");
+      return;
+    }
+  };
+  match serde_json::from_value::<ApprovalDecision>(decision) {
+    Ok(decision) => {
+      let _ = registry.decide(session_id, request_id, decision);
+    }
+    Err(err) => {
+      warn!(session_id, request_id, error = %err, "approval decision listener: malformed intent");
+    }
+  }
 }
 
 /// Best-effort, durable cross-replica record of a decision: writes the
@@ -156,7 +198,6 @@ async fn record_decision_intent_and_notify(
   let payload = ApprovalDecisionNotifyPayload {
     session_id: session_id.clone(),
     request_id: request_id.clone(),
-    decision,
   };
   let payload_json = match serde_json::to_string(&payload) {
     Ok(json) => json,
@@ -309,6 +350,18 @@ impl PendingApprovalRegistry {
       .send(decision)
       .map_err(|_| ApprovalResolveError::ProviderGone)?;
     Ok(())
+  }
+
+  /// `(session_id, request_id)` of every request parked on this replica.
+  pub fn pending_keys(&self) -> Vec<(String, String)> {
+    self.lock_inner().entries.keys().cloned().collect()
+  }
+
+  pub fn is_pending(&self, session_id: &str, request_id: &str) -> bool {
+    self
+      .lock_inner()
+      .entries
+      .contains_key(&(session_id.to_string(), request_id.to_string()))
   }
 
   /// Snapshot of the total pending count. Cheap; used by tests +
