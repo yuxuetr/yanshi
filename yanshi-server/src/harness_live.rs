@@ -435,6 +435,36 @@ fn build_default_tool_registry(workspace_root: &str) -> Result<ToolRegistry, Liv
   })
 }
 
+/// The agent a session's `runtime_kind` names. `create_session` accepts only
+/// `react` and `plan_execute`.
+fn session_agent_kind(runtime_kind: &str) -> LoopRuntimeKind {
+  match runtime_kind {
+    "plan_execute" => LoopRuntimeKind::PlanExecute,
+    _ => LoopRuntimeKind::React,
+  }
+}
+
+/// Builds the session's inner agent. W4.1c: a skill-backed session is
+/// always ReAct (`SkillBuilder` only builds a `ReActAgent`, and
+/// `create_session` rejects a skill with `plan_execute`), so PlanExecute
+/// always uses the harness default registry.
+async fn build_session_agent(
+  inputs: &RunInputs,
+  hook_config: HookConfig,
+  kind: LoopRuntimeKind,
+) -> Result<Box<dyn AgentRuntime>, LiveExecutorError> {
+  Ok(match kind {
+    LoopRuntimeKind::React => Box::new(build_session_react_agent(inputs, hook_config).await?),
+    LoopRuntimeKind::PlanExecute => {
+      let tools = build_default_tool_registry(&inputs.workspace_root)?;
+      let registry = Arc::new(wrap_registry(tools, hook_config));
+      let memory = build_harness_memory().await?;
+      let plan_config = PlanExecuteConfig::new(&inputs.model);
+      Box::new(PlanExecuteAgent::new(plan_config, memory, registry))
+    }
+  })
+}
+
 /// W4.1c: build the session's inner `ReActAgent`, skill-backed when
 /// `inputs.skill_dir` resolves, the harness default otherwise.
 ///
@@ -639,7 +669,12 @@ async fn run_harness_inner(
     .with_seq_allocator(seq_allocator.clone())
     .with_approval_timeout(executor.approval_timeout);
 
-  let agent = build_session_react_agent(&inputs, hook_config).await?;
+  let agent = build_session_agent(
+    &inputs,
+    hook_config,
+    session_agent_kind(&inputs.runtime_kind),
+  )
+  .await?;
 
   // V2.3: attach the Postgres-backed checkpointer unconditionally — same
   // "on by default" posture the CLI's `harness run` already established.
@@ -649,7 +684,7 @@ async fn run_harness_inner(
     inputs.repos.harness_sessions.pool.clone(),
   ));
 
-  let mut runtime = HarnessRuntime::new(Box::new(agent))
+  let mut runtime = HarnessRuntime::new(agent)
     .with_event_sink(server_sink.clone())
     .with_context_providers(default_providers())
     .with_seq_allocator(seq_allocator.clone());
@@ -745,22 +780,7 @@ async fn run_harness_resume_inner(
     inputs.repos.harness_sessions.pool.clone(),
   ));
 
-  // W4.1c: React is the only runtime kind a skill-backed session can ever
-  // have produced (`SkillBuilder` only ever constructs a `ReActAgent` —
-  // skill manifests don't declare a runtime pattern, matching the CLI's
-  // own `--skill` restriction), so only that arm consults
-  // `inputs.skill_dir`; PlanExecute always uses the harness default
-  // registry, same as before this change.
-  let inner_agent: Box<dyn AgentRuntime> = match checkpoint.runtime_kind {
-    LoopRuntimeKind::React => Box::new(build_session_react_agent(&inputs, hook_config).await?),
-    LoopRuntimeKind::PlanExecute => {
-      let tools = build_default_tool_registry(&inputs.workspace_root)?;
-      let registry = Arc::new(wrap_registry(tools, hook_config));
-      let memory = build_harness_memory().await?;
-      let plan_config = PlanExecuteConfig::new(&inputs.model);
-      Box::new(PlanExecuteAgent::new(plan_config, memory, registry))
-    }
-  };
+  let inner_agent = build_session_agent(&inputs, hook_config, checkpoint.runtime_kind).await?;
 
   let mut runtime = HarnessRuntime::new(inner_agent)
     .with_event_sink(server_sink.clone())
@@ -988,6 +1008,47 @@ mod tests {
         .any(|m| m.content.contains("remember the deploy key")),
       "resume must restore the prior conversation from the persistent store"
     );
+  }
+
+  /// Eval 2026-10-07 A4: a `plan_execute` session ran a ReAct agent and
+  /// only carried the plan_execute label.
+  #[tokio::test]
+  async fn plan_execute_sessions_build_a_plan_execute_agent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+      .connect_lazy("postgres://test:test@localhost:5432/test")
+      .unwrap();
+    let inputs = RunInputs {
+      session_id: uuid::Uuid::new_v4(),
+      user_input: "plan it".into(),
+      workspace_root: tmp.path().to_string_lossy().into_owned(),
+      profile: "local".into(),
+      runtime_kind: "plan_execute".into(),
+      model: "mock".into(),
+      skill_name: None,
+      skill_dir: None,
+      cost_limit_usd: None,
+      max_steps: None,
+      repos: Repositories::from_pool(pool),
+      broker: crate::harness::HarnessEventBroker::new(),
+      initial_seq: 0,
+      cancellation_token: AgentCancellationToken::new(),
+    };
+    let hook_config = || {
+      HookConfig::new(
+        "s",
+        Arc::new(yanshi_harness::AutoAllowApprovalProvider::new()),
+        SinkChain::new(),
+      )
+    };
+
+    for (requested, expected) in [("plan_execute", "plan_execute"), ("react", "react")] {
+      let kind = session_agent_kind(requested);
+      let agent = build_session_agent(&inputs, hook_config(), kind)
+        .await
+        .unwrap();
+      assert_eq!(agent.runtime_name(), expected, "runtime_kind '{requested}'");
+    }
   }
 
   use chrono::Utc;

@@ -150,6 +150,39 @@ async fn submit_rejects_empty_user_input() {
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// Eval 2026-10-07 A4: an unsupported runtime_kind ran ReAct under its
+/// label, and a skill (always ReAct) silently overrode plan_execute.
+#[tokio::test]
+async fn submit_rejects_runtime_kinds_it_would_not_run() {
+  let Some(state) = fresh_state().await else {
+    eprintln!("skipping submit_rejects_runtime_kinds_it_would_not_run");
+    return;
+  };
+
+  for body in [
+    json!({"user_input": "x", "workspace_root": "/tmp", "runtime_kind": "debate"}),
+    json!({
+      "user_input": "x",
+      "workspace_root": "/tmp",
+      "runtime_kind": "plan_execute",
+      "skill_name": "any",
+    }),
+  ] {
+    let response = create_router(state.clone())
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/v1/harness/sessions")
+          .header("content-type", "application/json")
+          .body(Body::from(serde_json::to_vec(&body).unwrap()))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+  }
+}
+
 /// U1.3: `cost_limit_usd` is an optional field on the create-session
 /// body — the CLI/API entry point for the `RuntimeLimits::cost_limit_usd`
 /// runtime enforcement T1.1 wired into `ReActAgent`/`PlanExecuteAgent`.

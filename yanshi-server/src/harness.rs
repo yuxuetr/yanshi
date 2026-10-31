@@ -836,6 +836,17 @@ pub async fn submit_harness_session(
   let runtime_kind = req
     .runtime_kind
     .unwrap_or_else(|| DEFAULT_RUNTIME_KIND.into());
+  // Eval 2026-10-07 A4: an unknown kind used to run ReAct under its label.
+  if !matches!(runtime_kind.as_str(), "react" | "plan_execute") {
+    return Err(ApiError::BadRequest(format!(
+      "runtime_kind '{runtime_kind}' is not supported (expected 'react' or 'plan_execute')"
+    )));
+  }
+  if runtime_kind == "plan_execute" && req.skill_name.is_some() {
+    return Err(ApiError::BadRequest(
+      "skill-backed sessions run ReAct; 'plan_execute' cannot be combined with skill_name".into(),
+    ));
+  }
   let model = req.model.unwrap_or_else(|| DEFAULT_MODEL.into());
 
   let session = state

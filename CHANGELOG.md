@@ -106,6 +106,10 @@ _New entries go here. Will roll into the next tag (likely
   tool-running nodes (`shell`, `file`, `http`, `mcp`, `plugin`, the agent
   types, including inside `map`/`while`). Their tools bypass harness
   approval, so the profile governed none of them while appearing to.
+- Harness sessions created with `runtime_kind: "plan_execute"` run a
+  PlanExecute agent; they ran ReAct under the plan_execute label (only
+  `:resume` honoured the kind). `POST /v1/harness/sessions` rejects other
+  kinds, and `plan_execute` with `skill_name`, with 400.
 - Parallel `map` items stop when their run does. They ran as detached
   tasks, so they kept executing after a timeout or cancelled caller
   dropped the run, and a retried node ran them a second time.
