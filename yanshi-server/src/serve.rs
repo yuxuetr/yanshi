@@ -396,27 +396,16 @@ pub async fn run_check(config: ServeConfig) -> Result<StartupReport, ServeError>
   Ok(build_startup_report(&config).await)
 }
 
-/// Boot the gateway and serve forever. The function returns only when
-/// the underlying axum server exits (e.g. on SIGTERM / drop of the
-/// listener).
-pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
-  // P10.14.2-FU1: install the Prometheus recorder once at boot so
-  // any `metrics::counter!()` / `metrics::histogram!()` call
-  // throughout the workspace contributes to the `/metrics`
-  // snapshot. Failure is logged but not fatal — the rest of the
-  // gateway boots and `/metrics` returns an empty body, which is
-  // the documented behaviour when no recorder is installed (see
-  // `dashboards/README.md` "Current emission status").
-  if let Err(err) = crate::metrics::init_recorder() {
-    warn!("Failed to install Prometheus metrics recorder: {err}");
-  } else {
-    info!("Prometheus metrics recorder installed; /metrics endpoint is live.");
-  }
-
-  // Apply env-shaped overrides for downstream tooling that still reads
-  // from env (legacy paths). Set vars only when explicit overrides are
-  // supplied so existing process env is preserved.
-  // SAFETY: env mutation occurs once at startup before any reads.
+/// Exports the config's explicit overrides as env vars for downstream code
+/// that still reads them (run/trace dirs, security profile, CORS, body
+/// limit); existing env is kept where the config has no override.
+///
+/// # Safety
+///
+/// Mutates the process environment, so no other thread may be running —
+/// call it before starting the async runtime.
+pub unsafe fn apply_env_overrides(config: &ServeConfig) {
+  // SAFETY: the caller guarantees no other thread reads the environment.
   unsafe {
     if let Some(dir) = config.run_dir.as_ref() {
       std::env::set_var("YANSHI_RUN_DIR", dir);
@@ -437,6 +426,25 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
         (mb * 1024 * 1024).to_string(),
       );
     }
+  }
+}
+
+/// Boot the gateway and serve forever. The function returns only when
+/// the underlying axum server exits (e.g. on SIGTERM / drop of the
+/// listener). Callers apply [`apply_env_overrides`] first, before their
+/// runtime starts.
+pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
+  // P10.14.2-FU1: install the Prometheus recorder once at boot so
+  // any `metrics::counter!()` / `metrics::histogram!()` call
+  // throughout the workspace contributes to the `/metrics`
+  // snapshot. Failure is logged but not fatal — the rest of the
+  // gateway boots and `/metrics` returns an empty body, which is
+  // the documented behaviour when no recorder is installed (see
+  // `dashboards/README.md` "Current emission status").
+  if let Err(err) = crate::metrics::init_recorder() {
+    warn!("Failed to install Prometheus metrics recorder: {err}");
+  } else {
+    info!("Prometheus metrics recorder installed; /metrics endpoint is live.");
   }
 
   let db_url = config

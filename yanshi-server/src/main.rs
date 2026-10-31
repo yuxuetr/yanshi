@@ -19,12 +19,14 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use yanshi_db::Database;
 use yanshi_server::{
   CleanupConfig, DEFAULT_SERVE_BIND, ServeConfig, ServeError, YANSHI_SERVE_BIND_ENV,
-  cleanup_expired, run, run_check,
+  apply_env_overrides, cleanup_expired, run, run_check,
 };
 use yanshi_tools::{SECURITY_PROFILE_ENV, SecurityProfile};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Synchronous so `.env` loading and the config's env overrides mutate the
+/// environment before the tokio runtime starts any threads (eval 2026-10-07
+/// L8: they used to run inside `#[tokio::main]`).
+fn main() -> Result<(), Box<dyn std::error::Error>> {
   tracing_subscriber::registry()
     .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
     .with(tracing_subscriber::fmt::layer())
@@ -38,20 +40,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let dry_run = args.iter().any(|arg| arg == "--dry-run");
 
   let config = build_config_from_env()?;
+  if !check_mode && !cleanup_mode {
+    // SAFETY: single-threaded — the runtime is built below.
+    unsafe { apply_env_overrides(&config) };
+  }
+  let runtime = tokio::runtime::Builder::new_multi_thread()
+    .enable_all()
+    .build()?;
 
   if check_mode {
-    let report = run_check(config).await?;
+    let report = runtime.block_on(run_check(config))?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     std::process::exit(report.readiness.exit_code());
   }
 
   if cleanup_mode {
-    let report = run_cleanup_once(&config, dry_run).await?;
+    let report = runtime.block_on(run_cleanup_once(&config, dry_run))?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     return Ok(());
   }
 
-  match run(config).await {
+  match runtime.block_on(run(config)) {
     Ok(()) => Ok(()),
     Err(err) => {
       eprintln!("{err}");

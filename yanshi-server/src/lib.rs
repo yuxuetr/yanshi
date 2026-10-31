@@ -100,7 +100,7 @@ pub use scheduler::{
 };
 pub use serve::{
   DEFAULT_SERVE_BIND, ServeConfig, ServeError, ServeReadiness, StartupReport,
-  YANSHI_SERVE_BIND_ENV, build_startup_report, run, run_check,
+  YANSHI_SERVE_BIND_ENV, apply_env_overrides, build_startup_report, run, run_check,
 };
 pub use skills::{
   ListSkillsResponse, RunSkillRequest, SkillCatalog, SkillEntry, list_skills, run_skill,

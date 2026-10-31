@@ -106,6 +106,11 @@ _New entries go here. Will roll into the next tag (likely
   tool-running nodes (`shell`, `file`, `http`, `mcp`, `plugin`, the agent
   types, including inside `map`/`while`). Their tools bypass harness
   approval, so the profile governed none of them while appearing to.
+- `yanshi-server` loads `.env` and applies its config's env overrides
+  before starting the tokio runtime; it mutated the environment from
+  inside `#[tokio::main]`, with worker threads already running.
+  `serve::run` no longer sets env itself; call the new
+  `apply_env_overrides` first.
 - LLM retries wait at most 60s. A provider `Retry-After` beyond that
   now fails the call at once instead of parking it (an hour for
   `Retry-After: 3600`), and the exponential backoff is capped too.
