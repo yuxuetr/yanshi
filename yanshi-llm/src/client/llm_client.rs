@@ -35,6 +35,11 @@ pub fn prompt_fingerprint(text: &str) -> String {
   format!("{hash:016x}")
 }
 
+/// Longest a retry waits, whether the server asked (`Retry-After`) or the
+/// backoff computed it. A server asking for longer fails the call instead:
+/// retrying sooner than it asked only burns another attempt.
+const MAX_RETRY_WAIT_MS: u64 = 60_000;
+
 /// V1.5: retry a transient provider-call failure (rate limit / 5xx /
 /// timeout) with exponential backoff, driven by the resolved model's
 /// registry-wide `defaults.max_retries` / `defaults.retry_delay_ms`
@@ -57,6 +62,8 @@ pub fn prompt_fingerprint(text: &str) -> String {
 /// represents a concrete floor and the retry loop only has one caller
 /// per invocation anyway (jitter's benefit is decorrelating *many*
 /// concurrent callers, which the guessed path can't otherwise achieve).
+/// Both waits are capped at [`MAX_RETRY_WAIT_MS`]; a longer `Retry-After`
+/// returns the error at once.
 async fn retry_transient<F, Fut, T>(defaults: &GlobalDefaults, mut call: F) -> Result<T>
 where
   F: FnMut() -> Fut,
@@ -68,8 +75,16 @@ where
   loop {
     match call().await {
       Ok(value) => return Ok(value),
-      Err(err) if attempt < max_retries && err.is_retryable() => {
-        let computed_delay_ms = base_delay_ms.saturating_mul(1u64 << attempt.min(20));
+      Err(err)
+        if attempt < max_retries
+          && err.is_retryable()
+          && err
+            .retry_after_ms()
+            .is_none_or(|ms| ms <= MAX_RETRY_WAIT_MS) =>
+      {
+        let computed_delay_ms = base_delay_ms
+          .saturating_mul(1u64 << attempt.min(20))
+          .min(MAX_RETRY_WAIT_MS);
         let delay_ms = err
           .retry_after_ms()
           .unwrap_or_else(|| jittered_delay_ms(computed_delay_ms));
@@ -1127,5 +1142,55 @@ mod retry_transient_tests {
     let result = call.await;
     assert!(result.is_ok());
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+  }
+
+  /// Eval 2026-10-07 L3: a server's `Retry-After` (and the computed
+  /// backoff) had no ceiling, so `Retry-After: 3600` parked a caller with
+  /// no outer timeout for an hour. A longer wait fails fast instead; the
+  /// computed backoff is capped.
+  #[tokio::test(start_paused = true)]
+  async fn retry_waits_are_capped() {
+    let attempts = AtomicU32::new(0);
+    let defaults = defaults_with(3, 1_000);
+    let call = retry_transient(&defaults, || {
+      attempts.fetch_add(1, Ordering::SeqCst);
+      async {
+        Err::<(), _>(LLMError::RateLimitedWithRetryAfter {
+          status_code: 429,
+          message: "come back in an hour".to_string(),
+          retry_after_ms: 3_600_000,
+        })
+      }
+    });
+    tokio::pin!(call);
+    assert!(
+      matches!(futures::poll!(&mut call), std::task::Poll::Ready(Err(_))),
+      "a Retry-After past the cap must fail without waiting"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+    let attempts = AtomicU32::new(0);
+    let defaults = defaults_with(1, 3_600_000);
+    let call = retry_transient(&defaults, || {
+      let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+      async move {
+        if attempt == 0 {
+          Err(LLMError::HttpError {
+            status_code: 503,
+            message: "busy".to_string(),
+          })
+        } else {
+          Ok(())
+        }
+      }
+    });
+    tokio::pin!(call);
+    // First attempt fails and starts the backoff sleep.
+    assert!(matches!(futures::poll!(&mut call), std::task::Poll::Pending));
+    tokio::time::advance(std::time::Duration::from_millis(MAX_RETRY_WAIT_MS)).await;
+    assert!(
+      matches!(futures::poll!(&mut call), std::task::Poll::Ready(Ok(()))),
+      "the computed backoff must not exceed the cap"
+    );
   }
 }

@@ -106,6 +106,9 @@ _New entries go here. Will roll into the next tag (likely
   tool-running nodes (`shell`, `file`, `http`, `mcp`, `plugin`, the agent
   types, including inside `map`/`while`). Their tools bypass harness
   approval, so the profile governed none of them while appearing to.
+- LLM retries wait at most 60s. A provider `Retry-After` beyond that
+  now fails the call at once instead of parking it (an hour for
+  `Retry-After: 3600`), and the exponential backoff is capped too.
 - Harness sessions created with `runtime_kind: "plan_execute"` run a
   PlanExecute agent; they ran ReAct under the plan_execute label (only
   `:resume` honoured the kind). `POST /v1/harness/sessions` rejects other
