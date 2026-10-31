@@ -34,7 +34,7 @@ use crate::runtime::{
   AgentContext, AgentEvent, AgentRunResult, AgentRuntime, AgentRuntimeError, AgentStep,
   AgentStepKind, AgentStopReason,
 };
-use crate::supervisor::common::build_child_context;
+use crate::supervisor::common::{ChildBudget, build_child_context};
 
 const DEFAULT_JUDGE_PROMPT: &str = "\
 Several specialist agents have independently considered the following user \
@@ -210,8 +210,13 @@ impl AgentRuntime for DebateSupervisor {
     }
 
     let mut last_round_proposals: Vec<ProposalRecord> = Vec::new();
+    let mut budget = ChildBudget::start(&context.limits);
 
     for round in 1..=self.rounds {
+      let limits = match budget.limits_for(&context.limits, self.participants.len()) {
+        Ok(limits) => limits,
+        Err(spent) => return Ok(stopped(session_id, None, spent, steps, events)),
+      };
       let participant_names: Vec<String> =
         self.participants.iter().map(|(n, _)| n.clone()).collect();
 
@@ -236,7 +241,7 @@ impl AgentRuntime for DebateSupervisor {
       )> = Vec::with_capacity(self.participants.len());
       for (name, handle) in &self.participants {
         let agent_handle = handle.clone();
-        let child_ctx = build_child_context(&context, name, &round_input);
+        let child_ctx = build_child_context(&context, name, &round_input, limits.clone());
         let task = tokio::spawn(async move {
           let mut guard = agent_handle.lock().await;
           guard.run(child_ctx).await
@@ -250,6 +255,7 @@ impl AgentRuntime for DebateSupervisor {
       while let Some((name, handle)) = handles.next() {
         match handle.await {
           Ok(Ok(child_result)) => {
+            budget.charge(&child_result);
             step_index =
               merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
             if super::common::halts_supervisor(&child_result.stop_reason) {
@@ -327,7 +333,11 @@ impl AgentRuntime for DebateSupervisor {
 
     // Run the judge with the final-round proposals.
     let judge_input = self.build_judge_input(&context.input, &last_round_proposals);
-    let judge_ctx = build_child_context(&context, "judge", &judge_input);
+    let limits = match budget.limits_for(&context.limits, 1) {
+      Ok(limits) => limits,
+      Err(spent) => return Ok(stopped(session_id, None, spent, steps, events)),
+    };
+    let judge_ctx = build_child_context(&context, "judge", &judge_input, limits);
     let judge_result = {
       let mut guard = self.judge.lock().await;
       guard.run(judge_ctx).await?

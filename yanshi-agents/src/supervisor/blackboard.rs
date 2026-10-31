@@ -30,6 +30,8 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
+use super::common::{ChildBudget, build_child_context};
+
 use yanshi_tool::{Tool, ToolError, ToolMetadata, ToolOutput};
 
 use crate::runtime::{
@@ -410,15 +412,6 @@ impl BlackboardSupervisor {
       })
   }
 
-  fn build_child_context(
-    &self,
-    parent: &AgentContext,
-    agent_name: &str,
-    input: &str,
-  ) -> AgentContext {
-    super::common::build_child_context(parent, agent_name, input)
-  }
-
   fn drain_ops_into_supervisor_trace(
     &self,
     next_index: &mut usize,
@@ -554,16 +547,22 @@ async fn run_schedule(
 ) -> Result<Option<AgentStopReason>, AgentRuntimeError> {
   match &supervisor.schedule {
     BlackboardSchedule::Sequential(names) => {
+      let mut budget = ChildBudget::start(&parent.limits);
       for name in names {
         if cancellation.as_ref().is_some_and(|t| t.is_cancelled()) {
           return Ok(None);
         }
         let agent = supervisor.agent_handle(name)?;
-        let child_ctx = supervisor.build_child_context(parent, name, &parent.input);
+        let limits = match budget.limits_for(&parent.limits, 1) {
+          Ok(limits) => limits,
+          Err(spent) => return Ok(Some(spent)),
+        };
+        let child_ctx = build_child_context(parent, name, &parent.input, limits);
         let child_result = {
           let mut guard = agent.lock().await;
           guard.run(child_ctx).await?
         };
+        budget.charge(&child_result);
         supervisor.record_delegation_validation(name, child_result.answer.as_deref());
         let child_stop = child_result.stop_reason.clone();
         *next_index = merge_child_into(steps, events, *next_index, child_result);
@@ -578,11 +577,16 @@ async fn run_schedule(
       Ok(None)
     }
     BlackboardSchedule::Parallel(names) => {
+      let limits = match ChildBudget::start(&parent.limits).limits_for(&parent.limits, names.len())
+      {
+        Ok(limits) => limits,
+        Err(spent) => return Ok(Some(spent)),
+      };
       let mut handles: Vec<tokio::task::JoinHandle<Result<AgentRunResult, AgentRuntimeError>>> =
         Vec::with_capacity(names.len());
       for name in names {
         let agent = supervisor.agent_handle(name)?;
-        let ctx = supervisor.build_child_context(parent, name, &parent.input);
+        let ctx = build_child_context(parent, name, &parent.input, limits.clone());
         handles.push(tokio::spawn(async move {
           let mut guard = agent.lock().await;
           guard.run(ctx).await

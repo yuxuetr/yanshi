@@ -91,6 +91,15 @@ _New entries go here. Will roll into the next tag (likely
   serves only the backfill for a run that already finished. Before, a
   stream served by a replica other than the run's, or opened after the
   run finished, never closed.
+- Multi-agent supervisors share the parent's `timeout_ms` and
+  `max_tool_calls` across their children instead of giving each child a
+  full copy, so N children no longer spend N times the budget. Children
+  running in parallel split the remaining tool calls; once either budget
+  is spent the supervisor stops with `Timeout` / `MaxToolCalls`.
+  `max_steps` and `token_budget` stay per child; `cost_limit_usd` too,
+  since child results carry no cost.
+- Harness `:cancel` stops a session running on another replica, not
+  just its row.
 - `yanshi workflow logs --follow` exits when the run is over. It
   recognised none of the terminal kinds the server emits
   (`workflow.completed` etc.) and reconnected forever.

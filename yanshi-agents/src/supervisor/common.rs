@@ -3,11 +3,14 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::delegation::{DelegationSpec, SchemaValidation, validate_output};
-use crate::runtime::{AgentContext, AgentRuntime, AgentStopReason};
+use crate::runtime::{
+  AgentContext, AgentRunResult, AgentRuntime, AgentStepKind, AgentStopReason, RuntimeLimits,
+};
 
 /// A supervisor participant, shared across concurrently-dispatched tasks
 /// (e.g. `BlackboardSchedule::Parallel`, debate rounds) and type-erased
@@ -48,14 +51,17 @@ pub(crate) fn halts_supervisor(reason: &AgentStopReason) -> bool {
 /// `DebateSupervisor`) call this instead of duplicating the same
 /// hand-rolled construction, so a future new field on `AgentContext` only
 /// needs to be forwarded here once.
+///
+/// `limits` come from [`ChildBudget::limits_for`], not `parent.limits`:
+/// the parent's run-wide budgets are shared by its children.
 pub(crate) fn build_child_context(
   parent: &AgentContext,
   agent_name: &str,
   input: &str,
+  limits: RuntimeLimits,
 ) -> AgentContext {
   let session = format!("{}::{}", parent.session_id, agent_name);
-  let mut ctx =
-    AgentContext::new(session, input, parent.model.clone()).with_limits(parent.limits.clone());
+  let mut ctx = AgentContext::new(session, input, parent.model.clone()).with_limits(limits);
   if let Some(token) = parent.cancellation_token.clone() {
     ctx = ctx.with_cancellation_token(token);
   }
@@ -65,6 +71,68 @@ pub(crate) fn build_child_context(
   ctx.loop_checkpointer = parent.loop_checkpointer.clone();
   ctx.trace_context = parent.trace_context.clone();
   ctx
+}
+
+/// The parent's run-wide limits, drawn down by its children together
+/// (eval 2026-10-07 A2). Each child used to get a full copy, so a
+/// supervisor of N children could spend N times the wall clock and tool
+/// calls it was given. `timeout_ms` becomes one deadline for the whole
+/// supervisor run and `max_tool_calls` a shared pool charged with each
+/// child's `ToolCall` steps. `max_steps` and `token_budget` bound one
+/// agent loop and one conversation, so every child keeps its own.
+/// `cost_limit_usd` stays per child: results carry no cost to charge.
+pub(crate) struct ChildBudget {
+  deadline: Option<Instant>,
+  tool_calls_left: Option<usize>,
+}
+
+impl ChildBudget {
+  pub(crate) fn start(limits: &RuntimeLimits) -> Self {
+    Self {
+      deadline: limits
+        .timeout_ms
+        .map(|ms| Instant::now() + Duration::from_millis(ms)),
+      tool_calls_left: limits.max_tool_calls,
+    }
+  }
+
+  /// Limits for each of `concurrent` children about to run side by side
+  /// (1 for a sequential dispatch), or why the supervisor must stop
+  /// because the budget is spent. Concurrent children share the deadline
+  /// and split the remaining tool calls, so together they stay within it.
+  pub(crate) fn limits_for(
+    &self,
+    parent: &RuntimeLimits,
+    concurrent: usize,
+  ) -> Result<RuntimeLimits, AgentStopReason> {
+    let mut limits = parent.clone();
+    if let (Some(deadline), Some(timeout_ms)) = (self.deadline, parent.timeout_ms) {
+      let left = deadline.saturating_duration_since(Instant::now());
+      if left.is_zero() {
+        return Err(AgentStopReason::Timeout { timeout_ms });
+      }
+      limits.timeout_ms = Some(u64::try_from(left.as_millis()).unwrap_or(u64::MAX).max(1));
+    }
+    if let (Some(left), Some(max_tool_calls)) = (self.tool_calls_left, parent.max_tool_calls) {
+      if left == 0 {
+        return Err(AgentStopReason::MaxToolCalls { max_tool_calls });
+      }
+      limits.max_tool_calls = Some(left / concurrent.max(1));
+    }
+    Ok(limits)
+  }
+
+  /// Charge a finished child's tool calls against the shared pool.
+  pub(crate) fn charge(&mut self, result: &AgentRunResult) {
+    if let Some(left) = self.tool_calls_left.as_mut() {
+      let used = result
+        .steps
+        .iter()
+        .filter(|step| matches!(step.kind, AgentStepKind::ToolCall { .. }))
+        .count();
+      *left = left.saturating_sub(used);
+    }
+  }
 }
 
 /// If `agent_name` has a registered [`DelegationSpec`] (W3.3), validate
@@ -152,7 +220,7 @@ mod tests {
       .with_loop_checkpointer(Arc::new(NoopCheckpointer))
       .with_trace_context(trace);
 
-    let child = build_child_context(&parent, "sub_agent", "sub-input");
+    let child = build_child_context(&parent, "sub_agent", "sub-input", parent.limits.clone());
 
     assert_eq!(
       child.event_sink, parent.event_sink,
@@ -175,7 +243,7 @@ mod tests {
   #[test]
   fn leaves_governance_fields_none_when_parent_has_none() {
     let parent = AgentContext::new("sess", "goal", "gpt-4o");
-    let child = build_child_context(&parent, "sub_agent", "sub-input");
+    let child = build_child_context(&parent, "sub_agent", "sub-input", parent.limits.clone());
     assert!(child.event_sink.is_none());
     assert!(child.between_turn_hook.is_none());
     assert!(child.loop_checkpointer.is_none());
@@ -280,5 +348,164 @@ mod tests {
         denied()
       );
     }
+  }
+
+  /// Child that records the tool-call limit it was handed, sleeps, and reports
+  /// `tool_calls` ToolCall steps.
+  struct Spender {
+    tool_calls: usize,
+    sleep_ms: u64,
+    seen: Arc<std::sync::Mutex<Vec<Option<usize>>>>,
+  }
+
+  #[async_trait]
+  impl AgentRuntime for Spender {
+    async fn run(
+      &mut self,
+      context: AgentContext,
+    ) -> Result<crate::runtime::AgentRunResult, crate::runtime::AgentRuntimeError> {
+      if let Ok(mut seen) = self.seen.lock() {
+        seen.push(context.limits.max_tool_calls);
+      }
+      tokio::time::sleep(Duration::from_millis(self.sleep_ms)).await;
+      let mut result = crate::runtime::AgentRunResult::final_answer(context.session_id, "done");
+      for index in 0..self.tool_calls {
+        result.steps.push(crate::runtime::AgentStep::new(
+          index + 1,
+          AgentStepKind::ToolCall {
+            tool: "t".into(),
+            params: serde_json::Value::Null,
+          },
+        ));
+      }
+      Ok(result)
+    }
+
+    fn runtime_name(&self) -> &'static str {
+      "spender"
+    }
+  }
+
+  fn limited(max_tool_calls: Option<usize>, timeout_ms: Option<u64>) -> AgentContext {
+    AgentContext::new("s", "go", "mock").with_limits(RuntimeLimits {
+      max_tool_calls,
+      timeout_ms,
+      ..RuntimeLimits::default()
+    })
+  }
+
+  /// Eval 2026-10-07 A2: children used to get a full copy of the parent's
+  /// limits each, so N children could spend N times the budget.
+  #[tokio::test]
+  async fn sequential_children_share_the_tool_call_pool() {
+    use crate::supervisor::{BlackboardSchedule, BlackboardSupervisorBuilder};
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (a, b, c) = (seen.clone(), seen.clone(), seen.clone());
+    let mut blackboard = BlackboardSupervisorBuilder::new()
+      .add_agent("a", "first", move |_bb| Spender {
+        tool_calls: 2,
+        sleep_ms: 0,
+        seen: a,
+      })
+      .add_agent("b", "second", move |_bb| Spender {
+        tool_calls: 1,
+        sleep_ms: 0,
+        seen: b,
+      })
+      .add_agent("c", "third", move |_bb| Spender {
+        tool_calls: 0,
+        sleep_ms: 0,
+        seen: c,
+      })
+      .schedule(BlackboardSchedule::Sequential(vec![
+        "a".into(),
+        "b".into(),
+        "c".into(),
+      ]))
+      .build()
+      .unwrap();
+    let result = AgentRuntime::run(&mut blackboard, limited(Some(3), None))
+      .await
+      .unwrap();
+    let seen: Vec<_> = seen.lock().unwrap().clone();
+    assert_eq!(
+      seen,
+      vec![Some(3), Some(1)],
+      "c must not start once the pool is empty"
+    );
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::MaxToolCalls { max_tool_calls: 3 }
+    );
+  }
+
+  #[tokio::test]
+  async fn concurrent_children_split_the_pool_and_the_judge_gets_the_rest() {
+    use crate::supervisor::DebateSupervisorBuilder;
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let spender = |tool_calls| Spender {
+      tool_calls,
+      sleep_ms: 0,
+      seen: seen.clone(),
+    };
+    let mut debate = DebateSupervisorBuilder::new()
+      .add_participant("a", spender(2))
+      .add_participant("b", spender(1))
+      .judge(spender(0))
+      .build()
+      .unwrap();
+    AgentRuntime::run(&mut debate, limited(Some(7), None))
+      .await
+      .unwrap();
+    let mut seen: Vec<_> = seen.lock().unwrap().clone();
+    let judge = seen.pop();
+    seen.sort();
+    assert_eq!(
+      seen,
+      vec![Some(3), Some(3)],
+      "7 split across 2 participants"
+    );
+    assert_eq!(judge, Some(Some(4)), "the judge gets what the round left");
+  }
+
+  #[tokio::test]
+  async fn children_share_one_deadline() {
+    use crate::supervisor::{BlackboardSchedule, BlackboardSupervisorBuilder};
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (a, b) = (seen.clone(), seen.clone());
+    let mut blackboard = BlackboardSupervisorBuilder::new()
+      .add_agent("a", "slow", move |_bb| Spender {
+        tool_calls: 0,
+        sleep_ms: 150,
+        seen: a,
+      })
+      .add_agent("b", "next", move |_bb| Spender {
+        tool_calls: 0,
+        sleep_ms: 0,
+        seen: b,
+      })
+      .schedule(BlackboardSchedule::Sequential(vec!["a".into(), "b".into()]))
+      .build()
+      .unwrap();
+    let result = AgentRuntime::run(&mut blackboard, limited(None, Some(100)))
+      .await
+      .unwrap();
+    assert_eq!(
+      seen.lock().unwrap().len(),
+      1,
+      "b must not start past the deadline"
+    );
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::Timeout { timeout_ms: 100 }
+    );
+  }
+
+  #[test]
+  fn budget_without_limits_passes_the_parent_limits_through() {
+    let limits = RuntimeLimits::react_defaults();
+    let mut budget = ChildBudget::start(&limits);
+    budget.charge(&crate::runtime::AgentRunResult::final_answer("s", "x"));
+    assert_eq!(budget.limits_for(&limits, 3).unwrap(), limits);
   }
 }

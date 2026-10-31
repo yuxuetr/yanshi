@@ -278,6 +278,7 @@ impl AgentRuntime for HandoffSupervisor {
 
     // Drain any stale signal from a prior run on the same supervisor instance.
     let _ = self.signal.take();
+    let mut budget = super::common::ChildBudget::start(&context.limits);
 
     loop {
       if cancellation.as_ref().is_some_and(|t| t.is_cancelled()) {
@@ -303,12 +304,17 @@ impl AgentRuntime for HandoffSupervisor {
             ),
           })?;
 
-      let child_ctx = super::common::build_child_context(&context, &active, &current_input);
+      let limits = match budget.limits_for(&context.limits, 1) {
+        Ok(limits) => limits,
+        Err(spent) => return Ok(stopped(session_id, None, spent, steps, events)),
+      };
+      let child_ctx = super::common::build_child_context(&context, &active, &current_input, limits);
 
       let child_result = {
         let mut agent = agent_handle.lock().await;
         agent.run(child_ctx).await?
       };
+      budget.charge(&child_result);
 
       super::common::record_delegation_validation(
         &self.delegation_specs,
