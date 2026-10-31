@@ -106,6 +106,10 @@ _New entries go here. Will roll into the next tag (likely
   tool-running nodes (`shell`, `file`, `http`, `mcp`, `plugin`, the agent
   types, including inside `map`/`while`). Their tools bypass harness
   approval, so the profile governed none of them while appearing to.
+- The CLI approval prompt no longer loses the answer typed after a
+  timed-out prompt: the expired prompt's stdin read stayed pending and
+  consumed it. The next prompt takes that read over, a late answer to
+  the expired prompt is discarded, and concurrent prompts take turns.
 - `yanshi-server` loads `.env` and applies its config's env overrides
   before starting the tokio runtime; it mutated the environment from
   inside `#[tokio::main]`, with worker threads already running.
