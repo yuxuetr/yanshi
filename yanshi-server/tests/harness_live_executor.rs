@@ -86,6 +86,7 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
       Request::builder()
         .method("POST")
         .uri("/v1/harness/sessions")
+        .header("X-Yanshi-Tenant", &tenant)
         .header("content-type", "application/json")
         .body(Body::from(
           serde_json::to_vec(&json!({

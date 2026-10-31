@@ -93,6 +93,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
       Request::builder()
         .method("POST")
         .uri("/v1/harness/sessions")
+        .header("X-Yanshi-Tenant", &tenant)
         .header("content-type", "application/json")
         .body(Body::from(
           serde_json::to_vec(&json!({

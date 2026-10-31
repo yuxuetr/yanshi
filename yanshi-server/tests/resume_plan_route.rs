@@ -27,7 +27,14 @@ async fn fresh_state() -> Option<AppState> {
     .execute(&db.pool)
     .await
     .ok()?;
-  Some(AppState::new(db))
+  // The checkpoint dirs are tempdirs; the gateway only accepts
+  // checkpoint_dir under an operator root (eval 2026-10-07 S7).
+  Some(
+    AppState::new(db).with_gateway_policy(yanshi_server::gateway_policy::GatewayPolicy {
+      path_roots: vec!["/tmp".into(), std::env::temp_dir()],
+      ..Default::default()
+    }),
+  )
 }
 
 fn write_checkpoint(dir: &std::path::Path, run_id: Uuid, tool_records: Vec<serde_json::Value>) {
