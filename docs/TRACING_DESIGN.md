@@ -409,7 +409,6 @@ pub struct TraceConfig {
 pub enum StorageErrorPolicy {
     Ignore,           // 忽略错误，不影响工作流
     LogError,         // 记录错误但继续
-    FailWorkflow,     // 失败时中止工作流（生产环境不推荐）
 }
 
 impl Default for TraceConfig {

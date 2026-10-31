@@ -90,7 +90,13 @@ impl TraceConfig {
   }
 }
 
-/// Storage error handling policy
+/// Storage error handling policy.
+///
+/// There is deliberately no "fail the workflow" variant: traces are
+/// persisted by a background drain task after the workflow has already
+/// produced its result, and `EventListener` has no channel back into
+/// `Flow`. The former `FailWorkflow` variant only panicked inside that
+/// task, where `catch_unwind` swallowed it (eval 2026-10-07 L7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageErrorPolicy {
   /// Ignore storage errors silently
@@ -98,9 +104,6 @@ pub enum StorageErrorPolicy {
 
   /// Log error but continue execution
   LogError,
-
-  /// Fail workflow if storage fails (not recommended for production)
-  FailWorkflow,
 }
 
 /// Trace collector - collects execution traces by listening to workflow events
@@ -639,9 +642,6 @@ impl TraceCollector {
       StorageErrorPolicy::LogError => {
         eprintln!("Trace storage error: {}", error);
       }
-      StorageErrorPolicy::FailWorkflow => {
-        panic!("Trace storage failed: {}", error);
-      }
     }
   }
 
@@ -738,8 +738,7 @@ impl EventListener for TraceCollector {
         let processed_drain = self.processed_count.clone();
         tokio::spawn(async move {
           // Q2.2.1: each event handler is wrapped in `catch_unwind` so a
-          // panic in `process_event` / exporter / storage / handle_storage_error
-          // (`FailWorkflow` policy used to call `panic!`) no longer kills
+          // panic in `process_event` / exporter / storage no longer kills
           // the drain task and silently swallows every subsequent event.
           // Consecutive panics beyond CONSECUTIVE_PANIC_BUDGET poison the
           // drain so producers stop filling the channel.

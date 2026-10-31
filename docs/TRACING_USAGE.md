@@ -563,11 +563,12 @@ let config = TraceConfig {
     on_storage_error: StorageErrorPolicy::LogError,  // 记录错误
     // or
     on_storage_error: StorageErrorPolicy::Ignore,    // 忽略错误
-    // or
-    on_storage_error: StorageErrorPolicy::FailWorkflow, // 失败时中止
     ..Default::default()
 };
 ```
+
+没有"存储失败就让工作流失败"的选项：trace 由后台 drain 任务在工作流产出结果之后才落盘，
+此时工作流已经结束。
 
 ### 查看正在运行的工作流
 
