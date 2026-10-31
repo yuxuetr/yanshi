@@ -26,7 +26,6 @@ members = [
   "yanshi-worker-proto",
   "yanshi-harness",
   "xtask",
-#   "yanshi-agents/agents/paper_assistant",
 ]
 resolver = "2"
 
