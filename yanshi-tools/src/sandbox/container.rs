@@ -15,10 +15,11 @@
 //!
 //! ## Engine detection
 //!
-//! Detected once at construction via a best-effort `<binary> --version`
-//! probe, preferring Apple's `container` CLI (stronger isolation) over
-//! rootless Podman when both happen to be present. `None` if neither is
-//! found.
+//! Detected once at construction by asking the engine's service whether it
+//! is up (`container system status` / `podman info`) — an installed CLI
+//! with a stopped service is reported as absent — preferring Apple's
+//! `container` CLI (stronger isolation) over rootless Podman when both are
+//! usable. `None` if neither is.
 //!
 //! ## No partial-enforcement tier
 //!
@@ -140,18 +141,22 @@ impl ContainerEngine {
     }
   }
 
-  /// Best-effort presence probe: spawn `<binary> --version` and check it
-  /// succeeds. No side effects beyond a short-lived child process — mirrors
-  /// `MacosSandboxExecBackend::new`'s `Path::exists` check in spirit (cheap,
-  /// synchronous, run once at construction).
+  /// Arguments for a probe that only succeeds when the engine can actually
+  /// start a container, not merely when its CLI is installed: `container
+  /// --version` exits 0 with the apiserver stopped (eval 2026-10-07), while
+  /// `container system status` exits 1 ("apiserver is not running"). The
+  /// same holds for `podman info` vs `podman --version` when the Podman
+  /// machine / storage is unusable.
+  fn probe_args(self) -> &'static [&'static str] {
+    match self {
+      Self::AppleContainer => &["system", "status"],
+      Self::Podman => &["info"],
+    }
+  }
+
+  /// Cheap, synchronous, run once at construction.
   fn probe(self) -> bool {
-    std::process::Command::new(self.binary())
-      .arg("--version")
-      .stdout(StdStdio::null())
-      .stderr(StdStdio::null())
-      .status()
-      .map(|status| status.success())
-      .unwrap_or(false)
+    engine_responds(self.binary(), self.probe_args())
   }
 
   /// Prefer Apple's `container` CLI (stronger, genuine per-invocation VM
@@ -161,6 +166,16 @@ impl ContainerEngine {
       .into_iter()
       .find(|candidate| candidate.probe())
   }
+}
+
+fn engine_responds(binary: impl AsRef<std::ffi::OsStr>, args: &[&str]) -> bool {
+  std::process::Command::new(binary)
+    .args(args)
+    .stdout(StdStdio::null())
+    .stderr(StdStdio::null())
+    .status()
+    .map(|status| status.success())
+    .unwrap_or(false)
 }
 
 pub struct ContainerBackend {
@@ -358,6 +373,29 @@ impl SandboxBackend for ContainerBackend {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// A CLI that is installed but whose service is down: `--version` works,
+  /// anything that talks to the service fails. The probe must say "absent".
+  #[cfg(unix)]
+  #[test]
+  fn probe_reports_installed_but_stopped_engine_as_absent() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("container");
+    std::fs::write(
+      &fake,
+      "#!/bin/sh\n[ \"$1\" = --version ] && exit 0\necho 'apiserver is not running' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for engine in [ContainerEngine::AppleContainer, ContainerEngine::Podman] {
+      assert!(
+        !engine_responds(&fake, engine.probe_args()),
+        "{engine:?} probe must not pass on a stopped service"
+      );
+    }
+    assert!(engine_responds(&fake, &["--version"]), "fixture sanity");
+  }
 
   #[test]
   fn wrap_command_refuses_net_capability() {
