@@ -126,6 +126,8 @@ pub enum ServeError {
   HttpConfig(#[from] ServerHttpConfigError),
   #[error("gateway policy configuration error: {0}")]
   GatewayPolicy(String),
+  #[error("OTLP exporter configuration error: {0}")]
+  Otlp(String),
   #[error("failed to bind {bind}: {source}")]
   Bind {
     bind: SocketAddr,
@@ -504,6 +506,13 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
   let gateway_policy =
     crate::gateway_policy::GatewayPolicy::from_env().map_err(ServeError::GatewayPolicy)?;
   info!(?gateway_policy, "gateway policy loaded");
+  if let Some(otlp) = yanshi_tracing::OtlpHttpConfig::from_env() {
+    let endpoint = otlp.endpoint.clone();
+    let sink = yanshi_tracing::OtlpHttpSpanSink::new(otlp)
+      .map_err(|err| ServeError::Otlp(err.to_string()))?;
+    crate::runs::install_otlp_span_sink(Arc::new(sink));
+    info!(%endpoint, "tracing: exporting run traces over OTLP/HTTP");
+  }
   let state = AppState::new(db.clone())
     .with_gateway_policy(gateway_policy)
     .with_security_defaults(security_defaults)

@@ -298,6 +298,15 @@ async fn drive_distributed_run(
     tokio::time::sleep(POLL_INTERVAL).await;
   }
 
+  // Worker-side spans come back over the protocol and are stitched here,
+  // so the server is the one exporter for distributed runs too.
+  if let Some(sink) = crate::runs::otlp_span_sink() {
+    let spans = control_plane.inner().stitched_otel_spans(ctx.run_id).await;
+    if let Err(err) = sink.export_spans(spans).await {
+      error!(run_id = %ctx.run_id, error = %err, "tracing: OTLP export of worker spans failed");
+    }
+  }
+
   if let Some(registry) = &ctx.live_state_registry {
     registry.deregister(&ctx.run_id);
   }

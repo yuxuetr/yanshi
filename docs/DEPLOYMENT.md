@@ -294,6 +294,18 @@ The Helm chart wires liveness and readiness probes to those endpoints. The curre
   this, every run failed creating its run dir. Run artifacts are per-pod
   scratch and are lost on restart.
 
+### OTLP trace export
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (the OTLP/HTTP traces URL, e.g.
+`http://otel-collector:4318/v1/traces`; optional
+`OTEL_EXPORTER_OTLP_HEADERS=key=value,...`) and the gateway exports each
+finished `POST /v1/runs` trace as spans with service name
+`yanshi-server`. This works without `YANSHI_TRACE_DIR`. Distributed runs
+(`execution_mode: "distributed"`) also export the stitched worker-task
+spans. Workers report through the server and don't export themselves.
+The exporter is built at startup, so a malformed endpoint fails the boot.
+gRPC transport is not built in.
+
 ### File-backed trace dir is opt-in and not garbage-collected
 
 Setting `YANSHI_TRACE_DIR=<path>` opts the gateway in to writing one

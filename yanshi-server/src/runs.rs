@@ -30,7 +30,10 @@ use yanshi_core::{
   checkpoint::{CheckpointConfig, CheckpointManager},
   events::EventListener,
 };
-use yanshi_tracing::{TraceCollector, TraceConfig, storage::file::FileTraceStorage};
+use yanshi_tracing::{
+  ExecutionTrace, OtelExporterConfig, OtelSpanSink, OtelTraceExporter, TraceCollector, TraceConfig,
+  TraceQuery, TraceStorage, storage::file::FileTraceStorage,
+};
 
 use yanshi_agents::runtime::{AgentContext, AgentRuntime, AgentStopReason};
 use yanshi_harness::{
@@ -593,27 +596,18 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
       ctx.broker.clone(),
       0,
     ))];
-  if let Some(trace_dir) = resolve_server_trace_dir() {
-    match attach_file_trace_storage(&trace_dir) {
-      Ok(collector) => {
-        info!(
-          run_id = %ctx.run_id,
-          trace_dir = %trace_dir.display(),
-          "tracing: writing file trace for this run",
-        );
-        listeners.push(Box::new(collector));
-      }
-      Err(err) => {
-        // Trace IO is best-effort; degrade to DB-only rather than fail
-        // the workflow because the operator's disk is unhappy.
-        error!(
-          run_id = %ctx.run_id,
-          trace_dir = %trace_dir.display(),
-          error = %err,
-          "tracing: file trace storage unavailable; continuing without it",
-        );
-      }
+  match build_run_trace_collector(resolve_server_trace_dir().as_deref(), otlp_span_sink()) {
+    Some(Ok(collector)) => listeners.push(Box::new(collector)),
+    Some(Err(err)) => {
+      // Trace IO is best-effort; degrade to DB-only rather than fail
+      // the workflow because the operator's disk is unhappy.
+      error!(
+        run_id = %ctx.run_id,
+        error = %err,
+        "tracing: trace collector unavailable; continuing without it",
+      );
     }
+    None => {}
   }
   flow = flow.with_event_listener(Arc::new(MultiListener::new(listeners)));
 
@@ -1057,16 +1051,78 @@ fn resolve_server_trace_dir() -> Option<PathBuf> {
     .map(PathBuf::from)
 }
 
-/// Build a `TraceCollector` rooted at `trace_dir`. Wrapped in its own
-/// helper so the call site stays small and the error path is uniform.
-fn attach_file_trace_storage(trace_dir: &FsPath) -> Result<TraceCollector, anyhow::Error> {
-  std::fs::create_dir_all(trace_dir)?;
-  let storage = Arc::new(FileTraceStorage::new(trace_dir.to_path_buf())?);
-  // Production config: skips capturing prompts / IO bodies so trace
-  // files don't fan out to the size of every per-node payload. The
-  // server already persists the full event stream to Postgres; the
-  // file-trace is a portable summary for `yanshi trace tui`.
-  Ok(TraceCollector::new(storage, TraceConfig::production()))
+/// Process-wide OTLP span sink (eval 2026-10-07 P8). Installed once at
+/// startup by `serve` when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so a bad
+/// endpoint fails the boot instead of every run, and all runs share one
+/// HTTP client.
+static OTLP_SPAN_SINK: std::sync::OnceLock<Arc<dyn OtelSpanSink>> = std::sync::OnceLock::new();
+
+/// Install the sink every run exports to. Later calls are ignored.
+pub fn install_otlp_span_sink(sink: Arc<dyn OtelSpanSink>) {
+  let _ = OTLP_SPAN_SINK.set(sink);
+}
+
+pub(crate) fn otlp_span_sink() -> Option<Arc<dyn OtelSpanSink>> {
+  OTLP_SPAN_SINK.get().cloned()
+}
+
+/// The collector a run gets: a file trace under `trace_dir`, an OTLP
+/// export through `sink`, both, or (`None`) neither.
+fn build_run_trace_collector(
+  trace_dir: Option<&FsPath>,
+  sink: Option<Arc<dyn OtelSpanSink>>,
+) -> Option<Result<TraceCollector, anyhow::Error>> {
+  if trace_dir.is_none() && sink.is_none() {
+    return None;
+  }
+  let storage: Result<Arc<dyn TraceStorage>, anyhow::Error> = match trace_dir {
+    Some(dir) => std::fs::create_dir_all(dir)
+      .map_err(anyhow::Error::from)
+      .and_then(|()| FileTraceStorage::new(dir.to_path_buf()))
+      .map(|storage| Arc::new(storage) as Arc<dyn TraceStorage>),
+    None => Ok(Arc::new(DiscardTraceStorage)),
+  };
+  Some(storage.map(|storage| {
+    // Production config: skips capturing prompts / IO bodies so traces
+    // don't fan out to the size of every per-node payload. The server
+    // already persists the full event stream to Postgres.
+    let collector = TraceCollector::new(storage, TraceConfig::production());
+    match sink {
+      Some(sink) => {
+        collector.with_exporter(Arc::new(OtelTraceExporter::new(server_otel_config(), sink)))
+      }
+      None => collector,
+    }
+  }))
+}
+
+pub(crate) fn server_otel_config() -> OtelExporterConfig {
+  let mut config = OtelExporterConfig::new("yanshi-server");
+  config.service_version = Some(env!("CARGO_PKG_VERSION").to_string());
+  config
+}
+
+/// `TraceCollector` needs a storage; with OTLP but no `YANSHI_TRACE_DIR`
+/// the trace is only exported, never kept.
+struct DiscardTraceStorage;
+
+#[async_trait]
+impl TraceStorage for DiscardTraceStorage {
+  async fn save_trace(&self, _trace: &ExecutionTrace) -> Result<(), anyhow::Error> {
+    Ok(())
+  }
+  async fn get_trace(&self, _workflow_id: &str) -> Result<Option<ExecutionTrace>, anyhow::Error> {
+    Ok(None)
+  }
+  async fn query_traces(&self, _query: TraceQuery) -> Result<Vec<ExecutionTrace>, anyhow::Error> {
+    Ok(Vec::new())
+  }
+  async fn delete_old_traces(
+    &self,
+    _older_than: chrono::DateTime<chrono::Utc>,
+  ) -> Result<usize, anyhow::Error> {
+    Ok(0)
+  }
 }
 
 /// W4.3a: `FlowExecutionMode::Concurrent` dispatches DAG-independent
@@ -1872,5 +1928,64 @@ mod server_execution_config_tests {
     let explicit = PathBuf::from("/tmp/yanshi-w4-3a-test");
     let config = server_execution_config(Some(explicit.clone()), FlowCancellationToken::new(), 1);
     assert_eq!(config.run_base_dir, Some(explicit));
+  }
+}
+
+#[cfg(test)]
+mod run_trace_collector_tests {
+  use super::{OtelSpanSink, build_run_trace_collector};
+  use async_trait::async_trait;
+  use std::sync::{Arc, Mutex};
+  use std::time::{Duration, Instant};
+  use yanshi_core::events::{EventListener, WorkflowEvent};
+  use yanshi_tracing::OtelSpan;
+
+  #[derive(Default)]
+  struct RecordingSink(Mutex<Vec<OtelSpan>>);
+
+  #[async_trait]
+  impl OtelSpanSink for RecordingSink {
+    async fn export_spans(&self, spans: Vec<OtelSpan>) -> Result<(), anyhow::Error> {
+      self.0.lock().unwrap().extend(spans);
+      Ok(())
+    }
+  }
+
+  #[test]
+  fn no_trace_dir_and_no_otlp_means_no_collector() {
+    assert!(build_run_trace_collector(None, None).is_none());
+  }
+
+  /// Eval 2026-10-07 P8: with an OTLP endpoint but no `YANSHI_TRACE_DIR`
+  /// the run must still be exported (previously no collector was built).
+  #[tokio::test]
+  async fn otlp_without_trace_dir_exports_the_finished_run() {
+    let sink = Arc::new(RecordingSink::default());
+    let collector = build_run_trace_collector(None, Some(sink.clone()))
+      .expect("OTLP alone must yield a collector")
+      .unwrap();
+    collector.on_event(&WorkflowEvent::WorkflowStarted {
+      workflow_id: "run-1".to_string(),
+      timestamp: Instant::now(),
+    });
+    collector.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: "run-1".to_string(),
+      duration: Duration::from_millis(5),
+      timestamp: Instant::now(),
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while sink.0.lock().unwrap().is_empty() && Instant::now() < deadline {
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let spans = sink.0.lock().unwrap();
+    assert!(!spans.is_empty(), "finished run was not exported");
+    assert!(
+      spans[0]
+        .attributes
+        .iter()
+        .any(|attr| format!("{attr:?}").contains("yanshi-server")),
+      "{:?}",
+      spans[0].attributes
+    );
   }
 }

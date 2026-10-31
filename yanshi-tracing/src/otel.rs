@@ -52,6 +52,15 @@ pub trait OtelSpanSink: Send + Sync {
   async fn export_spans(&self, spans: Vec<OtelSpan>) -> Result<(), anyhow::Error>;
 }
 
+/// Lets one process-wide sink (one HTTP client) back every run's
+/// [`OtelTraceExporter`].
+#[async_trait]
+impl<S: OtelSpanSink + ?Sized> OtelSpanSink for std::sync::Arc<S> {
+  async fn export_spans(&self, spans: Vec<OtelSpan>) -> Result<(), anyhow::Error> {
+    (**self).export_spans(spans).await
+  }
+}
+
 /// Export boundary for completed Yanshi execution traces.
 #[async_trait]
 pub trait TraceExporter: Send + Sync {
