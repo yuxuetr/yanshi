@@ -11,6 +11,79 @@ file's first entry).
 _New entries go here. Will roll into the next tag (likely
 `v1.0.0-rc.2` or `v1.0.0`)._
 
+### BREAKING
+
+- **Project renamed AgentFlow → Yanshi (`5f9065d`).** There is no
+  compatibility alias: nothing reads the old env vars or directories.
+  Migrate before upgrading:
+
+  | Old | New | Notes |
+  |---|---|---|
+  | `AGENTFLOW_<NAME>` env vars | `YANSHI_<NAME>` | Same suffix for every variable, e.g. `AGENTFLOW_API_TOKEN` → `YANSHI_API_TOKEN`, `AGENTFLOW_SECURITY_PROFILE`, `AGENTFLOW_RUN_DIR`, `AGENTFLOW_TRACE_DIR`, `AGENTFLOW_MODELS_CONFIG`, `AGENTFLOW_WORKER_*`. An unset new name silently falls back to its default. |
+  | `~/.agentflow/` | `~/.yanshi/` | `.env`, `models.yml`, `skills/`, `plugins/`, `traces/`, `runs/`, `mcp.toml`; `mv ~/.agentflow ~/.yanshi` |
+  | project-local `.agentflow/` | `.yanshi/` | same layout |
+  | binary `agentflow` | `yanshi` | |
+  | crates `agentflow-*` / `agentflow_*` | `yanshi-*` / `yanshi_*` | `AgentFlowError` → `YanshiError` |
+  | Helm chart `charts/agentflow` | `charts/yanshi` | Resource names come from `yanshi.fullname`, so a `helm upgrade` creates new objects; re-create Secrets under the new names |
+  | image `ghcr.io/<owner>/agentflow-server` | `ghcr.io/<owner>/yanshi-server` | |
+  | gRPC package `agentflow.scheduler.v1` | `yanshi.scheduler.v1` | Old workers cannot talk to a new server; upgrade both together |
+  | Postgres NOTIFY channels `agentflow_*` | `yanshi_*` | Old and new replicas don't see each other's cancel/approval/event signals; no mixed-version rollout across the rename |
+  | Prometheus metrics `agentflow_*` | `yanshi_*` | Update dashboards and alerts |
+
+  The database schema itself is unchanged (the SQL migrations were left
+  as-is so sqlx checksums still match), so an existing database carries
+  over.
+- **Gateway is deny-by-default for host-reaching nodes (eval 2026-10-07
+  S1/S2/S7, `7d357ac`).** `POST /v1/runs` rejects `shell` / `file` /
+  `mcp` / `plugin` / `agent` / `skill_agent` / `multi_agent` nodes, and
+  harness sessions and resume plans reject every host path, until the
+  operator sets `YANSHI_GATEWAY_HOST_NODE_TYPES`,
+  `YANSHI_GATEWAY_ALLOWED_COMMANDS` and `YANSHI_GATEWAY_PATH_ROOTS`
+  (see `docs/DEPLOYMENT.md` § Gateway policy). The Helm chart now
+  defaults to `securityProfile: production`.
+- **Production profile requires approval for every tool not declared
+  `Idempotent` (`b829300`).** Previously only `NonIdempotent` escalated,
+  so `Unknown` tools (most MCP and script tools) ran unapproved. `http`
+  `PUT` / `DELETE` are now `NonIdempotent`; only `GET` / `HEAD` stay
+  `Idempotent`.
+- **`yanshi_tracing::StorageErrorPolicy::FailWorkflow` removed
+  (`2125b36`).** It never failed a workflow: its `panic!` ran in the
+  trace drain task after the workflow had finished, and the drain's
+  `catch_unwind` caught it. Use `LogError`.
+
+### Security
+
+- `shell` / `script` children no longer inherit the host environment;
+  only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`,
+  `TERM` plus explicitly set vars pass through (`7e84236`).
+- Approval-cache keys hash the full call (SHA-256) instead of a 64-char
+  prefix, and `script` keys include `args` (`77c09bb`).
+- Linux seccomp `!FsWrite` now also blocks x86_64 legacy write syscalls
+  (`unlink`, `rename`, `mkdir`, `chmod`, …), `fchmod`/`fchown`/
+  `fchmodat2` and the xattr family (`c510494`).
+
+### Fixed
+
+- Harness `:cancel` stops the running agent; a terminal run/session
+  status can no longer be overwritten by a late executor write
+  (`bf834e4`).
+- `PlanExecuteAgent` stops on `DenyAndStop`; Handoff / Debate /
+  Blackboard supervisors propagate a child's stop reason (`428aee6`).
+- Gemini streaming requests `alt=sse`; streaming decoders for all
+  providers buffer bytes per line, so multi-byte UTF-8 split across
+  chunks no longer garbles (`ab18a49`).
+- Dynamic workflows: a `run_if`-skipped step no longer fails its
+  dependents or triggers a replan, and agent steps see their
+  dependencies' outputs (`8dd342b`).
+- Map / While sub-flows no longer emit workflow-level lifecycle events
+  to the parent listener (`998e997`).
+- `ContainerBackend` reports a stopped `container` / Podman service as
+  unavailable instead of `Enforcing` (`e0917bf`).
+- All example workflows pass `yanshi workflow validate`; CI now
+  validates them, tests `yanshi-tool` / `yanshi-tools-ai` / `xtask`, and
+  fails DB legs when the test database is missing (`df8ca7f`,
+  `bfb5607`).
+
 ### Added
 
 - **GLM Text2Image (CogView) + MiniMax TTS (T2A) implementations, closes
