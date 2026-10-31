@@ -4,7 +4,7 @@ use crate::{
     Checkpoint, CheckpointConfig, CheckpointManager, WorkflowStatus, is_safe_path_component,
   },
   error::YanshiError,
-  events::WorkflowEvent,
+  events::{EventListener, WorkflowEvent},
   expr,
   resource_limits::ResourceLimits,
   resume::{ResumePlan, ResumePlanOptions, build_resume_plan},
@@ -1257,7 +1257,7 @@ impl<'f> FlowExecutor<'f> {
   ) -> (Flow, FlowExecutionConfig) {
     let mut sub_flow = Flow::new(template.to_vec());
     if let Some(listener) = self.flow.event_listener() {
-      sub_flow = sub_flow.with_event_listener(listener.clone());
+      sub_flow = sub_flow.with_event_listener(Arc::new(SubFlowListener(listener.clone())));
     }
     if let Some(observer) = self.flow.state_size_observer() {
       sub_flow = sub_flow.with_state_size_observer(observer.clone());
@@ -1931,6 +1931,27 @@ impl FlowExt for Flow {
     FlowExecutor::new(self)
       .execute_from_inputs_with_id_and_config(workflow_id, initial_inputs, config)
       .await
+  }
+}
+
+/// Forwards a Map/While sub-flow's node-level events to the parent's
+/// listener but drops the sub-flow's own workflow lifecycle events: each
+/// item/iteration is an internal sub-run, not a workflow. Forwarding them
+/// counted every item as a completed workflow and made the trace
+/// collector open an orphan trace per item (eval 2026-10-07 D3).
+struct SubFlowListener(Arc<dyn EventListener>);
+
+impl EventListener for SubFlowListener {
+  fn on_event(&self, event: &WorkflowEvent) {
+    if !matches!(
+      event,
+      WorkflowEvent::WorkflowStarted { .. }
+        | WorkflowEvent::WorkflowCompleted { .. }
+        | WorkflowEvent::WorkflowFailed { .. }
+        | WorkflowEvent::WorkflowCancelled { .. }
+    ) {
+      self.0.on_event(event);
+    }
   }
 }
 
@@ -3888,6 +3909,12 @@ mod tests {
       completed, 6,
       "expected 1 (map_node) + 5 (one per sub-flow item), got {completed}: {events:?}"
     );
+    // Eval 2026-10-07 D3: each item's sub-run used to emit its own
+    // workflow.started/completed too, inflating completion counts 6x.
+    for lifecycle in ["workflow.started", "workflow.completed"] {
+      let count = events.iter().filter(|e| **e == lifecycle).count();
+      assert_eq!(count, 1, "{lifecycle}: {events:?}");
+    }
   }
 
   /// W1.1 regression: pre-fix, `execute_map_node_sequential` built each
