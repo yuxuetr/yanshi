@@ -240,25 +240,47 @@ async fn code_exec_enforces_memory_limit() {
   // Comfortably above the 256 MiB default cap; must be denied rather than
   // silently allowed to consume unbounded host memory.
   let code = "data = bytearray(512 * 1024 * 1024)\nprint('should not get here')";
+  let started = std::time::Instant::now();
   let result = tool
     .execute(json!({"code": code}))
     .await
     .expect("tool call must complete");
+  let elapsed = started.elapsed();
   assert!(
     result.is_error,
     "expected the 256 MiB cap to reject a 512 MiB allocation, got success: {}",
     result.content
   );
-  // Not just any error: confirmed (this session) that an unrelated
-  // spawn/flag failure would also set is_error, and a prior version of
-  // this assertion accepted that as false-positive "proof" the cap fired
-  // — the same leniency already fixed once for the pids test after it
-  // masked a real Podman `--uid` bug. `MemoryError` is Python's own
-  // OOM-under-the-cgroup-limit signature, distinct from any other failure
-  // mode this call could hit.
+  // Not just any error: an unrelated spawn/flag failure also sets
+  // is_error, and a prior version of this assertion accepted that as
+  // false-positive "proof" the cap fired — the same leniency already fixed
+  // once for the pids test after it masked a real Podman `--uid` bug.
+  // The cap shows up one of two ways: Python's own `MemoryError` (Podman's
+  // cgroup limit, and older `container` releases), or — `container` 1.6.1,
+  // whose `-m` sizes the microVM itself — the guest OOM killer's SIGKILL,
+  // exit 137, before Python can raise. Verified against the CLI directly:
+  // the same 512 MiB allocation exits 137 within ~1s under `-m 256m` and
+  // succeeds under `-m 1024m`. The only other SIGKILL source here is the
+  // 30 CPU-second ulimit, which cannot fire within 10s.
+  let python_oom = result.content.contains("MemoryError");
+  let guest_oom_kill =
+    result.content.contains("code 137") && elapsed < std::time::Duration::from_secs(10);
   assert!(
-    result.content.contains("MemoryError"),
-    "expected a MemoryError proving the 256 MiB cap fired, got an unrelated failure instead: {}",
+    python_oom || guest_oom_kill,
+    "expected a MemoryError or a prompt exit 137 proving the 256 MiB cap fired, got an \
+     unrelated failure after {elapsed:?} instead: {}",
+    result.content
+  );
+
+  // Control: an allocation well under the cap succeeds, so the failure
+  // above is the cap and not a sandbox that fails every allocation.
+  let result = tool
+    .execute(json!({"code": "data = bytearray(64 * 1024 * 1024)\nprint('allocated')"}))
+    .await
+    .expect("tool call must complete");
+  assert!(
+    !result.is_error && result.content.contains("allocated"),
+    "expected a 64 MiB allocation to fit under the 256 MiB cap, got: {}",
     result.content
   );
 }
