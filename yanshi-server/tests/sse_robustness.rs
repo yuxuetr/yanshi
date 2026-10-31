@@ -27,13 +27,11 @@ fn live_url() -> Option<String> {
   std::env::var("YANSHI_DATABASE_TEST_URL").ok()
 }
 
+// No TRUNCATE: tests run in parallel and every run id is fresh, so a
+// truncate from one test only deleted another's rows mid-test.
 async fn fresh_state() -> Option<AppState> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query("TRUNCATE runs RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
   Some(AppState::new(db))
 }
 
