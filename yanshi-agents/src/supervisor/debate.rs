@@ -246,11 +246,24 @@ impl AgentRuntime for DebateSupervisor {
 
       // Collect results in registration order so the trace is deterministic.
       let mut round_proposals: Vec<ProposalRecord> = Vec::with_capacity(handles.len());
-      for (name, handle) in handles {
+      let mut handles = handles.into_iter();
+      while let Some((name, handle)) = handles.next() {
         match handle.await {
           Ok(Ok(child_result)) => {
             step_index =
               merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
+            if super::common::halts_supervisor(&child_result.stop_reason) {
+              for (_, rest) in handles {
+                rest.abort();
+              }
+              return Ok(stopped(
+                session_id,
+                None,
+                child_result.stop_reason,
+                steps,
+                events,
+              ));
+            }
             let proposal = child_result.answer.clone();
             self.record_delegation_validation(&name, proposal.as_deref());
             let proposal_step_index = step_index;
@@ -346,10 +359,12 @@ impl AgentRuntime for DebateSupervisor {
     step_index += 1;
     let _ = step_index;
 
+    // The judge's own stop reason is the debate's: a judge that ran out of
+    // steps or was denied did not deliver a final answer.
     Ok(stopped(
       session_id,
       answer,
-      AgentStopReason::FinalAnswer,
+      judge_result.stop_reason,
       steps,
       events,
     ))

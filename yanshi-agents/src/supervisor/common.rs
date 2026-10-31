@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::delegation::{DelegationSpec, SchemaValidation, validate_output};
-use crate::runtime::{AgentContext, AgentRuntime};
+use crate::runtime::{AgentContext, AgentRuntime, AgentStopReason};
 
 /// A supervisor participant, shared across concurrently-dispatched tasks
 /// (e.g. `BlackboardSchedule::Parallel`, debate rounds) and type-erased
@@ -15,6 +15,21 @@ use crate::runtime::{AgentContext, AgentRuntime};
 /// `HandoffSupervisor`/`BlackboardSupervisor`/`DebateSupervisor`
 /// participant or judge.
 pub(crate) type SharedAgentRuntime = Arc<AsyncMutex<Box<dyn AgentRuntime>>>;
+
+/// Child stop reasons that end the whole supervisor run whatever role the
+/// child played: the operator chose deny-and-stop, the caller cancelled,
+/// or the child is waiting on a human. Supervisors used to report all of
+/// these as `FinalAnswer` (eval 2026-10-07 A1). Other failures (MaxSteps,
+/// Timeout, Error, ...) stay the supervisor's to weigh — a debate, for
+/// one, carries on without a failed participant.
+pub(crate) fn halts_supervisor(reason: &AgentStopReason) -> bool {
+  matches!(
+    reason,
+    AgentStopReason::ApprovalDenied { .. }
+      | AgentStopReason::Cancelled { .. }
+      | AgentStopReason::AwaitingInput { .. }
+  )
+}
 
 /// Build a child agent's `AgentContext` for one delegation step, forwarding
 /// everything from `parent` a sub-agent needs to stay governed and
@@ -165,5 +180,105 @@ mod tests {
     assert!(child.between_turn_hook.is_none());
     assert!(child.loop_checkpointer.is_none());
     assert!(child.trace_context.is_none());
+  }
+
+  /// Child that stops with a fixed reason, so supervisor propagation can be
+  /// tested without a mock LLM.
+  struct ScriptedChild(AgentStopReason);
+
+  #[async_trait]
+  impl AgentRuntime for ScriptedChild {
+    async fn run(
+      &mut self,
+      context: AgentContext,
+    ) -> Result<crate::runtime::AgentRunResult, crate::runtime::AgentRuntimeError> {
+      let mut result = crate::runtime::AgentRunResult::final_answer(context.session_id, "partial");
+      result.stop_reason = self.0.clone();
+      Ok(result)
+    }
+
+    fn runtime_name(&self) -> &'static str {
+      "scripted"
+    }
+  }
+
+  fn denied() -> AgentStopReason {
+    AgentStopReason::ApprovalDenied {
+      message: "deny_and_stop".into(),
+    }
+  }
+
+  /// Eval 2026-10-07 A1: every supervisor used to report a child's
+  /// DenyAndStop / MaxSteps as `FinalAnswer`.
+  #[tokio::test]
+  async fn supervisors_propagate_child_stop_reasons() {
+    use crate::supervisor::{
+      BlackboardSchedule, BlackboardSupervisorBuilder, DebateSupervisorBuilder,
+      HandoffSupervisorBuilder,
+    };
+    let ctx = || AgentContext::new("s", "go", "mock");
+
+    for reason in [denied(), AgentStopReason::MaxSteps { max_steps: 3 }] {
+      let expected = reason.clone();
+      let mut handoff = HandoffSupervisorBuilder::new()
+        .add_agent("only", "only agent", move |_tool| ScriptedChild(reason))
+        .initial_agent("only")
+        .build()
+        .unwrap();
+      assert_eq!(
+        AgentRuntime::run(&mut handoff, ctx())
+          .await
+          .unwrap()
+          .stop_reason,
+        expected
+      );
+    }
+
+    let mut debate = DebateSupervisorBuilder::new()
+      .add_participant("a", ScriptedChild(AgentStopReason::FinalAnswer))
+      .judge(ScriptedChild(AgentStopReason::MaxSteps { max_steps: 2 }))
+      .build()
+      .unwrap();
+    assert_eq!(
+      AgentRuntime::run(&mut debate, ctx())
+        .await
+        .unwrap()
+        .stop_reason,
+      AgentStopReason::MaxSteps { max_steps: 2 }
+    );
+
+    let mut debate = DebateSupervisorBuilder::new()
+      .add_participant("a", ScriptedChild(denied()))
+      .judge(ScriptedChild(AgentStopReason::FinalAnswer))
+      .build()
+      .unwrap();
+    assert_eq!(
+      AgentRuntime::run(&mut debate, ctx())
+        .await
+        .unwrap()
+        .stop_reason,
+      denied()
+    );
+
+    for schedule in [
+      BlackboardSchedule::Sequential(vec!["a".into(), "b".into()]),
+      BlackboardSchedule::Parallel(vec!["a".into(), "b".into()]),
+    ] {
+      let mut blackboard = BlackboardSupervisorBuilder::new()
+        .add_agent("a", "first", |_bb| ScriptedChild(denied()))
+        .add_agent("b", "second", |_bb| {
+          ScriptedChild(AgentStopReason::FinalAnswer)
+        })
+        .schedule(schedule)
+        .build()
+        .unwrap();
+      assert_eq!(
+        AgentRuntime::run(&mut blackboard, ctx())
+          .await
+          .unwrap()
+          .stop_reason,
+        denied()
+      );
+    }
   }
 }

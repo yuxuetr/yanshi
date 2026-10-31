@@ -319,6 +319,17 @@ impl AgentRuntime for HandoffSupervisor {
 
       step_index = merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
 
+      if super::common::halts_supervisor(&child_result.stop_reason) {
+        let _ = self.signal.take();
+        return Ok(stopped(
+          session_id,
+          child_result.answer,
+          child_result.stop_reason,
+          steps,
+          events,
+        ));
+      }
+
       if let Some(req) = self.signal.take() {
         if handoffs_remaining == 0 {
           let stop_reason = AgentStopReason::StopCondition {
@@ -359,12 +370,12 @@ impl AgentRuntime for HandoffSupervisor {
         continue;
       }
 
-      // No handoff: this agent's answer is the final answer.
-      let answer = child_result.answer.clone();
+      // No handoff: this agent's result is the supervisor's result,
+      // including a MaxSteps/Timeout/Error stop — not a FinalAnswer.
       return Ok(stopped(
         session_id,
-        answer,
-        AgentStopReason::FinalAnswer,
+        child_result.answer,
+        child_result.stop_reason,
         steps,
         events,
       ));

@@ -38,6 +38,12 @@ pub enum PlanExecuteError {
   #[error("Agent run timed out after {timeout_ms}ms")]
   Timeout { timeout_ms: u64 },
 
+  /// The approval layer returned `ToolError::PolicyDeniedAndStop`: the
+  /// run must end, not carry on with the next plan step (W0.5 parity
+  /// with ReAct; eval 2026-10-07 P0-5).
+  #[error("Agent run stopped by approval denial: {message}")]
+  ApprovalDenied { message: String },
+
   /// Compiling or executing the plan as a `Flow` failed (P-A2.2 `run_as_flow`).
   #[error("Flow execution error: {0}")]
   Flow(#[from] YanshiError),
@@ -990,6 +996,24 @@ impl PlanExecuteAgent {
           });
           return Ok(self.timeout_result(Some(timeout_ms), steps, events));
         }
+        Err(PlanExecuteError::ApprovalDenied { message }) => {
+          events.push(AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.clone(),
+            is_error: true,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
+            timestamp: Utc::now(),
+          });
+          return Ok(self.stopped_result(
+            None,
+            AgentStopReason::ApprovalDenied { message },
+            steps,
+            events,
+          ));
+        }
         Err(err) => {
           warn!(tool = %tool, error = %err, "PlanExecute tool execution failed");
           yanshi_tool::ToolOutput::error(err.to_string())
@@ -1389,6 +1413,24 @@ impl PlanExecuteAgent {
           });
           return Ok(self.timeout_result(Some(timeout_ms), steps, events));
         }
+        Err(PlanExecuteError::ApprovalDenied { message }) => {
+          events.push(AgentEvent::ToolCallCompleted {
+            session_id: self.session_id.clone(),
+            step_index: tool_step_index,
+            tool: tool.clone(),
+            is_error: true,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+            source: tool_source.clone(),
+            permissions: tool_permissions.clone(),
+            timestamp: Utc::now(),
+          });
+          return Ok(self.stopped_result(
+            None,
+            AgentStopReason::ApprovalDenied { message },
+            steps,
+            events,
+          ));
+        }
         Err(err) => {
           warn!(tool = %tool, error = %err, "PlanExecute tool execution failed");
           yanshi_tool::ToolOutput::error(err.to_string())
@@ -1580,7 +1622,7 @@ impl PlanExecuteAgent {
       (Some(remaining), Some(token)) => {
         tokio::select! {
           result = tokio::time::timeout(remaining, tool_call) => match result {
-            Ok(result) => Ok(result.unwrap_or_else(|err| yanshi_tool::ToolOutput::error(err.to_string()))),
+            Ok(result) => tool_call_outcome(result),
             Err(_) => Err(PlanExecuteError::Timeout {
               timeout_ms: timeout_ms.unwrap_or_default(),
             }),
@@ -1591,26 +1633,20 @@ impl PlanExecuteAgent {
         }
       }
       (Some(remaining), None) => match tokio::time::timeout(remaining, tool_call).await {
-        Ok(result) => {
-          Ok(result.unwrap_or_else(|err| yanshi_tool::ToolOutput::error(err.to_string())))
-        }
+        Ok(result) => tool_call_outcome(result),
         Err(_) => Err(PlanExecuteError::Timeout {
           timeout_ms: timeout_ms.unwrap_or_default(),
         }),
       },
       (None, Some(token)) => {
         tokio::select! {
-          result = tool_call => Ok(result.unwrap_or_else(|err| yanshi_tool::ToolOutput::error(err.to_string()))),
+          result = tool_call => tool_call_outcome(result),
           _ = token.cancelled() => Err(PlanExecuteError::Cancelled {
             reason: "cancellation token signalled".to_string(),
           }),
         }
       }
-      (None, None) => Ok(
-        tool_call
-          .await
-          .unwrap_or_else(|err| yanshi_tool::ToolOutput::error(err.to_string())),
-      ),
+      (None, None) => tool_call_outcome(tool_call.await),
     }
   }
 
@@ -1811,6 +1847,20 @@ fn timed_out(started_at: Instant, timeout_ms: Option<u64>) -> bool {
     .is_some_and(|timeout| started_at.elapsed() >= timeout)
 }
 
+/// Fold an ordinary tool failure into an error `ToolOutput` the plan can
+/// react to, but keep `PolicyDeniedAndStop` as a run-ending error.
+fn tool_call_outcome(
+  result: Result<yanshi_tool::ToolOutput, yanshi_tool::ToolError>,
+) -> Result<yanshi_tool::ToolOutput, PlanExecuteError> {
+  match result {
+    Ok(output) => Ok(output),
+    Err(yanshi_tool::ToolError::PolicyDeniedAndStop { message }) => {
+      Err(PlanExecuteError::ApprovalDenied { message })
+    }
+    Err(err) => Ok(yanshi_tool::ToolOutput::error(err.to_string())),
+  }
+}
+
 fn remaining_timeout(started_at: Instant, timeout_ms: Option<u64>) -> Option<Duration> {
   timeout_ms
     .map(Duration::from_millis)
@@ -1928,6 +1978,76 @@ mod tests {
         .events
         .iter()
         .any(|event| matches!(event, AgentEvent::ToolCallCompleted { .. }))
+    );
+  }
+
+  struct DenyAndStopTool {
+    calls: Arc<Mutex<usize>>,
+  }
+
+  #[async_trait]
+  impl Tool for DenyAndStopTool {
+    fn name(&self) -> &str {
+      "guarded"
+    }
+
+    fn description(&self) -> &str {
+      "Always denied with DenyAndStop"
+    }
+
+    fn parameters_schema(&self) -> Value {
+      json!({"type": "object", "properties": {}})
+    }
+
+    async fn execute(&self, _params: Value) -> Result<ToolOutput, ToolError> {
+      *self.calls.lock().unwrap() += 1;
+      Err(ToolError::PolicyDeniedAndStop {
+        message: "operator chose deny_and_stop".to_string(),
+      })
+    }
+  }
+
+  /// Eval 2026-10-07 P0-5: PlanExecute used to fold `PolicyDeniedAndStop`
+  /// into an error output and run the remaining plan steps anyway.
+  #[tokio::test]
+  async fn deny_and_stop_ends_the_run_instead_of_continuing_the_plan() {
+    let _guard = crate::LLM_TEST_LOCK.lock().await;
+    init_mock_model(
+      "mock-plan-execute-deny-stop",
+      r#"{"plan":[{"id":"1","description":"first","tool":"guarded","params":{}},{"id":"2","description":"second","tool":"guarded","params":{}}]}"#,
+    )
+    .await;
+
+    let calls = Arc::new(Mutex::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(DenyAndStopTool {
+      calls: calls.clone(),
+    }));
+    let mut agent = PlanExecuteAgent::new(
+      PlanExecuteConfig::new("mock-plan-execute-deny-stop"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(registry),
+    );
+
+    let result = agent
+      .run_with_context(AgentContext::new(
+        "plan-execute-deny-stop",
+        "do it",
+        "mock-plan-execute-deny-stop",
+      ))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      result.stop_reason,
+      AgentStopReason::ApprovalDenied {
+        message: "operator chose deny_and_stop".to_string()
+      }
+    );
+    assert_eq!(
+      *calls.lock().unwrap(),
+      1,
+      "the second plan step must not run"
     );
   }
 

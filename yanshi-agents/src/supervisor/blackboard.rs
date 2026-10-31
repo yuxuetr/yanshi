@@ -565,8 +565,12 @@ async fn run_schedule(
           guard.run(child_ctx).await?
         };
         supervisor.record_delegation_validation(name, child_result.answer.as_deref());
+        let child_stop = child_result.stop_reason.clone();
         *next_index = merge_child_into(steps, events, *next_index, child_result);
         supervisor.drain_ops_into_supervisor_trace(next_index, steps, events, &parent.session_id);
+        if super::common::halts_supervisor(&child_stop) {
+          return Ok(Some(child_stop));
+        }
         if let Some(reason) = supervisor.check_stop_condition() {
           return Ok(Some(reason));
         }
@@ -585,14 +589,23 @@ async fn run_schedule(
         }));
       }
       // Order results by schedule order (zip with names) to keep traces stable.
-      for (name, handle) in names.iter().zip(handles) {
+      let mut pending = names.iter().zip(handles);
+      while let Some((name, handle)) = pending.next() {
         let child_result = handle
           .await
           .map_err(|e| AgentRuntimeError::ExecutionFailed {
             message: format!("BlackboardSupervisor: parallel join failed: {e}"),
           })??;
         supervisor.record_delegation_validation(name, child_result.answer.as_deref());
+        let child_stop = child_result.stop_reason.clone();
         *next_index = merge_child_into(steps, events, *next_index, child_result);
+        if super::common::halts_supervisor(&child_stop) {
+          for (_, rest) in pending {
+            rest.abort();
+          }
+          supervisor.drain_ops_into_supervisor_trace(next_index, steps, events, &parent.session_id);
+          return Ok(Some(child_stop));
+        }
       }
       supervisor.drain_ops_into_supervisor_trace(next_index, steps, events, &parent.session_id);
       Ok(supervisor.check_stop_condition())
