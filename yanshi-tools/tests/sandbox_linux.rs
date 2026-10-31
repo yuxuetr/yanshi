@@ -77,6 +77,13 @@ async fn linux_seccomp_allows_baseline_echo() {
   );
 }
 
+/// Whether the payload printed `word` on a line of its own. A plain
+/// substring check also matches the traceback, which quotes the failing
+/// source line (`print("opened")`) on Python 3.13+.
+fn printed(content: &str, word: &str) -> bool {
+  content.lines().any(|line| line.trim() == word)
+}
+
 #[tokio::test]
 async fn linux_seccomp_blocks_socket_when_net_capability_absent() {
   if !python3_available() {
@@ -99,7 +106,7 @@ async fn linux_seccomp_blocks_socket_when_net_capability_absent() {
     result.content
   );
   assert!(
-    !result.content.contains("opened"),
+    !printed(&result.content, "opened"),
     "socket() unexpectedly succeeded: {}",
     result.content
   );
@@ -181,7 +188,7 @@ async fn linux_seccomp_blocks_openat_with_o_creat_when_fs_write_absent() {
     result.content
   );
   assert!(
-    !result.content.contains("created"),
+    !printed(&result.content, "created"),
     "openat(O_CREAT) unexpectedly succeeded: {}",
     result.content
   );
