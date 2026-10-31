@@ -48,7 +48,7 @@ fn canned_history() -> Vec<Value> {
     json!({
       "run_id": "00000000-0000-0000-0000-000000000001",
       "seq": 2,
-      "kind": "run_finished",
+      "kind": "workflow.completed",
       "payload": { "status": "succeeded" },
       "ts": "2026-05-20T10:00:02Z",
     }),
@@ -131,8 +131,8 @@ async fn cli_workflow_logs_history_renders_text_lines() {
     "missing step_started: {stdout}"
   );
   assert!(
-    stdout.contains("[2] run_finished"),
-    "missing run_finished: {stdout}"
+    stdout.contains("[2] workflow.completed"),
+    "missing workflow.completed: {stdout}"
   );
   // The payload must render in compact JSON form.
   assert!(stdout.contains(r#"{"workflow_name":"demo"}"#));
@@ -305,7 +305,7 @@ async fn cli_workflow_logs_follow_reconnects_after_mid_stream_drop() {
       let start = after_seq.map(|s| s + 1).unwrap_or(0);
       let later = vec![
         json!({"seq": 2, "kind": "step_completed", "payload": {}, "ts": "2026-05-20T10:00:02Z"}),
-        json!({"seq": 3, "kind": "run_finished", "payload": {"status": "succeeded"}, "ts": "2026-05-20T10:00:03Z"}),
+        json!({"seq": 3, "kind": "workflow.completed", "payload": {"status": "succeeded"}, "ts": "2026-05-20T10:00:03Z"}),
       ];
       later
         .into_iter()
