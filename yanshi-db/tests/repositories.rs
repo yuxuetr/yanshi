@@ -1047,3 +1047,71 @@ async fn harness_session_reset_for_append_resume_keeps_events() {
     .unwrap();
   assert_eq!(events.len(), 1, "append-resume must keep prior events");
 }
+
+/// Eval 2026-10-07 P5: a run whose replica died stays `running` and held
+/// the tenant's concurrency slot forever. Runs now carry a lease the
+/// owning replica renews; an expired lease is reclaimed as `failed`.
+#[tokio::test]
+async fn expired_run_lease_is_reclaimed_and_frees_the_tenant_slot() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping expired_run_lease_is_reclaimed_and_frees_the_tenant_slot");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+  let tenant = format!("tenant-lease-{}", Uuid::new_v4());
+
+  let AdmissionOutcome::Admitted(orphan) = repos
+    .runs
+    .create_if_admitted(new_run_for(&tenant), 1, 100, 60)
+    .await
+    .unwrap()
+  else {
+    panic!("first run must be admitted");
+  };
+  let AdmissionOutcome::Admitted(alive) = repos
+    .runs
+    .create_if_admitted(new_run_for(&format!("{tenant}-other")), 1, 100, 60)
+    .await
+    .unwrap()
+  else {
+    panic!("other tenant's run must be admitted");
+  };
+  // The orphan's replica stopped heartbeating; the other run's didn't.
+  sqlx::query("UPDATE runs SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE id = ANY($1)")
+    .bind(vec![orphan.id, alive.id])
+    .execute(&db.pool)
+    .await
+    .unwrap();
+  repos.runs.renew_leases(&[alive.id]).await.unwrap();
+
+  assert!(matches!(
+    repos
+      .runs
+      .create_if_admitted(new_run_for(&tenant), 1, 100, 60)
+      .await
+      .unwrap(),
+    AdmissionOutcome::ConcurrencyLimitExceeded { .. }
+  ));
+
+  let reclaimed = repos.runs.reclaim_expired_leases().await.unwrap();
+  assert!(reclaimed.contains(&orphan.id), "{reclaimed:?}");
+  assert!(
+    !reclaimed.contains(&alive.id),
+    "a renewed lease must survive"
+  );
+  let orphan_row = repos.runs.get(orphan.id).await.unwrap().unwrap();
+  assert_eq!(orphan_row.status, RunStatus::Failed.as_str());
+  assert_eq!(
+    repos.runs.get(alive.id).await.unwrap().unwrap().status,
+    RunStatus::Queued.as_str()
+  );
+
+  assert!(matches!(
+    repos
+      .runs
+      .create_if_admitted(new_run_for(&tenant), 1, 100, 60)
+      .await
+      .unwrap(),
+    AdmissionOutcome::Admitted(_)
+  ));
+}

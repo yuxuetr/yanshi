@@ -18,6 +18,6 @@ pub use repo::{
   AdmissionOutcome, ApprovalIntentRepo, ArtifactRepo, EventRepo, HarnessEventRepo,
   HarnessSessionRepo, McpSessionRepo, PgApprovalIntentRepo, PgArtifactRepo, PgEventRepo,
   PgHarnessEventRepo, PgHarnessSessionRepo, PgMcpSessionRepo, PgRunRepo, PgSkillInstallRepo,
-  PgStepRepo, PgUserPreferenceRepo, Repositories, RunRepo, SkillInstallRepo, StepRepo,
-  UserPreferenceRepo,
+  PgStepRepo, PgUserPreferenceRepo, RUN_LEASE_TTL_SECS, Repositories, RunRepo, SkillInstallRepo,
+  StepRepo, UserPreferenceRepo,
 };

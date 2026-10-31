@@ -16,6 +16,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::DbError;
+
+/// How long a run's lease lasts without renewal. Must match the default
+/// in `migrations/0011_run_leases.sql`.
+pub const RUN_LEASE_TTL_SECS: i64 = 120;
 use crate::models::{
   Artifact, Event, HarnessSession, HarnessSessionEvent, HarnessSessionStatus, McpSession,
   NewArtifact, NewEvent, NewHarnessSession, NewHarnessSessionEvent, NewRun, NewStep,
@@ -58,6 +62,14 @@ pub trait RunRepo: Send + Sync {
   /// `run_cancellation_intents`'s migration comment for the full
   /// cross-replica mechanism.
   async fn record_cancellation_intent(&self, run_id: Uuid, tenant_id: &str) -> Result<(), DbError>;
+
+  /// Push the lease of every run this replica is executing out by
+  /// [`RUN_LEASE_TTL_SECS`] (eval 2026-10-07 P5).
+  async fn renew_leases(&self, run_ids: &[Uuid]) -> Result<u64, DbError>;
+
+  /// Fail every `queued`/`running` run whose lease expired: its replica
+  /// stopped renewing, so nothing will ever finish it. Returns their ids.
+  async fn reclaim_expired_leases(&self) -> Result<Vec<Uuid>, DbError>;
 
   /// Which of `run_ids` have a recorded cancellation intent. Lets a
   /// replica resync after missing NOTIFYs (eval 2026-10-07 P3).
@@ -413,6 +425,37 @@ impl RunRepo for PgRunRepo {
     .execute(&self.pool)
     .await?;
     Ok(())
+  }
+
+  async fn renew_leases(&self, run_ids: &[Uuid]) -> Result<u64, DbError> {
+    if run_ids.is_empty() {
+      return Ok(0);
+    }
+    let result = sqlx::query(
+      r#"UPDATE runs
+         SET lease_expires_at = NOW() + make_interval(secs => $2::double precision)
+         WHERE id = ANY($1) AND status IN ('queued', 'running')"#,
+    )
+    .bind(run_ids)
+    .bind(RUN_LEASE_TTL_SECS as f64)
+    .execute(&self.pool)
+    .await?;
+    Ok(result.rows_affected())
+  }
+
+  async fn reclaim_expired_leases(&self) -> Result<Vec<Uuid>, DbError> {
+    Ok(
+      sqlx::query_scalar(
+        r#"UPDATE runs
+           SET status = 'failed',
+               finished_at = NOW(),
+               error = 'lease expired: the gateway replica running this run stopped'
+           WHERE status IN ('queued', 'running') AND lease_expires_at < NOW()
+           RETURNING id"#,
+      )
+      .fetch_all(&self.pool)
+      .await?,
+    )
   }
 
   async fn cancellation_intents_among(&self, run_ids: &[Uuid]) -> Result<Vec<Uuid>, DbError> {

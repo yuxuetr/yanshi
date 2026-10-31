@@ -341,6 +341,39 @@ pub fn spawn_run_cancellation_listener(
   });
 }
 
+/// How often this replica renews its runs' leases. A quarter of
+/// `yanshi_db::RUN_LEASE_TTL_SECS`, so three missed renewals are tolerated.
+pub const RUN_LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Eval 2026-10-07 P5: keep the leases of the runs this replica executes
+/// alive, and fail runs whose lease expired: their replica is gone, so
+/// nothing will finish them, and they hold the tenant's concurrency slot.
+/// Renewal comes first in each tick so a replica never reclaims its own
+/// live runs.
+pub fn spawn_run_lease_loop(pool: sqlx::PgPool, registry: RunCancellationRegistry) {
+  let runs = Repositories::from_pool(pool).runs;
+  tokio::spawn(async move {
+    let mut tick = tokio::time::interval(RUN_LEASE_RENEW_INTERVAL);
+    loop {
+      tick.tick().await;
+      if let Err(err) = runs.renew_leases(&registry.active_run_ids()).await {
+        warn!(error = %err, "run lease loop: renewal failed");
+      }
+      match runs.reclaim_expired_leases().await {
+        Ok(ids) if !ids.is_empty() => {
+          warn!(
+            count = ids.len(),
+            ?ids,
+            "run lease loop: failed runs whose replica stopped"
+          );
+        }
+        Ok(_) => {}
+        Err(err) => warn!(error = %err, "run lease loop: reclaim failed"),
+      }
+    }
+  });
+}
+
 /// Cancel every local run that has a cancellation intent the listener may
 /// have missed.
 async fn resync_cancellations(runs: &impl RunRepo, registry: &RunCancellationRegistry) {

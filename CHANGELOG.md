@@ -79,6 +79,17 @@ _New entries go here. Will roll into the next tag (likely
   to the parent listener (`998e997`).
 - `ContainerBackend` reports a stopped `container` / Podman service as
   unavailable instead of `Enforcing` (`e0917bf`).
+- Cross-replica signals survive a dropped LISTEN connection: every
+  NOTIFY listener resyncs from the DB after reconnecting (cancellation
+  and approval intent tables, run/harness event streams), and approval
+  NOTIFYs carry only ids, so a decision over ~8 KB still lands
+  (`8b50883`, `bf71019`).
+- Runs carry a renewed lease; runs of a dead replica are failed instead
+  of holding the tenant's concurrency slot forever (migration
+  `0011_run_leases`).
+- Harness sessions no longer leak shared DB pool connections from their
+  inner runtime. On a busy pool that left sessions stuck at `running`
+  (`cabb272`).
 - All example workflows pass `yanshi workflow validate`; CI now
   validates them, tests `yanshi-tool` / `yanshi-tools-ai` / `xtask`, and
   fails DB legs when the test database is missing (`df8ca7f`,

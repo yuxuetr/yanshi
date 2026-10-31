@@ -84,7 +84,7 @@ pub use runs::{
   RunAdmissionError, RunAdmissionGuard, RunAdmissionRegistry, RunApprovalDecisionResponse,
   RunCancellationRegistry, RunContext, RunExecutor, RunResponse, StubExecutor, cancel_run,
   decide_run_approval, default_executor, get_run, get_run_resume_plan, list_run_approvals,
-  list_runs, spawn_run_cancellation_listener, submit_run,
+  list_runs, spawn_run_cancellation_listener, spawn_run_lease_loop, submit_run,
 };
 pub use scheduler::{
   AdmissionConfigError, AdmissionError, AuthenticatedControlPlane, AuthenticatedGrpcWorkerService,

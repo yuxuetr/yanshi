@@ -294,6 +294,16 @@ The Helm chart wires liveness and readiness probes to those endpoints. The curre
   this, every run failed creating its run dir. Run artifacts are per-pod
   scratch and are lost on restart.
 
+### Run leases (orphaned runs)
+
+Each run carries a lease (`runs.lease_expires_at`, 120 s) that the replica
+executing it renews every 30 s. Every replica fails `queued`/`running`
+runs whose lease has expired, with error `lease expired: ...`, so a
+crashed replica's runs stop holding the tenant's concurrency slot. On
+upgrade to this version, in-flight runs get one TTL of grace. A replica
+still on an older version never renews, so its runs are reclaimed after
+about 2 minutes. Finish the rollout within that window, or drain first.
+
 ### OTLP trace export
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` (the OTLP/HTTP traces URL, e.g.

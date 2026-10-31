@@ -558,6 +558,9 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     db.pool.clone(),
     state.cancellation_registry.clone(),
   );
+  // Eval 2026-10-07 P5: renew this replica's run leases, reclaim dead
+  // replicas' runs.
+  crate::runs::spawn_run_lease_loop(db.pool.clone(), state.cancellation_registry.clone());
   // W4.2e: cross-replica approval-decision listener — same posture.
   // Shared by both the harness-session and run-scoped approval routes,
   // since both resolve entries in the same `AppState::approval_registry`.
