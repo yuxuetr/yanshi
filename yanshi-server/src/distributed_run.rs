@@ -180,6 +180,8 @@ async fn drive_distributed_run(
     ctx.broker.clone(),
     0,
   );
+  // Persist the run's events before each terminal status update.
+  let events_flushed = listener.flush_handle();
   let run_started_at = Instant::now();
   listener.on_event(&WorkflowEvent::WorkflowStarted {
     workflow_id: workflow_id.clone(),
@@ -202,6 +204,7 @@ async fn drive_distributed_run(
         duration: run_started_at.elapsed(),
         timestamp: Instant::now(),
       });
+      events_flushed.flushed().await;
       ctx
         .repos
         .runs
@@ -274,6 +277,7 @@ async fn drive_distributed_run(
           duration: run_started_at.elapsed(),
           timestamp: Instant::now(),
         });
+        events_flushed.flushed().await;
         ctx
           .repos
           .runs
@@ -292,6 +296,7 @@ async fn drive_distributed_run(
           duration: run_started_at.elapsed(),
           timestamp: Instant::now(),
         });
+        events_flushed.flushed().await;
         ctx
           .repos
           .runs

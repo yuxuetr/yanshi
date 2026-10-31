@@ -57,8 +57,9 @@ pub use cleanup::{
 pub use distributed_run::{DistributedFlowRunExecutor, validate_distributed_flow};
 pub use error::{ApiError, JsonReq};
 pub use events_stream::{
-  EventBroker, EventSink, PersistingEventSink, RUN_EVENTS_NOTIFY_CHANNEL, StreamedEvent,
-  WorkflowEventListener, list_events, publish_through, spawn_run_events_listener, stream_events,
+  EventBroker, EventFlush, EventSink, PersistingEventSink, RUN_EVENTS_NOTIFY_CHANNEL,
+  StreamedEvent, WorkflowEventListener, list_events, publish_through, spawn_run_events_listener,
+  stream_events,
 };
 pub use harness::{
   AnswerInterruptRequest, AnswerInterruptResponse, CancelHarnessSessionResponse,

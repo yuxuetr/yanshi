@@ -102,6 +102,10 @@ _New entries go here. Will roll into the next tag (likely
   supervisor does. They ran as detached tasks, so they kept calling
   tools after an outer timeout or cancelled caller dropped the
   supervisor, or after a sibling's error ended it early.
+- A run's events are all persisted before it is marked finished. The
+  executors slept 50ms and hoped the event writer had caught up; under
+  load, clients that saw `succeeded` could read an incomplete event
+  history.
 - The MCP client sends `tools/call` at most once. A timeout or transport
   error can arrive after the server ran the tool, and the retry ran it
   again. `max_retries` still applies to the handshake and read-only

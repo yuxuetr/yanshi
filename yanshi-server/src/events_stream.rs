@@ -655,11 +655,13 @@ impl EventSink for PersistingEventSink {
 /// while writes catch up; writes that fail (DB hiccup) are logged and
 /// dropped, since dropping a synthetic event is safer than blocking the
 /// Flow scheduler. SSE subscribers can reconnect with `?after_seq=` to
-/// refill from the DB if anything was dropped.
+/// refill from the DB if anything was dropped. Before an executor marks
+/// a run finished it awaits [`EventFlush::flushed`], so the run's events
+/// are persisted ahead of its terminal status.
 pub struct WorkflowEventListener {
   run_id: Uuid,
   tenant_id: String,
-  tx: tokio::sync::mpsc::UnboundedSender<NewEvent>,
+  tx: tokio::sync::mpsc::UnboundedSender<DrainMessage>,
   seq: std::sync::atomic::AtomicI64,
   start_seq: i64,
 }
@@ -679,11 +681,18 @@ impl WorkflowEventListener {
     sink: Arc<dyn EventSink>,
     start_seq: i64,
   ) -> Self {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewEvent>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DrainMessage>();
     tokio::spawn(async move {
-      while let Some(event) = rx.recv().await {
-        if let Err(e) = sink.publish(event).await {
-          tracing::warn!(error = %e, "WorkflowEventListener: persist failed");
+      while let Some(message) = rx.recv().await {
+        match message {
+          DrainMessage::Event(event) => {
+            if let Err(e) = sink.publish(event).await {
+              tracing::warn!(error = %e, "WorkflowEventListener: persist failed");
+            }
+          }
+          DrainMessage::Flush(done) => {
+            let _ = done.send(());
+          }
         }
       }
     });
@@ -712,6 +721,33 @@ impl WorkflowEventListener {
   /// that need to predict the persisted event seq range.
   pub fn start_seq(&self) -> i64 {
     self.start_seq
+  }
+
+  /// A handle that waits for this listener's drain; take it before the
+  /// listener is handed to a `Flow`.
+  pub fn flush_handle(&self) -> EventFlush {
+    EventFlush(self.tx.clone())
+  }
+}
+
+enum DrainMessage {
+  Event(NewEvent),
+  Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+/// Waits for a [`WorkflowEventListener`]'s drain task to catch up.
+#[derive(Clone)]
+pub struct EventFlush(tokio::sync::mpsc::UnboundedSender<DrainMessage>);
+
+impl EventFlush {
+  /// Resolves once every event emitted before this call has been
+  /// persisted (or its write has failed and been logged). The drain is
+  /// ordered, so a marker queued behind those events is reached last.
+  pub async fn flushed(&self) {
+    let (done, wait) = tokio::sync::oneshot::channel();
+    if self.0.send(DrainMessage::Flush(done)).is_ok() {
+      let _ = wait.await;
+    }
   }
 }
 
@@ -749,13 +785,13 @@ impl yanshi_core::events::EventListener for WorkflowEventListener {
       }
       _ => {}
     }
-    if let Err(e) = self.tx.send(NewEvent {
+    if let Err(e) = self.tx.send(DrainMessage::Event(NewEvent {
       run_id: self.run_id,
       seq,
       kind,
       payload,
       tenant_id: Some(self.tenant_id.clone()),
-    }) {
+    })) {
       // Drain task gone (listener was dropped). Synchronous on_event has
       // no good way to surface this — log and move on so the Flow
       // scheduler keeps making progress.
@@ -1159,6 +1195,50 @@ mod tests {
     unsafe {
       std::env::remove_var("YANSHI_BROKER_FINALIZE_GRACE_MS");
     }
+  }
+
+  /// Executors used to sleep 50ms and hope the drain had persisted the
+  /// terminal events before they marked the run finished; under CI load
+  /// it had not. `flushed` waits for every event emitted before it.
+  #[tokio::test]
+  async fn flushed_waits_for_every_prior_event_to_persist() {
+    use std::sync::Mutex as StdMutex;
+    use std::time::{Duration, Instant};
+    use yanshi_core::events::{EventListener, WorkflowEvent};
+
+    struct SlowSink(Arc<StdMutex<Vec<String>>>);
+
+    #[async_trait]
+    impl EventSink for SlowSink {
+      async fn publish(&self, event: NewEvent) -> Result<(), DbError> {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Ok(mut kinds) = self.0.lock() {
+          kinds.push(event.kind);
+        }
+        Ok(())
+      }
+    }
+
+    let persisted = Arc::new(StdMutex::new(Vec::new()));
+    let sink: Arc<dyn EventSink> = Arc::new(SlowSink(persisted.clone()));
+    let listener = WorkflowEventListener::new(Uuid::new_v4(), "default", sink, 0);
+    let flush = listener.flush_handle();
+    listener.on_event(&WorkflowEvent::NodeStarted {
+      workflow_id: "demo".into(),
+      node_id: "n1".into(),
+      timestamp: Instant::now(),
+    });
+    listener.on_event(&WorkflowEvent::WorkflowCompleted {
+      workflow_id: "demo".into(),
+      duration: Duration::from_millis(1),
+      timestamp: Instant::now(),
+    });
+
+    flush.flushed().await;
+    assert_eq!(
+      *persisted.lock().unwrap(),
+      vec!["node.started".to_string(), "workflow.completed".to_string()]
+    );
   }
 
   #[tokio::test]

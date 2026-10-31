@@ -679,14 +679,15 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   // trace tui <run_id>` against the same run. Kept opt-in because the
   // gateway is long-running and unmanaged trace files would accumulate
   // — the existing run/event retention sweep does not cover this dir.
-  let mut listeners: Vec<Box<dyn EventListener>> =
-    vec![Box::new(WorkflowEventListener::from_state(
-      ctx.run_id,
-      ctx.tenant_id.clone(),
-      ctx.repos.clone(),
-      ctx.broker.clone(),
-      0,
-    ))];
+  let event_listener = WorkflowEventListener::from_state(
+    ctx.run_id,
+    ctx.tenant_id.clone(),
+    ctx.repos.clone(),
+    ctx.broker.clone(),
+    0,
+  );
+  let events_flushed = event_listener.flush_handle();
+  let mut listeners: Vec<Box<dyn EventListener>> = vec![Box::new(event_listener)];
   match build_run_trace_collector(resolve_server_trace_dir().as_deref(), otlp_span_sink()) {
     Some(Ok(collector)) => listeners.push(Box::new(collector)),
     Some(Err(err)) => {
@@ -719,10 +720,9 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
     .execute_from_inputs_with_id_and_config(run_id, initial_inputs, execution_config)
     .await?;
 
-  // The listener bridges sync Flow events to async DB/SSE writes. Give the
-  // drain task a bounded chance to persist terminal workflow events before
-  // closing the broker channel for subscribers.
-  tokio::time::sleep(Duration::from_millis(50)).await;
+  // The listener bridges sync Flow events to async DB/SSE writes; persist
+  // them all before the run is marked finished and its channel closed.
+  events_flushed.flushed().await;
 
   if let Some(error) = first_state_error(&state) {
     ctx
