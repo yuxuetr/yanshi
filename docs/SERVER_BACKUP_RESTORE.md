@@ -43,6 +43,11 @@ schema version Just Works; a restored DB at an *older* schema
 version is upgraded by `yanshi serve` before it accepts
 traffic.
 
+Use `pg_dump` / `pg_restore` of the same major version as the
+server. A dump written by a newer `pg_dump` (17+) does not restore
+into an older server: `pg_restore` fails on
+`unrecognized configuration parameter "transaction_timeout"`.
+
 ### 2. Run artifacts (`YANSHI_RUN_DIR`)
 
 Default: `<home>/.yanshi/runs`. Each run produces one UUID-named

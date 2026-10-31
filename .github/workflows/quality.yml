@@ -258,9 +258,13 @@ jobs:
     # YANSHI_DATABASE_TEST_URL is unset — actually run here instead of
     # silently no-op'ing. Mirrors ui-e2e.yml's service block. Harmless for
     # the matrix legs that don't touch a database.
+    # The major version must match the runner's preinstalled PostgreSQL
+    # client (18 on ubuntu 26.04): the backup round-trip test runs its
+    # pg_dump/pg_restore, and a dump from a newer pg_dump does not restore
+    # into an older server.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: yanshi
           POSTGRES_PASSWORD: yanshi
