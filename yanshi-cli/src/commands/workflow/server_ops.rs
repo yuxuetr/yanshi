@@ -239,13 +239,13 @@ pub async fn logs(
 /// transient hiccup.
 ///
 /// Distinguishing a terminal close from a transient drop is the
-/// trickiest bit: the SSE wire has no explicit "we're done" marker,
-/// but the server guarantees that the LAST event before a clean
-/// finalise is one of `run_finished` / `run_failed` /
-/// `run_cancelled` (see `yanshi-server::events_stream::broker_finalise_with_grace`).
-/// So we treat "stream closed AND the last event we saw was terminal"
-/// as a normal exit; "stream closed without a terminal event" is a
-/// mid-stream blip that triggers the reconnect path.
+/// trickiest bit: the SSE wire has no explicit "we're done" marker.
+/// The server ends the stream after a terminal event kind
+/// ([`is_terminal_run_event_kind`]), so "stream closed after a terminal
+/// event" is a normal exit. Some failure paths (a workflow that fails
+/// to build, a skill run that errors) end the run without one, so a
+/// clean close that delivered nothing new asks for the run's status and
+/// exits when it is terminal; any other close is a blip and reconnects.
 async fn stream_events_with_reconnect(
   client: &crate::server_client::ServerClient,
   run_id: &str,
@@ -302,6 +302,9 @@ async fn stream_events_with_reconnect(
         // done; exit without reconnecting.
         return Ok(());
       }
+      Ok(()) if events_since_reconnect == 0 && run_is_terminal(client, run_id).await? => {
+        return Ok(());
+      }
       Ok(()) => {
         // Stream closed without a terminal marker — treat as a
         // transient drop and reconnect after the backoff window.
@@ -324,21 +327,30 @@ async fn stream_events_with_reconnect(
   }
 }
 
-/// Terminal event kinds the server emits before closing a SSE stream.
-/// Sourced from `yanshi-server::runs::is_terminal_status` (whose
-/// status values are mirrored 1:1 onto event kinds in
-/// `publish_*_event`). Update both sides together when a new
-/// terminal status lands.
+/// Terminal event kinds the server ends a run's SSE stream after.
+/// Mirrors `yanshi_server::events_stream::is_terminal_run_event_kind`;
+/// change both together.
 fn is_terminal_run_event_kind(kind: &str) -> bool {
   matches!(
     kind,
-    "run_finished"
-      | "run_failed"
-      | "run_cancelled"
+    "workflow.completed"
+      | "workflow.failed"
+      | "workflow.cancelled"
+      | "skill_run_completed"
+      | "run_completed"
       | "run.cancelled"
-      | "run.completed"
-      | "run.failed"
   )
+}
+
+async fn run_is_terminal(
+  client: &crate::server_client::ServerClient,
+  run_id: &str,
+) -> Result<bool> {
+  let run = client.get_run(run_id).await?;
+  Ok(matches!(
+    run["status"].as_str(),
+    Some("succeeded" | "failed" | "cancelled")
+  ))
 }
 
 fn print_events_history(format: &str, run_id: &str, body: &serde_json::Value) -> Result<()> {

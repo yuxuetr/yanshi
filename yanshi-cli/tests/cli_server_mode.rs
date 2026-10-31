@@ -271,3 +271,81 @@ async fn cli_workflow_run_via_server_404s_against_unknown_tenant() {
     "cross-tenant access must surface as 404, got: {combined}"
   );
 }
+
+/// `workflow logs --follow` on a finished run must exit, both when the
+/// run's last event is a Flow terminal (`workflow.completed`, which the
+/// follow loop used to not recognise) and when the run ended without
+/// any terminal event (a build failure records only the status).
+#[tokio::test]
+async fn cli_workflow_logs_follow_exits_for_finished_runs() {
+  let Some((server_url, state)) = spawn_server().await else {
+    eprintln!("skipping cli_workflow_logs_follow_exits_for_finished_runs");
+    return;
+  };
+  for (kinds, status) in [
+    (
+      vec!["workflow.started", "workflow.completed"],
+      RunStatus::Succeeded,
+    ),
+    (vec!["workflow.started"], RunStatus::Failed),
+  ] {
+    let id = Uuid::new_v4();
+    state
+      .repos
+      .runs
+      .create(NewRun {
+        id,
+        workflow: "@test".to_string(),
+        status: RunStatus::Running,
+        run_dir: None,
+        tenant_id: "default".to_string(),
+        events_retention_days: None,
+        artifacts_retention_days: None,
+      })
+      .await
+      .unwrap();
+    for (seq, kind) in kinds.iter().enumerate() {
+      yanshi_server::publish_through(
+        &state.repos,
+        &state.event_broker,
+        yanshi_db::NewEvent {
+          run_id: id,
+          seq: seq as i64,
+          kind: kind.to_string(),
+          payload: serde_json::json!({}),
+          tenant_id: Some("default".to_string()),
+        },
+      )
+      .await
+      .unwrap();
+    }
+    state
+      .repos
+      .runs
+      .update_status(id, status, None)
+      .await
+      .unwrap();
+
+    let url = server_url.clone();
+    let assert = tokio::task::spawn_blocking(move || {
+      cli_bin()
+        .args([
+          "workflow",
+          "logs",
+          &id.to_string(),
+          "--follow",
+          "--format",
+          "json",
+          "--server",
+          &url,
+        ])
+        .timeout(Duration::from_secs(10))
+        .assert()
+        .success()
+    })
+    .await
+    .unwrap();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains(kinds[kinds.len() - 1]), "{stdout}");
+  }
+}
