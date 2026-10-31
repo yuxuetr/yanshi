@@ -119,7 +119,13 @@ impl DistributedFlowRunExecutor {
 #[async_trait]
 impl RunExecutor for DistributedFlowRunExecutor {
   async fn execute(&self, ctx: RunContext) {
-    if let Err(e) = drive_distributed_run(&ctx, &self.control_plane).await {
+    let outcome = drive_distributed_run(&ctx, &self.control_plane).await;
+    // The run is over either way: free what the control plane and the
+    // protocol hold for it, and stop workers claiming its queued tasks.
+    let plane = self.control_plane.inner();
+    plane.forget_run(ctx.run_id).await;
+    plane.protocol().forget_run(ctx.run_id).await;
+    if let Err(e) = outcome {
       error!(run_id = %ctx.run_id, error = %e, "distributed flow executor failed");
       let _ = ctx
         .repos

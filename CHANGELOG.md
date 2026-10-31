@@ -100,6 +100,9 @@ _New entries go here. Will roll into the next tag (likely
   since child results carry no cost.
 - Harness `:cancel` stops a session running on another replica, not
   just its row.
+- Distributed runs release their control-plane state when they end:
+  every task, result and trace fragment used to stay in gateway memory
+  for good, and a cancelled run's queued tasks stayed claimable.
 - `yanshi workflow logs --follow` exits when the run is over. It
   recognised none of the terminal kinds the server emits
   (`workflow.completed` etc.) and reconnected forever.

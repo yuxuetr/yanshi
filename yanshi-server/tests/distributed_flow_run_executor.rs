@@ -125,7 +125,8 @@ async fn distributed_run_reaches_succeeded_and_emits_ordered_events() {
   ));
   let worker_id = WorkerId::new("test-worker").expect("valid worker id");
   let worker_handle = tokio::spawn(run_fake_worker_until_drained(
-    raw_plane, worker_id, // 2 nodes, generous headroom for claim/reconcile polling races.
+    raw_plane.clone(),
+    worker_id, // 2 nodes, generous headroom for claim/reconcile polling races.
     50,
   ));
 
@@ -157,6 +158,10 @@ async fn distributed_run_reaches_succeeded_and_emits_ordered_events() {
     .expect("get run")
     .expect("run row exists");
   assert_eq!(run.status, "succeeded", "run must reach succeeded");
+  // Eval 2026-10-07: a finished run's tasks and snapshot used to stay in
+  // memory for the life of the process.
+  assert!(raw_plane.run_snapshot(run_id).await.is_none());
+  assert_eq!(raw_plane.protocol().retained_tasks(run_id).await, 0);
 
   let events = repos
     .events
@@ -278,5 +283,61 @@ async fn distributed_run_fails_when_a_node_reports_failure() {
       .contains("synthetic node failure"),
     "error must surface the node failure reason, got: {:?}",
     run.error
+  );
+}
+
+/// A cancelled run's queued tasks leave the queue, so no worker picks
+/// them up after the run is over.
+#[tokio::test]
+async fn cancelled_distributed_run_releases_its_queued_tasks() {
+  let Some(url) = live_url() else {
+    eprintln!("skipping cancelled_distributed_run_releases_its_queued_tasks");
+    return;
+  };
+  let db = Database::connect_and_migrate(&url, 4)
+    .await
+    .expect("connect");
+  let repos = Repositories::from_pool(db.pool.clone());
+  let tenant = format!("tenant-distributed-cancel-{}", Uuid::new_v4());
+  let run_id = seed_queued_run(&repos, &tenant, TWO_NODE_TEMPLATE_WORKFLOW).await;
+
+  let raw_plane = WorkerControlPlane::new(InMemoryWorkerProtocol::new());
+  let control_plane = Arc::new(AuthenticatedControlPlane::new(
+    raw_plane.clone(),
+    WorkerAdmissionPolicy::default(),
+  ));
+  let token = FlowCancellationToken::new();
+  let ctx = RunContext {
+    run_id,
+    workflow: TWO_NODE_TEMPLATE_WORKFLOW.to_string(),
+    repos: repos.clone(),
+    run_base_dir: None,
+    cancellation_token: token.clone(),
+    broker: EventBroker::new(),
+    tenant_id: tenant.clone(),
+    live_state_registry: None,
+    skill_dir: None,
+    approval_registry: PendingApprovalRegistry::new(),
+    approval_timeout: Duration::from_secs(60),
+    run_max_concurrency: 1,
+  };
+  // No worker runs: n1 sits in the queue until the cancel.
+  let canceller = tokio::spawn(async move {
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    token.cancel();
+  });
+  let executor = DistributedFlowRunExecutor::new(control_plane);
+  tokio::time::timeout(Duration::from_secs(10), executor.execute(ctx))
+    .await
+    .expect("executor must stop on cancel");
+  let _ = canceller.await;
+
+  let run = repos.runs.get(run_id).await.unwrap().unwrap();
+  assert_eq!(run.status, "cancelled");
+  assert_eq!(raw_plane.protocol().retained_tasks(run_id).await, 0);
+  let worker_id = WorkerId::new("late-worker").expect("valid worker id");
+  assert!(
+    raw_plane.claim_task(worker_id).await.unwrap().is_none(),
+    "a cancelled run's task must not be claimable"
   );
 }

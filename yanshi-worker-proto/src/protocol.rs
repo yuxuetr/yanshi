@@ -383,11 +383,13 @@ struct InMemoryState {
 #[derive(Debug)]
 struct ClaimedTask {
   worker_id: WorkerId,
+  run_id: Uuid,
 }
 
 #[derive(Debug)]
 struct CompletedTask {
   worker_id: WorkerId,
+  run_id: Uuid,
   result: WorkerTaskResult,
 }
 
@@ -399,6 +401,41 @@ impl InMemoryWorkerProtocol {
   /// Snapshot the last heartbeat seen for a worker.
   pub async fn last_heartbeat(&self, worker_id: &WorkerId) -> Option<WorkerHeartbeat> {
     self.state.lock().await.heartbeats.get(worker_id).cloned()
+  }
+
+  /// Drop everything held for `run_id` once the run is over: its queued
+  /// tasks (a cancelled run's tasks must not be claimed any more), its
+  /// claims (a late report then gets `TaskNotClaimed`) and its results.
+  /// Without this every task of every run stayed in memory for good.
+  pub async fn forget_run(&self, run_id: Uuid) {
+    let mut state = self.state.lock().await;
+    state.queued.retain(|task| task.run_id != run_id);
+    state.claimed.retain(|_, claimed| claimed.run_id != run_id);
+    state
+      .completed
+      .retain(|_, completed| completed.run_id != run_id);
+    state.last_claimed_run.retain(|_, last| *last != run_id);
+  }
+
+  /// How many tasks of `run_id` are still held (queued, claimed or
+  /// completed). Test/debug support.
+  pub async fn retained_tasks(&self, run_id: Uuid) -> usize {
+    let state = self.state.lock().await;
+    state
+      .queued
+      .iter()
+      .filter(|task| task.run_id == run_id)
+      .count()
+      + state
+        .claimed
+        .values()
+        .filter(|c| c.run_id == run_id)
+        .count()
+      + state
+        .completed
+        .values()
+        .filter(|c| c.run_id == run_id)
+        .count()
   }
 
   /// Snapshot a completed task result. This is test/debug support, not part
@@ -444,9 +481,13 @@ impl WorkerProtocol for InMemoryWorkerProtocol {
     state
       .last_claimed_run
       .insert(worker_id.clone(), task.run_id);
-    state
-      .claimed
-      .insert(task.task_id, ClaimedTask { worker_id });
+    state.claimed.insert(
+      task.task_id,
+      ClaimedTask {
+        worker_id,
+        run_id: task.run_id,
+      },
+    );
     Ok(Some(task))
   }
 
@@ -509,9 +550,13 @@ impl WorkerProtocol for InMemoryWorkerProtocol {
     state
       .last_claimed_run
       .insert(worker_id.clone(), task.run_id);
-    state
-      .claimed
-      .insert(task.task_id, ClaimedTask { worker_id });
+    state.claimed.insert(
+      task.task_id,
+      ClaimedTask {
+        worker_id,
+        run_id: task.run_id,
+      },
+    );
     Ok(Some(task))
   }
 
@@ -529,9 +574,14 @@ impl WorkerProtocol for InMemoryWorkerProtocol {
       state.claimed.insert(task_id, claimed);
       return Err(SchedulerError::WorkerMismatch { task_id });
     }
-    state
-      .completed
-      .insert(task_id, CompletedTask { worker_id, result });
+    state.completed.insert(
+      task_id,
+      CompletedTask {
+        worker_id,
+        run_id: claimed.run_id,
+        result,
+      },
+    );
     Ok(())
   }
 

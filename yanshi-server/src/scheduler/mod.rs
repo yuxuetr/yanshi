@@ -262,6 +262,21 @@ where
       .collect()
   }
 
+  /// Drop the run's snapshot (outputs, trace fragments) and assignments
+  /// once the run is over; they were kept for the life of the process.
+  pub async fn forget_run(&self, run_id: Uuid) {
+    let mut state = self.state.lock().await;
+    state.runs.remove(&run_id);
+    state
+      .assignments
+      .retain(|_, assignment| assignment.run_id != run_id);
+  }
+
+  /// The protocol this control plane dispatches through.
+  pub fn protocol(&self) -> &P {
+    &self.protocol
+  }
+
   pub async fn forget_assignment(&self, task_id: Uuid) -> Option<WorkerAssignment> {
     let mut state = self.state.lock().await;
     let assignment = state.assignments.remove(&task_id)?;
