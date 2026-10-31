@@ -62,6 +62,9 @@ jobs:
       # YANSHI_API_TOKEN — the e2e specs only fill the token
       # field when BASE_URL's deployment requires it.
       YANSHI_SECURITY_PROFILE: local
+      # The gateway rejects every host path unless the operator allows
+      # a root; the harness specs submit `workspace_root: /tmp`.
+      YANSHI_GATEWAY_PATH_ROOTS: /tmp
       BASE_URL: http://127.0.0.1:8080
 
     steps:
