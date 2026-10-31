@@ -869,7 +869,10 @@ impl<'f> FlowExecutor<'f> {
                       state_pool.get(dep),
                       Some(Ok(_)) | Some(Err(YanshiError::NodeSkipped))
                     )
-                  })
+                  }) && self
+                    .undeclared_references(node_id, node)
+                    .iter()
+                    .all(|source| state_pool.contains_key(source))
                 })
                 .unwrap_or(false)
           })
@@ -1670,6 +1673,42 @@ impl<'f> FlowExecutor<'f> {
       .collect()
   }
 
+  /// Siblings `node` reads through `input_mapping` or `run_if` without
+  /// declaring them in `dependencies`. Scheduling orders `node` after them
+  /// so the read sees their result; input resolution still treats them as
+  /// optional (eval 2026-10-07 D5 — concurrent mode used to start `node`
+  /// first and silently drop the input).
+  fn undeclared_references(&self, node_id: &str, node: &GraphNode) -> Vec<String> {
+    let nodes = self.flow.nodes();
+    let mut references: Vec<String> = Vec::new();
+    let mut add = |source: &str| {
+      if source != node_id
+        && nodes.contains_key(source)
+        && !node.dependencies.iter().any(|dep| dep == source)
+        && !references.iter().any(|seen| seen == source)
+      {
+        references.push(source.to_string());
+      }
+    };
+    if let Some(mapping) = &node.input_mapping {
+      for (source, _) in mapping.values() {
+        add(source);
+      }
+    }
+    if let Some(condition) = &node.run_if {
+      let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+      for (start, _) in condition.match_indices("nodes.") {
+        if condition[..start].chars().next_back().is_some_and(is_ident) {
+          continue;
+        }
+        let rest = &condition[start + "nodes.".len()..];
+        let end = rest.find(|c: char| !is_ident(c)).unwrap_or(rest.len());
+        add(&rest[..end]);
+      }
+    }
+    references
+  }
+
   fn topological_sort(&self) -> Result<Vec<String>, YanshiError> {
     // Q2.4.1: use BTreeMap so iteration order is deterministic by
     // node id. Pre-fix the in_degree and adjacency maps were
@@ -1706,6 +1745,10 @@ impl<'f> FlowExecutor<'f> {
         }
         in_degree.entry(id.clone()).and_modify(|d| *d += 1);
         adj.entry(dep_id.clone()).or_default().push(id.clone());
+      }
+      for source in self.undeclared_references(id, node) {
+        in_degree.entry(id.clone()).and_modify(|d| *d += 1);
+        adj.entry(source).or_default().push(id.clone());
       }
     }
 
@@ -2637,6 +2680,69 @@ mod tests {
       .unwrap();
     assert_eq!(run_dirs.len(), 1);
     assert!(run_dirs[0].path().join("node_outputs.json").exists());
+  }
+
+  /// Eval 2026-10-07 D5: a node that reads a sibling through
+  /// `input_mapping` or `run_if` without declaring it a dependency started
+  /// before that sibling in concurrent mode, so the input was silently
+  /// dropped and the condition saw no output. It now waits, and the
+  /// reference stays optional (a skipped source is still just omitted).
+  #[tokio::test]
+  async fn concurrent_execution_waits_for_undeclared_references() {
+    use_writable_home();
+
+    struct SlowSource;
+    #[async_trait]
+    impl AsyncNode for SlowSource {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        Ok(HashMap::from([
+          ("value".to_string(), FlowValue::Json(json!("late"))),
+          ("ready".to_string(), FlowValue::Json(json!(true))),
+        ]))
+      }
+    }
+    struct Echo;
+    #[async_trait]
+    impl AsyncNode for Echo {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let value = inputs
+          .get("value")
+          .cloned()
+          .unwrap_or_else(|| FlowValue::Json(json!("missing")));
+        Ok(HashMap::from([("value".to_string(), value)]))
+      }
+    }
+
+    let node = |id: &str, kind: Arc<dyn AsyncNode>| GraphNode {
+      id: id.to_string(),
+      node_type: NodeType::Standard(kind),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let source = node("source", Arc::new(SlowSource));
+    let mut reader = node("reader", Arc::new(Echo));
+    reader.input_mapping = Some(HashMap::from([(
+      "value".to_string(),
+      ("source".to_string(), "value".to_string()),
+    )]));
+    let mut gate = node("gate", Arc::new(Echo));
+    gate.run_if = Some("nodes.source.outputs.ready == true".to_string());
+
+    let state = Flow::new(vec![source, reader, gate])
+      .execute_from_inputs_with_config(HashMap::new(), FlowExecutionConfig::concurrent(3))
+      .await
+      .unwrap();
+
+    let reader = state.get("reader").unwrap().as_ref().unwrap();
+    assert_eq!(reader.get("value"), Some(&FlowValue::Json(json!("late"))));
+    assert!(
+      matches!(state.get("gate"), Some(Ok(_))),
+      "gate's run_if must see source's output: {:?}",
+      state.get("gate")
+    );
   }
 
   #[tokio::test]

@@ -125,6 +125,11 @@ _New entries go here. Will roll into the next tag (likely
   PlanExecute agent; they ran ReAct under the plan_execute label (only
   `:resume` honoured the kind). `POST /v1/harness/sessions` rejects other
   kinds, and `plan_execute` with `skill_name`, with 400.
+- A node that reads a sibling through `input_mapping` or `run_if`
+  without listing it in `dependencies` now runs after that sibling. In
+  concurrent mode it could start first, silently dropping the input or
+  evaluating the condition against no output. The reference stays
+  optional: a skipped or output-less source is still just omitted.
 - Parallel `map` items stop when their run does. They ran as detached
   tasks, so they kept executing after a timeout or cancelled caller
   dropped the run, and a retried node ran them a second time.
