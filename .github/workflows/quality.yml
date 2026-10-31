@@ -312,6 +312,10 @@ jobs:
           - yanshi-worker
           - yanshi-worker-proto
           - yanshi-harness
+          # Eval 2026-10-07: never in the matrix until now.
+          - yanshi-tool
+          - yanshi-tools-ai
+          - xtask
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -331,6 +335,14 @@ jobs:
         # build it up front; tests that need it would otherwise fail with
         # an empty-stdout panic instead of running the readiness probe.
         run: cargo build -p yanshi-server
+      - name: Require a reachable test database
+        # DB-backed tests skip (and pass) when the URL is unset, so a
+        # dropped env line or a dead service would turn ~40 tests green
+        # without running them. Fail loudly instead.
+        if: contains(fromJSON('["yanshi-db","yanshi-server","yanshi-cli"]'), matrix.package)
+        run: |
+          test -n "$YANSHI_DATABASE_TEST_URL" || { echo "::error::YANSHI_DATABASE_TEST_URL is unset"; exit 1; }
+          psql "$YANSHI_DATABASE_TEST_URL" -c 'SELECT 1' >/dev/null
       - name: Run package tests
         # R0.3: yanshi-rag's default features (just `qdrant`) never
         # compile sources/html.rs, which is exactly how the R0.1 regex
@@ -567,6 +579,16 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Compile workspace examples
         run: cargo test --workspace --examples
+      - name: Validate every example workflow
+        # `mcp` is opt-in on the CLI; without it the mcp_* examples fail
+        # on node type alone and hide real schema errors underneath.
+        run: |
+          cargo build -p yanshi-cli --features mcp
+          status=0
+          for f in yanshi-cli/examples/*.yml yanshi-cli/examples/workflows/*.yml; do
+            target/debug/yanshi workflow validate "$f" || { echo "::error file=$f::workflow validate failed"; status=1; }
+          done
+          exit $status
       - name: Run examples-smoke (xtask)
         run: cargo xtask examples-smoke
       - name: Run no-API example smoke tests
