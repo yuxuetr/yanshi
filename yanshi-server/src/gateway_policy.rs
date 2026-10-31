@@ -19,24 +19,11 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use yanshi_config::config::v2::{FlowDefinitionV2, NodeDefinitionV2};
+use yanshi_config::config::v2::{FlowDefinitionV2, HOST_NODE_TYPES, NodeDefinitionV2, walk_nodes};
 
 pub const HOST_NODE_TYPES_ENV: &str = "YANSHI_GATEWAY_HOST_NODE_TYPES";
 pub const ALLOWED_COMMANDS_ENV: &str = "YANSHI_GATEWAY_ALLOWED_COMMANDS";
 pub const PATH_ROOTS_ENV: &str = "YANSHI_GATEWAY_PATH_ROOTS";
-
-/// Node types that execute host processes or read/write host paths named
-/// by the submitter. Everything else (llm, http, template, modality
-/// nodes, ...) only talks to the network through already-sandboxed paths.
-const HOST_NODE_TYPES: &[&str] = &[
-  "shell",
-  "file",
-  "mcp",
-  "plugin",
-  "agent",
-  "skill_agent",
-  "multi_agent",
-];
 
 #[derive(Debug, Clone, Default)]
 pub struct GatewayPolicy {
@@ -87,7 +74,7 @@ impl GatewayPolicy {
 
   /// Reject a workflow that reaches past the operator ceiling.
   pub fn check_workflow(&self, def: &FlowDefinitionV2) -> Result<(), String> {
-    def.nodes.iter().try_for_each(|node| self.check_node(node))
+    walk_nodes(&def.nodes, &mut |node| self.check_node(node))
   }
 
   /// `what` names the field in the error message (e.g. `workspace_root`).
@@ -147,16 +134,6 @@ impl GatewayPolicy {
       "file" => {
         for path in string_list(node, "allowed_paths") {
           self.check_path(&format!("node '{id}' allowed_paths"), &path)?;
-        }
-      }
-      "map" | "while" => {
-        let block = if kind == "map" { "template" } else { "do" };
-        if let Some(yaml) = node.parameters.get(block) {
-          let children: Vec<NodeDefinitionV2> = serde_yaml::from_value(yaml.clone())
-            .map_err(|err| format!("node '{id}': invalid '{block}' block: {err}"))?;
-          children
-            .iter()
-            .try_for_each(|child| self.check_node(child))?;
         }
       }
       _ => {}

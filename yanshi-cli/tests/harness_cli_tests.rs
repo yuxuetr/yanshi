@@ -517,6 +517,78 @@ nodes:
   );
 }
 
+/// Eval 2026-10-07 A6: config-built nodes embed their own tools, so
+/// `--profile production` governed none of them while appearing to.
+/// A production run-flow now refuses tool-running nodes, nested ones
+/// included, and a pure template DAG still runs.
+#[test]
+fn harness_run_flow_production_refuses_ungoverned_tool_nodes() {
+  let tmp = TempDir::new().unwrap();
+  let marker = tmp.path().join("breach");
+  let wf = tmp.path().join("flow.yml");
+  fs::write(
+    &wf,
+    format!(
+      r#"
+name: "nested-shell"
+nodes:
+  - id: fan
+    type: map
+    parameters:
+      input_list: [1]
+      template:
+        - id: touch
+          type: shell
+          parameters:
+            command: "touch {marker}"
+            allowed_commands: [touch]
+            allowed_paths: ["{dir}"]
+"#,
+      marker = marker.display(),
+      dir = tmp.path().display()
+    ),
+  )
+  .unwrap();
+
+  let run_dir = tmp.path().join("run");
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "harness",
+      "run-flow",
+      wf.to_str().unwrap(),
+      "--profile",
+      "production",
+      "--run-dir",
+      run_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("node 'touch'"))
+    .stderr(predicate::str::contains("production"));
+  assert!(!marker.exists(), "the shell node must not have run");
+
+  let template = tmp.path().join("template.yml");
+  fs::write(
+    &template,
+    "name: t\nnodes:\n  - id: only\n    type: template\n    parameters:\n      template: done\n",
+  )
+  .unwrap();
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "harness",
+      "run-flow",
+      template.to_str().unwrap(),
+      "--profile",
+      "production",
+      "--run-dir",
+      run_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+}
+
 // ── V2.3: ask_user interrupt / resume, end to end against `mock` ──────
 
 /// `--model mock` alone resolves nothing — `mock` isn't a built-in

@@ -61,3 +61,45 @@ pub struct NodeDefinitionV2 {
   #[serde(default)]
   pub parameters: HashMap<String, serde_yaml::Value>,
 }
+
+/// Node types that execute host processes or read/write host paths named
+/// by the workflow author.
+pub const HOST_NODE_TYPES: &[&str] = &[
+  "shell",
+  "file",
+  "mcp",
+  "plugin",
+  "agent",
+  "skill_agent",
+  "multi_agent",
+];
+
+/// Visits every node of a workflow, descending into `map` (`template`) and
+/// `while` (`do`) bodies, which run nodes of their own.
+pub fn walk_nodes<E>(
+  nodes: &[NodeDefinitionV2],
+  visit: &mut impl FnMut(&NodeDefinitionV2) -> Result<(), E>,
+) -> Result<(), E>
+where
+  E: From<String>,
+{
+  for node in nodes {
+    visit(node)?;
+    let block = match node.node_type.as_str() {
+      "map" => "template",
+      "while" => "do",
+      _ => continue,
+    };
+    if let Some(yaml) = node.parameters.get(block) {
+      let children: Vec<NodeDefinitionV2> =
+        serde_yaml::from_value(yaml.clone()).map_err(|err| {
+          E::from(format!(
+            "node '{}': invalid '{block}' block: {err}",
+            node.id
+          ))
+        })?;
+      walk_nodes(&children, visit)?;
+    }
+  }
+  Ok(())
+}

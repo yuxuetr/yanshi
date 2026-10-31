@@ -9,7 +9,9 @@
 //! stream. Tool-call approval governance additionally applies to any node whose
 //! tools are routed through a harness-wrapped registry (the programmatic
 //! `run_flow` path); config-built nodes embed their own tools, so the CLI
-//! surface delivers the envelope + node events.
+//! surface delivers the envelope + node events — and under the production
+//! profile, whose promise is approval for every non-idempotent call, it
+//! refuses workflows with tool-running nodes rather than run them ungoverned.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,13 +24,14 @@ use yanshi_core::CoreFlowRunner;
 use yanshi_core::async_node::AsyncNodeInputs;
 use yanshi_core::value::FlowValue;
 use yanshi_harness::{
-  FlowRunOutcome, HarnessEventSink, HarnessFlowRunOptions, HarnessRuntime, JsonlEventSink,
-  StdoutEventSink, default_session_dir,
+  FlowRunOutcome, HarnessEventSink, HarnessFlowRunOptions, HarnessProfile, HarnessRuntime,
+  JsonlEventSink, StdoutEventSink, default_session_dir,
 };
 
 use super::{OutputFormat, parse_profile, resolve_run_dir};
-use crate::executor::build_flow_from_yaml;
+use crate::executor::{build_flow_from_yaml, parse_workflow_definition};
 use crate::json_envelope::CliJsonEnvelope;
+use yanshi_config::config::v2::{HOST_NODE_TYPES, walk_nodes};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
@@ -48,6 +51,10 @@ pub async fn execute(
 
   let yaml = std::fs::read_to_string(&workflow_file)
     .with_context(|| format!("could not read workflow file '{workflow_file}'"))?;
+  if profile == HarnessProfile::Production {
+    refuse_ungoverned_nodes(&yaml)
+      .with_context(|| format!("refusing to run '{workflow_file}' under the production profile"))?;
+  }
   let flow = build_flow_from_yaml(&yaml, model.as_deref())
     .with_context(|| format!("failed to build a flow from '{workflow_file}'"))?;
 
@@ -133,6 +140,29 @@ pub async fn execute(
     anyhow::bail!("flow run did not complete successfully ({status})");
   }
   Ok(())
+}
+
+/// Node types whose side effects the production profile would require
+/// approval for, but which config-built flows run with their own embedded
+/// tools, outside the harness hook pipeline.
+fn ungoverned_tool_node(kind: &str) -> bool {
+  HOST_NODE_TYPES.contains(&kind) || kind == "http"
+}
+
+fn refuse_ungoverned_nodes(yaml: &str) -> Result<()> {
+  let definition = parse_workflow_definition(yaml)?;
+  walk_nodes(&definition.nodes, &mut |node| {
+    if ungoverned_tool_node(&node.node_type) {
+      return Err(format!(
+        "node '{}' (type '{}') runs its own tools, which harness approval cannot \
+         govern; the production profile requires approval for them. Use \
+         `--profile local` or `yanshi workflow run` for this workflow.",
+        node.id, node.node_type
+      ));
+    }
+    Ok(())
+  })
+  .map_err(anyhow::Error::msg)
 }
 
 /// Parse repeated `--input key=value` flags into the flow's initial inputs.

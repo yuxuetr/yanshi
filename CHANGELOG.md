@@ -102,6 +102,10 @@ _New entries go here. Will roll into the next tag (likely
   supervisor does. They ran as detached tasks, so they kept calling
   tools after an outer timeout or cancelled caller dropped the
   supervisor, or after a sibling's error ended it early.
+- `yanshi harness run-flow --profile production` refuses workflows with
+  tool-running nodes (`shell`, `file`, `http`, `mcp`, `plugin`, the agent
+  types, including inside `map`/`while`). Their tools bypass harness
+  approval, so the profile governed none of them while appearing to.
 - A run's events are all persisted before it is marked finished. The
   executors slept 50ms and hoped the event writer had caught up; under
   load, clients that saw `succeeded` could read an incomplete event

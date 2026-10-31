@@ -19,7 +19,7 @@ Yanshi 的 CLI 是当前最成熟的入口，但各路径成熟度差异大。�
 | 🟢 | `skill init / validate / test / run / chat` | 技能开发闭环 |
 | 🟢 | `workflow dynamic --dry-run` → `--approve cli` | LLM 生成计划→编译执行，治理设计谨慎 |
 | 🟢 | `doctor` / `trace replay` / `trace tui` | 诊断与复盘 |
-| 🟡 | `harness run-flow`（DAG 套 harness 信封） | 只有信封+节点事件，**无工具审批治理**（代码自述） |
+| 🟡 | `harness run-flow`（DAG 套 harness 信封） | 只有信封+节点事件，**无工具审批治理**；`--profile production` 下含工具节点（shell/file/http/mcp/plugin/agent 类，含 map/while 内嵌）的工作流直接拒绝运行 |
 | 🟡 | `serve` + Web UI | 单机看 run 列表/事件流可以；别依赖服务端执行 skill |
 | 🔴 | `harness run --model`（不带 `--skill`） | 空工具注册表，agent 无手无脚，没有意义 |
 | 🔴 | `harness run --runtime handoff/blackboard/debate` | 静默回落成 ReAct，事件还谎报类型（评估 D7） |
