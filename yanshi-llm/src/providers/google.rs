@@ -1,3 +1,4 @@
+use super::line_buffer::LineBuffer;
 use crate::{
   LLMError, ResponseFormat, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage, ToolCallDelta},
@@ -183,7 +184,16 @@ impl GoogleProvider {
     // Q1.8.1: no `?key=` here anymore — the API key now travels in
     // the `x-goog-api-key` header so it can't be picked up by a
     // `reqwest::Error::to_string()` URL leak.
-    format!("{}/v1beta/models/{}:{}", self.base_url, model, method)
+    //
+    // Without `alt=sse`, `streamGenerateContent` returns one pretty-printed
+    // JSON array spread over many lines, which the line-oriented stream
+    // parser can't read: every line failed to parse and was dropped, so
+    // Google streams came back empty (eval 2026-10-07 L1).
+    let query = if stream { "?alt=sse" } else { "" };
+    format!(
+      "{}/v1beta/models/{}:{}{}",
+      self.base_url, model, method, query
+    )
   }
 }
 
@@ -600,8 +610,8 @@ struct GoogleUsage {
 }
 
 pub struct GoogleStreamingResponse {
-  stream: Pin<Box<dyn Stream<Item = Result<String>> + Send>>,
-  buffer: Option<String>,
+  stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send>>,
+  buffer: LineBuffer,
   finished: bool,
   /// P-LLM2.5: Gemini gives `functionCall` parts no id at all (same as the
   /// non-streaming path — see `parse_google_function_calls`'s doc comment),
@@ -627,26 +637,15 @@ impl GoogleStreamingResponse {
         .map_err(|e| LLMError::StreamingError {
           message: e.to_string(),
         })
-        .map(|chunk| String::from_utf8_lossy(&chunk).to_string())
+        .map(|chunk| chunk.to_vec())
     });
 
     Self {
       stream: Box::pin(string_stream),
-      buffer: Some(String::new()),
+      buffer: LineBuffer::default(),
       finished: false,
       next_tool_call_index: 0,
     }
-  }
-
-  /// Extract and remove one complete newline-terminated line from
-  /// `self.buffer`, if any is currently buffered. Returns `None` (without
-  /// mutating the buffer) when no complete line is available yet.
-  fn drain_next_line(&mut self) -> Option<String> {
-    let buffer = self.buffer.as_mut()?;
-    let newline_pos = buffer.find('\n')?;
-    let line = buffer[..newline_pos].trim().to_string();
-    buffer.drain(..=newline_pos);
-    Some(line)
   }
 
   /// P-LLM2.5: unlike OpenAI's `delta.tool_calls[]` / Anthropic's
@@ -663,7 +662,9 @@ impl GoogleStreamingResponse {
   /// StepFun parsers) because `next_tool_call_index` must persist across
   /// calls — see that field's doc comment.
   fn parse_json_chunk(&mut self, line: &str) -> Option<StreamChunk> {
-    if line.trim().is_empty() {
+    // SSE framing (`alt=sse`); a bare JSON line is still accepted.
+    let line = line.strip_prefix("data:").unwrap_or(line).trim();
+    if line.is_empty() {
       return None;
     }
 
@@ -738,13 +739,8 @@ impl StreamingResponse for GoogleStreamingResponse {
       // another network read happened to re-trigger the drain; if the
       // stream had already ended, that line was silently dropped and
       // `is_final` was never observed from a real finish_reason chunk.
-      // Google streams JSON objects separated by newlines. `drain_next_line`
-      // borrows `self.buffer` just long enough to extract one already-
-      // complete line, ending that borrow before calling
-      // `self.parse_json_chunk` (which needs `&mut self` as a whole, for
-      // `next_tool_call_index` — see that field's doc comment) — the two
-      // borrows can't overlap.
-      while let Some(line) = self.drain_next_line() {
+      // With `alt=sse` Gemini sends one `data: {json}` line per event.
+      while let Some(line) = self.buffer.next_line() {
         if !line.is_empty()
           && let Some(chunk) = self.parse_json_chunk(&line)
         {
@@ -757,9 +753,7 @@ impl StreamingResponse for GoogleStreamingResponse {
 
       match self.stream.next().await {
         Some(Ok(data)) => {
-          if let Some(ref mut buffer) = self.buffer {
-            buffer.push_str(&data);
-          }
+          self.buffer.push(&data);
         }
         Some(Err(e)) => return Err(e),
         None => {
@@ -774,6 +768,23 @@ impl StreamingResponse for GoogleStreamingResponse {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Eval 2026-10-07 L1: without `alt=sse` the streaming endpoint returns
+  /// a multi-line JSON array the line parser can't read.
+  #[test]
+  fn streaming_endpoint_requests_sse_framing() {
+    let provider = GoogleProvider::new("test-key", None).unwrap();
+    assert!(
+      provider
+        .get_model_endpoint("gemini-2.5-pro", true)
+        .ends_with("/models/gemini-2.5-pro:streamGenerateContent?alt=sse")
+    );
+    assert!(
+      provider
+        .get_model_endpoint("gemini-2.5-pro", false)
+        .ends_with("/models/gemini-2.5-pro:generateContent")
+    );
+  }
 
   /// Gemini 2.5+ accepts `thinkingConfig.thinkingBudget` under
   /// `generationConfig`. `ThinkingConfig::Medium` must land there
@@ -1374,8 +1385,8 @@ mod tests {
   /// round trip.
   fn test_streaming_response() -> GoogleStreamingResponse {
     GoogleStreamingResponse {
-      stream: Box::pin(futures::stream::empty::<Result<String>>()),
-      buffer: Some(String::new()),
+      stream: Box::pin(futures::stream::empty::<Result<Vec<u8>>>()),
+      buffer: LineBuffer::default(),
       finished: false,
       next_tool_call_index: 0,
     }

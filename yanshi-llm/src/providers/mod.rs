@@ -14,6 +14,7 @@ pub mod glm_images;
 pub mod google;
 pub mod google_media;
 pub mod google_veo;
+mod line_buffer;
 pub mod minimax_tts;
 pub mod mock;
 pub mod modality;

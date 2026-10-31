@@ -860,6 +860,33 @@ async fn google_live_text_path() {
   .await;
 }
 
+/// Eval 2026-10-07 L1: Google streaming was never exercised live, and
+/// came back empty for want of `alt=sse`. ReAct streams unconditionally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_live_streaming_path() {
+  if !prepare_live_provider("google", LiveCapability::Llm).await {
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_KEY"])
+  else {
+    eprintln!("[live] google streaming: skipped (no Gemini API key env var set)");
+    return;
+  };
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), &api_key, None).expect("google provider");
+  let model = live_text_model("google", "gemini-2.5-flash");
+
+  let stream = tokio::time::timeout(
+    Duration::from_secs(30),
+    provider.execute_streaming(&provider_streaming_request(&model)),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("google: live streaming request timed out after 30s"))
+  .unwrap_or_else(|e| panic!("google: live streaming request failed: {e}"));
+
+  assert_live_stream_non_empty(stream).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn moonshot_live_text_path() {
   run_text_path::<MoonshotProvider, _>("moonshot", &["MOONSHOT_API_KEY", "MOONSHOT_KEY"], |key| {

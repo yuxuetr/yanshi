@@ -1,3 +1,4 @@
+use super::line_buffer::LineBuffer;
 use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
@@ -287,8 +288,8 @@ struct MoonshotStreamingDelta {
 }
 
 pub struct MoonshotStreamingResponse {
-  stream: Pin<Box<dyn Stream<Item = Result<String>> + Send>>,
-  buffer: Option<String>,
+  stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send>>,
+  buffer: LineBuffer,
   finished: bool,
 }
 
@@ -302,12 +303,12 @@ impl MoonshotStreamingResponse {
         .map_err(|e| LLMError::StreamingError {
           message: e.to_string(),
         })
-        .map(|chunk| String::from_utf8_lossy(&chunk).to_string())
+        .map(|chunk| chunk.to_vec())
     });
 
     Self {
       stream: Box::pin(string_stream),
-      buffer: Some(String::new()),
+      buffer: LineBuffer::default(),
       finished: false,
     }
   }
@@ -386,11 +387,8 @@ impl StreamingResponse for MoonshotStreamingResponse {
       // stream had already ended, that line (e.g. the terminal
       // `[DONE]`) was silently dropped and `is_final` was never
       // observed from a real sentinel.
-      if let Some(ref mut buffer) = self.buffer {
-        while let Some(newline_pos) = buffer.find('\n') {
-          let line = buffer[..newline_pos].trim().to_string();
-          buffer.drain(..=newline_pos);
-
+      {
+        while let Some(line) = self.buffer.next_line() {
           if !line.is_empty()
             && let Some(chunk) = Self::parse_sse_chunk(&line)
           {
@@ -404,9 +402,7 @@ impl StreamingResponse for MoonshotStreamingResponse {
 
       match self.stream.next().await {
         Some(Ok(data)) => {
-          if let Some(ref mut buffer) = self.buffer {
-            buffer.push_str(&data);
-          }
+          self.buffer.push(&data);
         }
         Some(Err(e)) => return Err(e),
         None => {

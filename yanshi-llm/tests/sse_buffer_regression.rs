@@ -168,7 +168,8 @@ async fn anthropic_single_read_trailing_content_and_message_stop_are_not_dropped
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn google_single_read_trailing_content_and_finish_reason_are_not_dropped() {
-  const BODY: &str = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"foo\"}]},\"finishReason\":null,\"index\":0}]}\n{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"bar\"}]},\"finishReason\":\"STOP\",\"index\":0}]}\n";
+  // The real `alt=sse` wire shape: `data: {json}` events, CRLF-framed.
+  const BODY: &str = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"foo\"}]},\"finishReason\":null,\"index\":0}]}\r\n\r\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"bar\"}]},\"finishReason\":\"STOP\",\"index\":0}]}\r\n\r\n";
   let base_url = spawn_sse_server(BODY).await;
   let provider =
     GoogleProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
