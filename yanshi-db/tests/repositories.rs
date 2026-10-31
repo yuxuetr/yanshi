@@ -770,6 +770,95 @@ async fn harness_session_repo_create_get_list_update() {
   assert!(other_tenant.is_empty());
 }
 
+/// Eval 2026-10-07 P2: a cancel must survive the executor's own late
+/// terminal write, for both runs and harness sessions.
+#[tokio::test]
+async fn update_status_never_leaves_a_terminal_state() {
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping update_status_never_leaves_a_terminal_state");
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+
+  let run_id = Uuid::new_v4();
+  repos
+    .runs
+    .create(NewRun {
+      id: run_id,
+      workflow: "demo".into(),
+      status: RunStatus::Queued,
+      run_dir: None,
+      tenant_id: format!("tenant-sticky-{}", Uuid::new_v4()),
+      events_retention_days: None,
+      artifacts_retention_days: None,
+    })
+    .await
+    .unwrap();
+  repos
+    .runs
+    .update_status(run_id, RunStatus::Cancelled, Some("cancel requested"))
+    .await
+    .unwrap();
+  for late in [RunStatus::Running, RunStatus::Succeeded] {
+    repos.runs.update_status(run_id, late, None).await.unwrap();
+  }
+  let run = repos.runs.get(run_id).await.unwrap().expect("present");
+  assert_eq!(run.status, "cancelled");
+
+  let session_id = Uuid::new_v4();
+  repos
+    .harness_sessions
+    .create(NewHarnessSession {
+      id: session_id,
+      tenant_id: format!("tenant-sticky-{}", Uuid::new_v4()),
+      user_input: "hi".into(),
+      workspace_root: "/tmp/ws".into(),
+      profile: "local".into(),
+      runtime_kind: "react".into(),
+      model: "mock".into(),
+      skill_name: None,
+    })
+    .await
+    .unwrap();
+  repos
+    .harness_sessions
+    .update_status(
+      session_id,
+      HarnessSessionStatus::Cancelled,
+      None,
+      Some("cancel requested"),
+    )
+    .await
+    .unwrap();
+  repos
+    .harness_sessions
+    .update_status(
+      session_id,
+      HarnessSessionStatus::Completed,
+      Some("late answer"),
+      None,
+    )
+    .await
+    .unwrap();
+  let session = repos
+    .harness_sessions
+    .get(session_id)
+    .await
+    .unwrap()
+    .expect("present");
+  assert_eq!(session.status, "cancelled");
+  assert_eq!(session.final_answer, None);
+
+  // A missing row is still an error, not a silent no-op.
+  assert!(
+    repos
+      .harness_sessions
+      .update_status(Uuid::new_v4(), HarnessSessionStatus::Completed, None, None)
+      .await
+      .is_err()
+  );
+}
+
 #[tokio::test]
 async fn harness_event_repo_append_list_max_seq() {
   let Some(db) = fresh_db().await else {

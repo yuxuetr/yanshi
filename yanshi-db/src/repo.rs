@@ -328,12 +328,16 @@ impl RunRepo for PgRunRepo {
     )
     .then(Utc::now);
 
+    // Terminal states are sticky: a cancel that lands while the executor
+    // is still running must not be overwritten by the executor's own
+    // final `succeeded`/`failed` write, nor flipped back to `running` by
+    // a late start (eval 2026-10-07 P2).
     let result = sqlx::query(
       r#"UPDATE runs
          SET status = $2,
              finished_at = COALESCE($3, finished_at),
              error = COALESCE($4, error)
-         WHERE id = $1"#,
+         WHERE id = $1 AND status NOT IN ('succeeded', 'failed', 'cancelled')"#,
     )
     .bind(id)
     .bind(status.as_str())
@@ -342,7 +346,7 @@ impl RunRepo for PgRunRepo {
     .execute(&self.pool)
     .await?;
 
-    if result.rows_affected() == 0 {
+    if result.rows_affected() == 0 && !row_exists(&self.pool, "runs", id).await? {
       return Err(DbError::NotFound {
         entity_type: "run",
         id: id.to_string(),
@@ -831,7 +835,7 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
              finished_at = COALESCE($3, finished_at),
              final_answer = COALESCE($4, final_answer),
              error = COALESCE($5, error)
-         WHERE id = $1"#,
+         WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')"#,
     )
     .bind(id)
     .bind(status.as_str())
@@ -841,7 +845,9 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
     .execute(&self.pool)
     .await?;
 
-    if result.rows_affected() == 0 {
+    // Terminal states are sticky — see `RunRepo::update_status`. `:resume`
+    // leaves a terminal state through `reset_for_resume` instead.
+    if result.rows_affected() == 0 && !row_exists(&self.pool, "harness_sessions", id).await? {
       return Err(DbError::NotFound {
         entity_type: "harness_session",
         id: id.to_string(),
@@ -1265,6 +1271,18 @@ impl UserPreferenceRepo for PgUserPreferenceRepo {
       .await?;
     Ok(result.rows_affected() > 0)
   }
+}
+
+/// Tells a guarded no-op `UPDATE` (row exists, already terminal) apart
+/// from a missing row. `table` is always a literal from this module.
+async fn row_exists(pool: &PgPool, table: &'static str, id: Uuid) -> Result<bool, DbError> {
+  let exists: bool = sqlx::query_scalar(&format!(
+    "SELECT EXISTS (SELECT 1 FROM {table} WHERE id = $1)"
+  ))
+  .bind(id)
+  .fetch_one(pool)
+  .await?;
+  Ok(exists)
 }
 
 #[cfg(test)]

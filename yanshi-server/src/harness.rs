@@ -40,6 +40,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+use yanshi_agents::AgentCancellationToken;
 
 use yanshi_db::{
   DbError, HarnessEventRepo, HarnessSession, HarnessSessionRepo, HarnessSessionStatus,
@@ -511,6 +512,80 @@ pub struct HarnessSessionContext {
   /// pass `MAX(existing seq) + 1` so new events extend the persisted
   /// log without colliding with prior `(session_id, seq)` rows.
   pub initial_seq: u64,
+  /// Signalled by `POST /v1/harness/sessions/{id}:cancel` (eval
+  /// 2026-10-07 P1); the live executor hands it to the agent loop.
+  pub cancellation_token: AgentCancellationToken,
+}
+
+/// Process-local session → cancellation token map, so `:cancel` can stop
+/// the agent loop on this replica instead of only flipping the row.
+#[derive(Clone, Default)]
+pub struct HarnessCancellationRegistry {
+  inner: Arc<Mutex<HashMap<Uuid, (u64, AgentCancellationToken)>>>,
+  next_generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl HarnessCancellationRegistry {
+  fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, (u64, AgentCancellationToken)>> {
+    self
+      .inner
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+  }
+
+  /// Register a fresh token for `id`; the entry lives until the returned
+  /// guard drops (i.e. until the executor task finishes).
+  pub fn register(&self, id: Uuid) -> HarnessCancellationGuard {
+    let generation = self
+      .next_generation
+      .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let token = AgentCancellationToken::new();
+    self.lock().insert(id, (generation, token.clone()));
+    HarnessCancellationGuard {
+      registry: self.clone(),
+      id,
+      generation,
+      token,
+    }
+  }
+
+  /// Returns whether a running session on this replica was signalled.
+  pub fn cancel(&self, id: Uuid) -> bool {
+    match self.lock().get(&id) {
+      Some((_, token)) => {
+        token.cancel();
+        true
+      }
+      None => false,
+    }
+  }
+}
+
+/// Drops the registry entry when the executor task ends. Generation-checked
+/// so an older run finishing late can't evict a resume's newer token.
+pub struct HarnessCancellationGuard {
+  registry: HarnessCancellationRegistry,
+  id: Uuid,
+  generation: u64,
+  token: AgentCancellationToken,
+}
+
+impl HarnessCancellationGuard {
+  pub fn token(&self) -> AgentCancellationToken {
+    self.token.clone()
+  }
+}
+
+impl Drop for HarnessCancellationGuard {
+  fn drop(&mut self) {
+    let mut entries = self.registry.lock();
+    if entries
+      .get(&self.id)
+      .is_some_and(|(generation, _)| *generation == self.generation)
+    {
+      entries.remove(&self.id);
+    }
+  }
 }
 
 /// Default executor used until the real LLM-backed runner lands.
@@ -694,7 +769,9 @@ pub async fn submit_harness_session(
     .as_deref()
     .and_then(|name| state.skills.resolve(name))
     .map(|entry| entry.path);
+  let cancel_guard = state.harness_cancellations.register(session_id);
   tokio::spawn(async move {
+    let cancellation_token = cancel_guard.token();
     executor
       .execute(HarnessSessionContext {
         session_id,
@@ -710,6 +787,7 @@ pub async fn submit_harness_session(
         repos,
         broker,
         initial_seq: 0,
+        cancellation_token,
       })
       .await;
   });
@@ -828,11 +906,13 @@ pub async fn cancel_harness_session(
     }));
   }
 
-  // The stub executor never honours cancellation (it finishes in <50ms
-  // anyway). Once the real executor lands, a parallel cancellation
-  // registry (mirroring `RunCancellationRegistry`) will signal the
-  // running agent. For now we mark the row + emit a stopped event so
-  // SSE consumers see the lifecycle end.
+  // Signal the agent loop if it runs on this replica, then mark the row.
+  // The row write wins over the executor's own late terminal write
+  // because `update_status` never leaves a terminal state. A session on
+  // another replica is only marked, not stopped (no cross-replica
+  // signal yet).
+  let signalled = state.harness_cancellations.cancel(id);
+  info!(session_id = %id, signalled, "harness session cancel requested");
   state
     .repos
     .harness_sessions
@@ -1020,7 +1100,9 @@ pub async fn resume_harness_session(
     .and_then(|name| state.skills.resolve(name))
     .map(|entry| entry.path);
   let user_input_owned = user_input.clone();
+  let cancel_guard = state.harness_cancellations.register(id);
   tokio::spawn(async move {
+    let cancellation_token = cancel_guard.token();
     executor
       .execute(HarnessSessionContext {
         session_id: id,
@@ -1045,6 +1127,7 @@ pub async fn resume_harness_session(
         repos,
         broker,
         initial_seq,
+        cancellation_token,
       })
       .await;
   });
@@ -1186,6 +1269,7 @@ pub async fn answer_interrupt(
     .as_deref()
     .and_then(|name| state.skills.resolve(name))
     .map(|entry| entry.path);
+  let cancel_guard = state.harness_cancellations.register(session_id);
   let ctx = HarnessSessionContext {
     session_id,
     user_input: session.user_input.clone(),
@@ -1201,9 +1285,11 @@ pub async fn answer_interrupt(
     repos,
     broker,
     initial_seq,
+    cancellation_token: cancel_guard.token(),
   };
   let answer_owned = answer.to_string();
   tokio::spawn(async move {
+    let _cancel_guard = cancel_guard;
     executor.resume_interrupt(ctx, answer_owned).await;
   });
 
@@ -1391,6 +1477,38 @@ fn serialise_event(event: &StreamedHarnessEvent) -> Event {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn cancellation_registry_signals_and_cleans_up() {
+    let registry = HarnessCancellationRegistry::default();
+    let id = Uuid::new_v4();
+    assert!(!registry.cancel(id), "nothing registered yet");
+
+    let guard = registry.register(id);
+    let token = guard.token();
+    assert!(registry.cancel(id));
+    assert!(token.is_cancelled());
+
+    drop(guard);
+    assert!(
+      !registry.cancel(id),
+      "entry removed when the executor task ends"
+    );
+  }
+
+  #[test]
+  fn stale_guard_does_not_evict_a_newer_registration() {
+    let registry = HarnessCancellationRegistry::default();
+    let id = Uuid::new_v4();
+    let old_run = registry.register(id);
+    let resumed = registry.register(id);
+    drop(old_run);
+    assert!(
+      registry.cancel(id),
+      "the resume's token must still be reachable"
+    );
+    assert!(resumed.token().is_cancelled());
+  }
   use chrono::Utc;
 
   fn sample_event(session_id: Uuid, seq: i64) -> StreamedHarnessEvent {

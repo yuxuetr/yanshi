@@ -20,7 +20,9 @@ use tracing::{error, info, warn};
 use yanshi_agent_spi::checkpoint::{AgentLoopCheckpoint, AgentLoopCheckpointer, LoopRuntimeKind};
 use yanshi_agents::plan_execute::{PlanExecuteAgent, PlanExecuteConfig};
 use yanshi_agents::react::{ReActAgent, ReActConfig};
-use yanshi_agents::runtime::{AgentRuntime, AgentStopReason, RuntimeLimits};
+use yanshi_agents::runtime::{
+  AgentCancellationToken, AgentRuntime, AgentStopReason, RuntimeLimits,
+};
 use yanshi_harness::{
   ApprovalProvider, HarnessEvent, HarnessEventBody, HarnessEventSink, HarnessProfile,
   HarnessRunOptions, HarnessRuntime, HarnessRuntimeKind, HookConfig, SeqAllocator, SinkChain,
@@ -382,6 +384,7 @@ struct RunInputs {
   repos: Repositories,
   broker: HarnessEventBroker,
   initial_seq: u64,
+  cancellation_token: AgentCancellationToken,
 }
 
 fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
@@ -398,6 +401,7 @@ fn clone_run_inputs(ctx: &HarnessSessionContext) -> RunInputs {
     max_steps: ctx.max_steps,
     repos: ctx.repos.clone(),
     broker: ctx.broker.clone(),
+    cancellation_token: ctx.cancellation_token.clone(),
     initial_seq: ctx.initial_seq,
   }
 }
@@ -629,6 +633,7 @@ async fn run_harness_inner(
   .with_profile(profile)
   .with_runtime_kind(runtime_kind)
   .with_session_id(session_id_string)
+  .with_cancellation_token(inputs.cancellation_token.clone())
   .with_loop_checkpointer(checkpointer)
   .with_limits(RuntimeLimits {
     max_steps: Some(resolve_max_steps(inputs.max_steps)),
@@ -734,6 +739,7 @@ async fn run_harness_resume_inner(
     PathBuf::from(&inputs.workspace_root),
     inputs.model,
   )
+  .with_cancellation_token(inputs.cancellation_token.clone())
   .with_loop_checkpointer(checkpointer)
   .with_limits(RuntimeLimits {
     max_steps: Some(resolve_max_steps(inputs.max_steps)),

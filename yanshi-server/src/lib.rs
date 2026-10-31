@@ -186,6 +186,8 @@ pub struct AppState {
   /// types, shell commands and host paths a tenant may name. Defaults to
   /// deny-all; `serve::run` loads it from the environment.
   pub gateway_policy: gateway_policy::GatewayPolicy,
+  /// Process-local harness session cancellation tokens (eval 2026-10-07 P1).
+  pub harness_cancellations: harness::HarnessCancellationRegistry,
 }
 
 impl std::fmt::Debug for AppState {
@@ -229,6 +231,7 @@ impl AppState {
       run_max_concurrency: DEFAULT_RUN_MAX_CONCURRENCY,
       worker_control_plane: None,
       gateway_policy: gateway_policy::GatewayPolicy::default(),
+      harness_cancellations: harness::HarnessCancellationRegistry::default(),
     }
   }
 
