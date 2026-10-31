@@ -106,6 +106,9 @@ _New entries go here. Will roll into the next tag (likely
   tool-running nodes (`shell`, `file`, `http`, `mcp`, `plugin`, the agent
   types, including inside `map`/`while`). Their tools bypass harness
   approval, so the profile governed none of them while appearing to.
+- Parallel `map` items stop when their run does. They ran as detached
+  tasks, so they kept executing after a timeout or cancelled caller
+  dropped the run, and a retried node ran them a second time.
 - A run's events are all persisted before it is marked finished. The
   executors slept 50ms and hoped the event writer had caught up; under
   load, clients that saw `succeeded` could read an incomplete event

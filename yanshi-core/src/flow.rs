@@ -1454,6 +1454,10 @@ impl<'f> FlowExecutor<'f> {
       };
 
       let mut handles = Vec::new();
+      // Aborts every item still running if this future is dropped (an
+      // outer timeout, a cancelled caller, or a retry about to re-run the
+      // node); a no-op for tasks that already finished.
+      let mut abort_on_drop = AbortOnDrop(Vec::new());
       for item in input_list {
         let (sub_flow, sub_config) = self.sub_flow_execution_context(template, execution_config);
         let mut initial_inputs = HashMap::new();
@@ -1480,6 +1484,7 @@ impl<'f> FlowExecutor<'f> {
             .execute_from_inputs_with_config(initial_inputs, sub_config)
             .await
         });
+        abort_on_drop.0.push(handle.abort_handle());
         handles.push(handle);
       }
 
@@ -1951,6 +1956,17 @@ impl EventListener for SubFlowListener {
         | WorkflowEvent::WorkflowCancelled { .. }
     ) {
       self.0.on_event(event);
+    }
+  }
+}
+
+/// Aborts the tasks behind its handles when dropped.
+struct AbortOnDrop(Vec<tokio::task::AbortHandle>);
+
+impl Drop for AbortOnDrop {
+  fn drop(&mut self) {
+    for handle in &self.0 {
+      handle.abort();
     }
   }
 }
@@ -4089,6 +4105,59 @@ mod tests {
     assert!(
       high >= 2,
       "expected at least 2 concurrent sub-flows (got {high}); cap may be too tight or executor isn't actually parallel"
+    );
+  }
+
+  /// Eval 2026-10-07 D6: parallel map items ran on detached tasks, so
+  /// they kept executing after the run's future was dropped (a timeout or
+  /// cancelled caller) — and a retried node then ran them twice.
+  #[tokio::test]
+  async fn parallel_map_items_stop_when_the_run_is_dropped() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use_writable_home();
+
+    struct SlowNode(Arc<AtomicUsize>);
+    #[async_trait]
+    impl AsyncNode for SlowNode {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(HashMap::new())
+      }
+    }
+
+    let finished = Arc::new(AtomicUsize::new(0));
+    let map_node = GraphNode {
+      id: "map".to_string(),
+      node_type: NodeType::Map {
+        template: vec![GraphNode {
+          id: "slow".to_string(),
+          node_type: NodeType::Standard(Arc::new(SlowNode(finished.clone()))),
+          dependencies: vec![],
+          input_mapping: None,
+          run_if: None,
+          initial_inputs: HashMap::new(),
+        }],
+        parallel: true,
+        max_concurrent: None,
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::from([(
+        "input_list".to_string(),
+        FlowValue::Json(json!([1, 2, 3])),
+      )]),
+    };
+
+    let flow = Flow::new(vec![map_node]);
+    let dropped = tokio::time::timeout(std::time::Duration::from_millis(50), flow.run()).await;
+    assert!(dropped.is_err(), "the run must still be in flight at 50ms");
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(
+      finished.load(Ordering::SeqCst),
+      0,
+      "map items kept running after the run was dropped"
     );
   }
 
