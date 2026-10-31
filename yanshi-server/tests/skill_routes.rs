@@ -21,10 +21,8 @@ fn live_url() -> Option<String> {
 async fn fresh_state() -> Option<AppState> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query("TRUNCATE runs RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
+  // No TRUNCATE: tests run in parallel and each uses a fresh run id, so a
+  // reset here deleted a sibling's run mid-poll (CI saw its GET return 404).
   Some(AppState::new(db))
 }
 
