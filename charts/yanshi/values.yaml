@@ -65,6 +65,12 @@ containerPort: 3000
 env:
   RUST_LOG: info
   PORT: "3000"
+  # Run artifacts go to the writable `scratch` volume below; the root
+  # filesystem is read-only (containerSecurityContext).
+  YANSHI_RUN_DIR: /data/runs
+  # Export every run's trace over OTLP/HTTP+JSON (traces endpoint, e.g.
+  # an OpenTelemetry Collector). Unset means no export.
+  # OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318/v1/traces"
   # Gateway ceiling on what a submitted workflow / harness session may
   # touch on the host (docs/DEPLOYMENT.md § Gateway policy). Unset means
   # deny: shell/file/mcp/plugin/agent/skill_agent/multi_agent nodes are
@@ -82,6 +88,12 @@ secretEnv:
   YANSHI_API_TOKEN: ""
 
 existingSecret: ""
+
+# Writable emptyDirs mounted at /data (YANSHI_RUN_DIR) and /tmp, needed
+# because readOnlyRootFilesystem is on. Per-pod scratch: run artifacts
+# are lost on restart, the database stays the system of record.
+scratch:
+  sizeLimit: 1Gi
 
 resources:
   requests:

@@ -288,6 +288,11 @@ The Helm chart wires liveness and readiness probes to those endpoints. The curre
 - LLM provider keys and tool credentials should be provided through Kubernetes Secrets or external secret injection, not image layers.
 - CLI containers that need `~/.yanshi` can mount it as a volume at `/home/yanshi/.yanshi`.
 - Trace files should be backed by a persistent volume only when using file-backed trace storage.
+- The Helm chart runs with `readOnlyRootFilesystem: true` and mounts two
+  writable `emptyDir`s, `/data` (with `YANSHI_RUN_DIR=/data/runs`) and
+  `/tmp`, each capped by `scratch.sizeLimit` (default `1Gi`). Before
+  this, every run failed creating its run dir. Run artifacts are per-pod
+  scratch and are lost on restart.
 
 ### File-backed trace dir is opt-in and not garbage-collected
 
