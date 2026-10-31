@@ -1093,7 +1093,14 @@ async fn expired_run_lease_is_reclaimed_and_frees_the_tenant_slot() {
     AdmissionOutcome::ConcurrencyLimitExceeded { .. }
   ));
 
-  let reclaimed = repos.runs.reclaim_expired_leases().await.unwrap();
+  let reclaimed: Vec<Uuid> = repos
+    .runs
+    .reclaim_expired_leases()
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|run| run.id)
+    .collect();
   assert!(reclaimed.contains(&orphan.id), "{reclaimed:?}");
   assert!(
     !reclaimed.contains(&alive.id),

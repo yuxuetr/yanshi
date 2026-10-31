@@ -86,7 +86,14 @@ _New entries go here. Will roll into the next tag (likely
   (`8b50883`, `bf71019`).
 - Runs carry a renewed lease; runs of a dead replica are failed instead
   of holding the tenant's concurrency slot forever (migration
-  `0011_run_leases`).
+  `0011_run_leases`), and get a `workflow.failed` event.
+- `GET /v1/runs/{id}/events` ends after the run's terminal event, and
+  serves only the backfill for a run that already finished. Before, a
+  stream served by a replica other than the run's, or opened after the
+  run finished, never closed.
+- `yanshi workflow logs --follow` exits when the run is over. It
+  recognised none of the terminal kinds the server emits
+  (`workflow.completed` etc.) and reconnected forever.
 - Harness sessions no longer leak shared DB pool connections from their
   inner runtime. On a busy pool that left sessions stuck at `running`
   (`cabb272`).

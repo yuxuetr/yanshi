@@ -349,29 +349,59 @@ pub const RUN_LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(30);
 /// alive, and fail runs whose lease expired: their replica is gone, so
 /// nothing will finish them, and they hold the tenant's concurrency slot.
 /// Renewal comes first in each tick so a replica never reclaims its own
-/// live runs.
-pub fn spawn_run_lease_loop(pool: sqlx::PgPool, registry: RunCancellationRegistry) {
-  let runs = Repositories::from_pool(pool).runs;
+/// live runs. Each reclaimed run gets a `workflow.failed` event, since
+/// the replica that would have written its terminal event is gone and
+/// SSE subscribers wait for one.
+pub fn spawn_run_lease_loop(
+  repos: Repositories,
+  broker: EventBroker,
+  registry: RunCancellationRegistry,
+) {
   tokio::spawn(async move {
     let mut tick = tokio::time::interval(RUN_LEASE_RENEW_INTERVAL);
     loop {
       tick.tick().await;
-      if let Err(err) = runs.renew_leases(&registry.active_run_ids()).await {
+      if let Err(err) = repos.runs.renew_leases(&registry.active_run_ids()).await {
         warn!(error = %err, "run lease loop: renewal failed");
       }
-      match runs.reclaim_expired_leases().await {
-        Ok(ids) if !ids.is_empty() => {
-          warn!(
-            count = ids.len(),
-            ?ids,
-            "run lease loop: failed runs whose replica stopped"
-          );
+      let reclaimed = match repos.runs.reclaim_expired_leases().await {
+        Ok(reclaimed) => reclaimed,
+        Err(err) => {
+          warn!(error = %err, "run lease loop: reclaim failed");
+          continue;
         }
-        Ok(_) => {}
-        Err(err) => warn!(error = %err, "run lease loop: reclaim failed"),
+      };
+      for run in reclaimed {
+        warn!(run_id = %run.id, "run lease loop: failed a run whose replica stopped");
+        if let Err(err) = publish_reclaim_event(&repos, &broker, &run).await {
+          warn!(run_id = %run.id, error = %err, "run lease loop: terminal event failed");
+        }
       }
     }
   });
+}
+
+async fn publish_reclaim_event(
+  repos: &Repositories,
+  broker: &EventBroker,
+  run: &Run,
+) -> Result<(), yanshi_db::DbError> {
+  let max_seq = repos.events.max_seq(&run.tenant_id, run.id).await?;
+  publish_through(
+    repos,
+    broker,
+    NewEvent {
+      run_id: run.id,
+      seq: max_seq.map_or(0, |seq| seq + 1),
+      kind: "workflow.failed".to_string(),
+      payload: serde_json::json!({
+        "workflow_id": run.id.to_string(),
+        "error": run.error,
+      }),
+      tenant_id: Some(run.tenant_id.clone()),
+    },
+  )
+  .await
 }
 
 /// Cancel every local run that has a cancellation intent the listener may

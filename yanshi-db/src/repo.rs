@@ -68,8 +68,9 @@ pub trait RunRepo: Send + Sync {
   async fn renew_leases(&self, run_ids: &[Uuid]) -> Result<u64, DbError>;
 
   /// Fail every `queued`/`running` run whose lease expired: its replica
-  /// stopped renewing, so nothing will ever finish it. Returns their ids.
-  async fn reclaim_expired_leases(&self) -> Result<Vec<Uuid>, DbError>;
+  /// stopped renewing, so nothing will ever finish it. Returns the
+  /// reclaimed rows, so the caller can emit their terminal events.
+  async fn reclaim_expired_leases(&self) -> Result<Vec<Run>, DbError>;
 
   /// Which of `run_ids` have a recorded cancellation intent. Lets a
   /// replica resync after missing NOTIFYs (eval 2026-10-07 P3).
@@ -443,15 +444,16 @@ impl RunRepo for PgRunRepo {
     Ok(result.rows_affected())
   }
 
-  async fn reclaim_expired_leases(&self) -> Result<Vec<Uuid>, DbError> {
+  async fn reclaim_expired_leases(&self) -> Result<Vec<Run>, DbError> {
     Ok(
-      sqlx::query_scalar(
+      sqlx::query_as::<_, Run>(
         r#"UPDATE runs
            SET status = 'failed',
                finished_at = NOW(),
                error = 'lease expired: the gateway replica running this run stopped'
            WHERE status IN ('queued', 'running') AND lease_expires_at < NOW()
-           RETURNING id"#,
+           RETURNING id, workflow, status, started_at, finished_at, run_dir,
+                     tenant_id, error, events_retention_days, artifacts_retention_days"#,
       )
       .fetch_all(&self.pool)
       .await?,

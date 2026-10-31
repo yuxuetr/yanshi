@@ -6,7 +6,7 @@
 use tokio::time::Duration;
 use uuid::Uuid;
 use yanshi_core::FlowCancellationToken;
-use yanshi_db::{Database, NewRun, RunRepo, RunStatus};
+use yanshi_db::{Database, EventRepo, NewEvent, NewRun, RunRepo, RunStatus};
 use yanshi_server::{AppState, spawn_run_lease_loop};
 
 fn new_run(tenant: &str) -> NewRun {
@@ -43,7 +43,24 @@ async fn loop_keeps_local_runs_and_reclaims_orphans() {
     .await
     .unwrap();
 
-  spawn_run_lease_loop(db.pool.clone(), state.cancellation_registry.clone());
+  state
+    .repos
+    .events
+    .append(NewEvent {
+      run_id: orphan.id,
+      seq: 0,
+      kind: "workflow.started".to_string(),
+      payload: serde_json::json!({}),
+      tenant_id: Some(tenant.clone()),
+    })
+    .await
+    .unwrap();
+
+  spawn_run_lease_loop(
+    state.repos.clone(),
+    state.event_broker.clone(),
+    state.cancellation_registry.clone(),
+  );
 
   let reclaimed = tokio::time::timeout(Duration::from_secs(5), async {
     loop {
@@ -56,6 +73,32 @@ async fn loop_keeps_local_runs_and_reclaims_orphans() {
   })
   .await;
   assert!(reclaimed.is_ok(), "the orphaned run must be reclaimed");
+  // Its replica is gone, so the reclaim has to write the terminal event
+  // SSE subscribers are waiting for.
+  let terminal = tokio::time::timeout(Duration::from_secs(5), async {
+    loop {
+      let events = state
+        .repos
+        .events
+        .list_after(&tenant, orphan.id, -1, 10)
+        .await
+        .unwrap();
+      if let Some(event) = events.iter().find(|e| e.kind == "workflow.failed") {
+        return event.clone();
+      }
+      tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+  })
+  .await
+  .expect("a reclaimed run must get a terminal event");
+  assert_eq!(terminal.seq, 1, "continues the run's seq series");
+  assert!(
+    terminal.payload["error"]
+      .as_str()
+      .is_some_and(|error| error.contains("lease expired")),
+    "{:?}",
+    terminal.payload
+  );
   let local_row = state.repos.runs.get(local.id).await.unwrap().unwrap();
   assert_eq!(
     local_row.status,
