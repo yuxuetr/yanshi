@@ -191,6 +191,48 @@ async fn linux_seccomp_blocks_openat_with_o_creat_when_fs_write_absent() {
   );
 }
 
+/// Eval 2026-10-07 S6: x86_64 glibc issues the legacy `mkdir`/`chmod`/...
+/// syscalls, not the `*at` forms the filter used to deny, and Landlock
+/// never covers chmod/chown/xattr. Both targets sit where Landlock alone
+/// would allow the change (chmod is uncovered; cwd is in the write
+/// scope), so only the seccomp deny set can stop them.
+#[tokio::test]
+async fn linux_seccomp_blocks_mkdir_and_chmod_when_fs_write_absent() {
+  use std::os::unix::fs::PermissionsExt;
+  if !python3_available() {
+    eprintln!("skipping: python3 not on PATH");
+    return;
+  }
+
+  let pid = std::process::id();
+  let file = format!("/tmp/yanshi_sandbox_chmod_blocked_{pid}.txt");
+  std::fs::write(&file, b"x").unwrap();
+  std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+  let dir = std::env::current_dir()
+    .unwrap()
+    .join(format!("yanshi_sandbox_mkdir_blocked_{pid}"));
+  let _ = std::fs::remove_dir(&dir);
+
+  let tool = permissive_shell_with_sandbox();
+  let chmod = tool
+    .execute(json!({"command": format!("python3 -c 'import os; os.chmod(\"{file}\", 0o777)'")}))
+    .await
+    .expect("tool call must complete");
+  let mkdir = tool
+    .execute(json!({"command": format!("python3 -c 'import os; os.mkdir(\"{}\")'", dir.display())}))
+    .await
+    .expect("tool call must complete");
+
+  let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+  let dir_created = dir.exists();
+  let _ = std::fs::remove_file(&file);
+  let _ = std::fs::remove_dir(&dir);
+  assert_eq!(mode, 0o600, "chmod escaped the sandbox: {}", chmod.content);
+  assert!(chmod.is_error, "{}", chmod.content);
+  assert!(!dir_created, "mkdir escaped the sandbox: {}", mkdir.content);
+  assert!(mkdir.is_error, "{}", mkdir.content);
+}
+
 // ── S3.1: Landlock path-scoped filesystem containment ──────────────────
 
 /// S3.1 literal regression scenario: a child confined to a specific

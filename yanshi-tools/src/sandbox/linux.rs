@@ -758,6 +758,10 @@ fn compile_filter(caps: &[Capability], arch: TargetArch) -> Result<BpfProgram, s
     for nr in fs_write_syscall_numbers() {
       rules.insert(*nr, vec![]);
     }
+    #[cfg(target_arch = "x86_64")]
+    for nr in legacy_fs_write_syscall_numbers() {
+      rules.insert(*nr, vec![]);
+    }
     install_write_open_rules(&mut rules)?;
   }
   if !allow_exec {
@@ -817,6 +821,10 @@ fn net_syscall_numbers() -> &'static [i64] {
   ]
 }
 
+/// `fchmodat2` (Linux 6.6). Syscalls added since 5.1 share one number on
+/// every architecture; libc 0.2.189 exports it for x86_64 only.
+const SYS_FCHMODAT2: i64 = 452;
+
 /// Syscalls that mutate the filesystem layout. `write` itself is allowed
 /// because the child writes to stdout/stderr through it; new file creation
 /// is gated through the openat / creat / mknodat / openat2 path-creation
@@ -831,9 +839,40 @@ fn fs_write_syscall_numbers() -> &'static [i64] {
     libc::SYS_symlinkat,
     libc::SYS_linkat,
     libc::SYS_fchmodat,
+    SYS_FCHMODAT2,
     libc::SYS_fchownat,
+    libc::SYS_fchmod,
+    libc::SYS_fchown,
     libc::SYS_truncate,
     libc::SYS_ftruncate,
+    // Landlock doesn't cover metadata changes, so seccomp is the only
+    // layer that can stop these (eval 2026-10-07 S6).
+    libc::SYS_setxattr,
+    libc::SYS_lsetxattr,
+    libc::SYS_fsetxattr,
+    libc::SYS_removexattr,
+    libc::SYS_lremovexattr,
+    libc::SYS_fremovexattr,
+  ]
+}
+
+/// x86_64 keeps the pre-`*at` path syscalls, and glibc there still issues
+/// them (`unlink(3)` → `SYS_unlink`, not `unlinkat`), so denying only the
+/// `*at` family left `!FsWrite` bypassable (eval 2026-10-07 S6). aarch64
+/// never had them.
+#[cfg(target_arch = "x86_64")]
+fn legacy_fs_write_syscall_numbers() -> &'static [i64] {
+  &[
+    libc::SYS_unlink,
+    libc::SYS_rmdir,
+    libc::SYS_rename,
+    libc::SYS_mkdir,
+    libc::SYS_mknod,
+    libc::SYS_symlink,
+    libc::SYS_link,
+    libc::SYS_chmod,
+    libc::SYS_chown,
+    libc::SYS_lchown,
   ]
 }
 
