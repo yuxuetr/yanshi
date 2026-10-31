@@ -573,6 +573,11 @@ impl HarnessCancellationRegistry {
     }
   }
 
+  /// Sessions currently executing on this replica.
+  pub fn active_ids(&self) -> Vec<Uuid> {
+    self.lock().keys().copied().collect()
+  }
+
   /// Returns whether a running session on this replica was signalled.
   pub fn cancel(&self, id: Uuid) -> bool {
     match self.lock().get(&id) {
@@ -582,6 +587,76 @@ impl HarnessCancellationRegistry {
       }
       None => false,
     }
+  }
+}
+
+/// Postgres NOTIFY channel a cancel request uses to reach a session
+/// executing on another replica. Payload: the bare session id.
+pub const HARNESS_CANCELLATION_NOTIFY_CHANNEL: &str = "yanshi_harness_cancellations";
+
+/// Eval 2026-10-07 P1: stop sessions cancelled through another replica.
+/// The `cancelled` row is the durable intent; the NOTIFY only says when
+/// to look. A notified id is acted on only if this replica runs that
+/// session and its row is still `cancelled`, so a late notification
+/// can't stop a session that was resumed in between. NOTIFY is
+/// at-most-once, so after every (re)connect every local session is
+/// checked against its row.
+pub fn spawn_harness_cancellation_listener(
+  repos: Repositories,
+  registry: HarnessCancellationRegistry,
+) {
+  let pool = repos.harness_sessions.pool.clone();
+  tokio::spawn(async move {
+    loop {
+      let mut listener =
+        match NotifyListener::connect(&pool, &[HARNESS_CANCELLATION_NOTIFY_CHANNEL]).await {
+          Ok(listener) => listener,
+          Err(err) => {
+            warn!(error = %err, "harness cancellation listener: connect failed, retrying in 5s");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+          }
+        };
+      cancel_marked_sessions(&repos, &registry, &registry.active_ids()).await;
+      loop {
+        let payload = match listener.recv().await {
+          Ok(Notice::Message { payload, .. }) => payload,
+          Ok(Notice::Gap) => {
+            warn!("harness cancellation listener: connection dropped, reconnecting and resyncing");
+            break;
+          }
+          Err(err) => {
+            warn!(error = %err, "harness cancellation listener: recv failed, reconnecting");
+            break;
+          }
+        };
+        match Uuid::parse_str(&payload) {
+          Ok(id) if registry.active_ids().contains(&id) => {
+            cancel_marked_sessions(&repos, &registry, &[id]).await;
+          }
+          Ok(_) => {}
+          Err(err) => {
+            warn!(error = %err, payload = %payload, "harness cancellation listener: malformed payload");
+          }
+        }
+      }
+    }
+  });
+}
+
+async fn cancel_marked_sessions(
+  repos: &Repositories,
+  registry: &HarnessCancellationRegistry,
+  ids: &[Uuid],
+) {
+  match repos.harness_sessions.cancelled_among(ids).await {
+    Ok(cancelled) => {
+      for id in cancelled {
+        info!(session_id = %id, "harness session cancelled through another replica");
+        registry.cancel(id);
+      }
+    }
+    Err(err) => warn!(error = %err, "harness cancellation listener: status check failed"),
   }
 }
 
@@ -933,8 +1008,8 @@ pub async fn cancel_harness_session(
   // Signal the agent loop if it runs on this replica, then mark the row.
   // The row write wins over the executor's own late terminal write
   // because `update_status` never leaves a terminal state. A session on
-  // another replica is only marked, not stopped (no cross-replica
-  // signal yet).
+  // another replica is stopped by its replica's
+  // `spawn_harness_cancellation_listener`, woken by the NOTIFY below.
   let signalled = state.harness_cancellations.cancel(id);
   info!(session_id = %id, signalled, "harness session cancel requested");
   state
@@ -947,6 +1022,16 @@ pub async fn cancel_harness_session(
       Some("cancel requested"),
     )
     .await?;
+  if !signalled
+    && let Err(err) = yanshi_db::notify(
+      &state.repos.harness_sessions.pool,
+      HARNESS_CANCELLATION_NOTIFY_CHANNEL,
+      &id.to_string(),
+    )
+    .await
+  {
+    warn!(session_id = %id, error = %err, "harness cancel: cross-replica NOTIFY failed");
+  }
   publish_cancel_event(&state.repos, &state.harness_broker, tenant.as_str(), id).await?;
   state
     .harness_broker

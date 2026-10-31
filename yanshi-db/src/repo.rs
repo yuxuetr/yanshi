@@ -220,6 +220,10 @@ pub trait HarnessSessionRepo: Send + Sync {
   /// session via the FK CASCADE. The transaction is atomic so a
   /// concurrent reader never observes a half-reset state.
   async fn reset_for_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError>;
+  /// Which of `ids` are `cancelled`, read from the primary. A cancel
+  /// request served by another replica only marks the row, so the
+  /// replica running the session checks here (eval 2026-10-07 P1).
+  async fn cancelled_among(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, DbError>;
   /// Append-mode counterpart to [`Self::reset_for_resume`]. Flips the
   /// row back to `running` and replaces `user_input` but **keeps** the
   /// existing `harness_session_events` rows intact.
@@ -915,6 +919,20 @@ impl HarnessSessionRepo for PgHarnessSessionRepo {
       });
     }
     Ok(())
+  }
+
+  async fn cancelled_among(&self, ids: &[Uuid]) -> Result<Vec<Uuid>, DbError> {
+    if ids.is_empty() {
+      return Ok(Vec::new());
+    }
+    Ok(
+      sqlx::query_scalar(
+        "SELECT id FROM harness_sessions WHERE id = ANY($1) AND status = 'cancelled'",
+      )
+      .bind(ids)
+      .fetch_all(&self.pool)
+      .await?,
+    )
   }
 
   async fn reset_for_resume(&self, id: Uuid, new_user_input: &str) -> Result<(), DbError> {

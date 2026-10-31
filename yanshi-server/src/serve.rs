@@ -553,10 +553,14 @@ pub async fn run(config: ServeConfig) -> Result<(), ServeError> {
     state.repos.clone(),
     state.harness_broker.clone(),
   );
-  // W4.2d: cross-replica cancellation listener — same posture.
+  // W4.2d: cross-replica cancellation listeners — same posture.
   crate::runs::spawn_run_cancellation_listener(
     db.pool.clone(),
     state.cancellation_registry.clone(),
+  );
+  crate::harness::spawn_harness_cancellation_listener(
+    state.repos.clone(),
+    state.harness_cancellations.clone(),
   );
   // Eval 2026-10-07 P5: renew this replica's run leases, reclaim dead
   // replicas' runs.

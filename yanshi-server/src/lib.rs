@@ -62,13 +62,14 @@ pub use events_stream::{
 };
 pub use harness::{
   AnswerInterruptRequest, AnswerInterruptResponse, CancelHarnessSessionResponse,
-  CreateHarnessSessionRequest, CreateHarnessSessionResponse, HARNESS_EVENTS_NOTIFY_CHANNEL,
-  HarnessEventBroker, HarnessEventsQuery, HarnessSessionContext, HarnessSessionExecutor,
-  HarnessSessionResponse, ListHarnessSessionsQuery, ListHarnessSessionsResponse, PendingInterrupt,
-  PendingInterruptResponse, ResumeHarnessSessionRequest, ResumeHarnessSessionResponse,
-  StreamedHarnessEvent, StubHarnessExecutor, answer_interrupt, cancel_harness_session,
-  default_harness_executor, get_harness_session, get_pending_interrupt, list_harness_events,
-  list_harness_sessions, post_harness_session_action, resume_harness_session,
+  CreateHarnessSessionRequest, CreateHarnessSessionResponse, HARNESS_CANCELLATION_NOTIFY_CHANNEL,
+  HARNESS_EVENTS_NOTIFY_CHANNEL, HarnessEventBroker, HarnessEventsQuery, HarnessSessionContext,
+  HarnessSessionExecutor, HarnessSessionResponse, ListHarnessSessionsQuery,
+  ListHarnessSessionsResponse, PendingInterrupt, PendingInterruptResponse,
+  ResumeHarnessSessionRequest, ResumeHarnessSessionResponse, StreamedHarnessEvent,
+  StubHarnessExecutor, answer_interrupt, cancel_harness_session, default_harness_executor,
+  get_harness_session, get_pending_interrupt, list_harness_events, list_harness_sessions,
+  post_harness_session_action, resume_harness_session, spawn_harness_cancellation_listener,
   spawn_harness_events_listener, stream_harness_events, submit_harness_session,
 };
 pub use harness_approval::{
