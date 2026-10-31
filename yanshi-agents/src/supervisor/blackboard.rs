@@ -28,6 +28,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::task::AbortOnDropHandle;
 use uuid::Uuid;
 
 use super::common::{ChildBudget, build_child_context};
@@ -582,19 +583,20 @@ async fn run_schedule(
         Ok(limits) => limits,
         Err(spent) => return Ok(Some(spent)),
       };
-      let mut handles: Vec<tokio::task::JoinHandle<Result<AgentRunResult, AgentRuntimeError>>> =
+      // Dropping a handle aborts its task, so no child outlives this call —
+      // on a halt, a sibling's error, or this future being dropped.
+      let mut handles: Vec<AbortOnDropHandle<Result<AgentRunResult, AgentRuntimeError>>> =
         Vec::with_capacity(names.len());
       for name in names {
         let agent = supervisor.agent_handle(name)?;
         let ctx = build_child_context(parent, name, &parent.input, limits.clone());
-        handles.push(tokio::spawn(async move {
+        handles.push(AbortOnDropHandle::new(tokio::spawn(async move {
           let mut guard = agent.lock().await;
           guard.run(ctx).await
-        }));
+        })));
       }
       // Order results by schedule order (zip with names) to keep traces stable.
-      let mut pending = names.iter().zip(handles);
-      while let Some((name, handle)) = pending.next() {
+      for (name, handle) in names.iter().zip(handles) {
         let child_result = handle
           .await
           .map_err(|e| AgentRuntimeError::ExecutionFailed {
@@ -604,9 +606,6 @@ async fn run_schedule(
         let child_stop = child_result.stop_reason.clone();
         *next_index = merge_child_into(steps, events, *next_index, child_result);
         if super::common::halts_supervisor(&child_stop) {
-          for (_, rest) in pending {
-            rest.abort();
-          }
           supervisor.drain_ops_into_supervisor_trace(next_index, steps, events, &parent.session_id);
           return Ok(Some(child_stop));
         }

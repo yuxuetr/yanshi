@@ -28,6 +28,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::task::AbortOnDropHandle;
 use uuid::Uuid;
 
 use crate::runtime::{
@@ -235,33 +236,31 @@ impl AgentRuntime for DebateSupervisor {
       let round_input = self.build_participant_input(&context.input, prior_for_input);
 
       // Spawn all participants concurrently.
+      // Dropping a handle aborts its task, so no participant outlives this
+      // round — whether it returns early or its own future is dropped.
       let mut handles: Vec<(
         String,
-        tokio::task::JoinHandle<Result<AgentRunResult, AgentRuntimeError>>,
+        AbortOnDropHandle<Result<AgentRunResult, AgentRuntimeError>>,
       )> = Vec::with_capacity(self.participants.len());
       for (name, handle) in &self.participants {
         let agent_handle = handle.clone();
         let child_ctx = build_child_context(&context, name, &round_input, limits.clone());
-        let task = tokio::spawn(async move {
+        let task = AbortOnDropHandle::new(tokio::spawn(async move {
           let mut guard = agent_handle.lock().await;
           guard.run(child_ctx).await
-        });
+        }));
         handles.push((name.clone(), task));
       }
 
       // Collect results in registration order so the trace is deterministic.
       let mut round_proposals: Vec<ProposalRecord> = Vec::with_capacity(handles.len());
-      let mut handles = handles.into_iter();
-      while let Some((name, handle)) = handles.next() {
+      for (name, handle) in handles {
         match handle.await {
           Ok(Ok(child_result)) => {
             budget.charge(&child_result);
             step_index =
               merge_child_into(&mut steps, &mut events, step_index, child_result.clone());
             if super::common::halts_supervisor(&child_result.stop_reason) {
-              for (_, rest) in handles {
-                rest.abort();
-              }
               return Ok(stopped(
                 session_id,
                 None,

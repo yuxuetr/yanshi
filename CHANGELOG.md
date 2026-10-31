@@ -98,6 +98,10 @@ _New entries go here. Will roll into the next tag (likely
   is spent the supervisor stops with `Timeout` / `MaxToolCalls`.
   `max_steps` and `token_budget` stay per child; `cost_limit_usd` too,
   since child results carry no cost.
+- Debate participants and parallel blackboard children stop when their
+  supervisor does. They ran as detached tasks, so they kept calling
+  tools after an outer timeout or cancelled caller dropped the
+  supervisor, or after a sibling's error ended it early.
 - Harness `:cancel` stops a session running on another replica, not
   just its row.
 - Distributed runs release their control-plane state when they end:

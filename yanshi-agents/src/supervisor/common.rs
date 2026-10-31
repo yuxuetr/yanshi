@@ -508,4 +508,110 @@ mod tests {
     budget.charge(&crate::runtime::AgentRunResult::final_answer("s", "x"));
     assert_eq!(budget.limits_for(&limits, 3).unwrap(), limits);
   }
+
+  /// Child that sleeps, then records that it ran to completion — standing in
+  /// for an agent still calling tools after its supervisor is gone.
+  struct Lingerer(Arc<std::sync::atomic::AtomicBool>);
+
+  #[async_trait]
+  impl AgentRuntime for Lingerer {
+    async fn run(
+      &mut self,
+      context: AgentContext,
+    ) -> Result<crate::runtime::AgentRunResult, crate::runtime::AgentRuntimeError> {
+      tokio::time::sleep(Duration::from_millis(300)).await;
+      self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+      Ok(crate::runtime::AgentRunResult::final_answer(
+        context.session_id,
+        "late",
+      ))
+    }
+
+    fn runtime_name(&self) -> &'static str {
+      "lingerer"
+    }
+  }
+
+  struct Failing;
+
+  #[async_trait]
+  impl AgentRuntime for Failing {
+    async fn run(
+      &mut self,
+      _context: AgentContext,
+    ) -> Result<crate::runtime::AgentRunResult, crate::runtime::AgentRuntimeError> {
+      Err(crate::runtime::AgentRuntimeError::ExecutionFailed {
+        message: "boom".into(),
+      })
+    }
+
+    fn runtime_name(&self) -> &'static str {
+      "failing"
+    }
+  }
+
+  async fn lingered(flag: &std::sync::atomic::AtomicBool) -> bool {
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    flag.load(std::sync::atomic::Ordering::SeqCst)
+  }
+
+  /// Eval 2026-10-07 A3: concurrent children ran on detached `tokio::spawn`
+  /// tasks, so they kept running after the supervisor future was dropped
+  /// (an outer timeout or cancelled caller) or returned early on error.
+  #[tokio::test]
+  async fn concurrent_children_stop_with_their_supervisor() {
+    use crate::supervisor::{
+      BlackboardSchedule, BlackboardSupervisorBuilder, DebateSupervisorBuilder,
+    };
+    let ctx = || AgentContext::new("s", "go", "mock");
+    let drop_after = Duration::from_millis(50);
+
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut debate = DebateSupervisorBuilder::new()
+      .add_participant("a", Lingerer(flag.clone()))
+      .judge(ScriptedChild(AgentStopReason::FinalAnswer))
+      .build()
+      .unwrap();
+    assert!(
+      tokio::time::timeout(drop_after, AgentRuntime::run(&mut debate, ctx()))
+        .await
+        .is_err()
+    );
+    assert!(
+      !lingered(&flag).await,
+      "debate participant outlived its supervisor"
+    );
+
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let child = flag.clone();
+    let mut blackboard = BlackboardSupervisorBuilder::new()
+      .add_agent("a", "slow", move |_bb| Lingerer(child))
+      .schedule(BlackboardSchedule::Parallel(vec!["a".into()]))
+      .build()
+      .unwrap();
+    assert!(
+      tokio::time::timeout(drop_after, AgentRuntime::run(&mut blackboard, ctx()))
+        .await
+        .is_err()
+    );
+    assert!(
+      !lingered(&flag).await,
+      "blackboard child outlived its supervisor"
+    );
+
+    // A sibling's error returns early; the slow child must not keep going.
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let child = flag.clone();
+    let mut blackboard = BlackboardSupervisorBuilder::new()
+      .add_agent("a", "fails", |_bb| Failing)
+      .add_agent("b", "slow", move |_bb| Lingerer(child))
+      .schedule(BlackboardSchedule::Parallel(vec!["a".into(), "b".into()]))
+      .build()
+      .unwrap();
+    assert!(AgentRuntime::run(&mut blackboard, ctx()).await.is_err());
+    assert!(
+      !lingered(&flag).await,
+      "blackboard child outlived a failed sibling"
+    );
+  }
 }
