@@ -43,7 +43,9 @@ pub struct MCPNode {
   /// Timeout in milliseconds (default: 30000)
   pub timeout_ms: Option<u64>,
 
-  /// Maximum retry attempts (default: 3)
+  /// Maximum retry attempts for the connection handshake (default: 3).
+  /// The `tools/call` itself is sent at most once — a retry after a
+  /// timeout could run the tool twice.
   pub max_retries: Option<u32>,
 
   /// Whether to cache the client connection (future feature)

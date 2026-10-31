@@ -107,7 +107,9 @@ impl McpClientPool {
     );
     let result = match tokio::time::timeout(timeout, client.call_tool(tool_name, params)).await {
       Ok(Ok(result)) => result,
-      Ok(Err(e)) => {
+      // The client's own per-request timeout (same duration) can win the
+      // race against the outer one; report both the same way.
+      Ok(Err(e)) if !matches!(e, yanshi_mcp::error::MCPError::Timeout { .. }) => {
         let message = format!(
           "MCP server '{}' tool '{}' failed: {}",
           self.config.name, tool_name, e
@@ -129,7 +131,7 @@ impl McpClientPool {
         }
         return Err(ToolError::ExecutionFailed { message });
       }
-      Err(_) => {
+      Ok(Err(_)) | Err(_) => {
         if let Some(client) = guard.as_mut() {
           let _ = client.disconnect().await;
         }

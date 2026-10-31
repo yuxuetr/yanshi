@@ -102,6 +102,14 @@ _New entries go here. Will roll into the next tag (likely
   supervisor does. They ran as detached tasks, so they kept calling
   tools after an outer timeout or cancelled caller dropped the
   supervisor, or after a sibling's error ended it early.
+- The MCP client sends `tools/call` at most once. A timeout or transport
+  error can arrive after the server ran the tool, and the retry ran it
+  again. `max_retries` still applies to the handshake and read-only
+  requests.
+- MCP transports drop server notifications once their queue is full
+  instead of blocking. The same reader delivers responses and nothing
+  drained the queue, so after 1024 notifications every request timed
+  out.
 - Harness `:cancel` stops a session running on another replica, not
   just its row.
 - Distributed runs release their control-plane state when they end:

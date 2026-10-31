@@ -96,11 +96,10 @@ pub struct StdioTransport {
   /// Receiver lives behind an async Mutex so multiple callers can
   /// share the surface; the producer side is held by the reader
   /// task. V3.5: bounded (was unbounded) — a flooding server can no
-  /// longer queue unlimited `Value`s in-process; once the channel is
-  /// full, the reader task's `.send().await` blocks, which in turn
-  /// stops it pulling more bytes off the child's stdout, applying
-  /// real backpressure all the way back to the child's own `write()`
-  /// calls. Capacity is `notification_channel_capacity`.
+  /// longer queue unlimited `Value`s in-process. Once the channel is
+  /// full further notifications are dropped (with a warning) rather
+  /// than blocking the reader, which also delivers responses.
+  /// Capacity is `notification_channel_capacity`.
   notifications_rx: Arc<AsyncMutex<mpsc::Receiver<Value>>>,
   /// Sender end of the notifications channel. Kept on the struct
   /// so disconnect can drop it cleanly even if the reader task
@@ -137,11 +136,10 @@ impl StdioTransport {
   pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 
   /// Default notifications channel capacity (V3.5). Bounds how many
-  /// server-initiated messages can queue in-process before the
-  /// reader task's `.send().await` starts applying backpressure —
-  /// generous enough that normal notification bursts never block,
-  /// small enough that a flooding/misbehaving server can't grow an
-  /// unbounded in-process queue.
+  /// server-initiated messages can queue in-process before further
+  /// ones are dropped — generous enough that normal notification
+  /// bursts fit, small enough that a flooding/misbehaving server can't
+  /// grow an unbounded in-process queue.
   pub const DEFAULT_NOTIFICATION_CHANNEL_CAPACITY: usize = 1024;
 
   /// Create a new stdio transport
@@ -393,12 +391,10 @@ async fn run_reader_task(
           }
         } else {
           // Notification — forward to the receive_message channel.
-          // V3.5: bounded `Sender::send` — awaiting here is the
-          // actual backpressure mechanism (see the struct field doc
-          // comment on `notifications_rx`). A closed receiver just
-          // means nobody's listening anymore; nothing to do but
-          // keep reading so `send_message` responses still flow.
-          let _ = notifications_tx.send(value).await;
+          // Never await a full channel: this task also delivers every
+          // response, so blocking here stalls all in-flight requests
+          // whenever nobody drains notifications (eval 2026-10-07 L5).
+          crate::transport::queue_notification(&notifications_tx, value, "stdio");
         }
       }
       Err(err) => {
@@ -1142,11 +1138,12 @@ mod tests {
 
   #[tokio::test]
   #[cfg(unix)]
-  async fn notifications_channel_applies_backpressure_without_unbounded_growth() {
-    // V3.5: emit far more notifications than a small channel
-    // capacity before the test starts draining. If backpressure
-    // works, none of them are lost — the reader just blocks (via
-    // `.send().await`) until the consumer catches up.
+  async fn unconsumed_notifications_never_block_responses() {
+    // Eval 2026-10-07 L5: nothing in the workspace drains
+    // `receive_message`, so a reader that awaited a full notifications
+    // channel stopped delivering responses after `capacity`
+    // notifications and every later request timed out. Overflow is now
+    // dropped; the queue stays bounded and responses keep flowing.
     let mut transport = StdioTransport::new(vec![
       "sh".to_string(),
       "-c".to_string(),
@@ -1160,27 +1157,28 @@ mod tests {
     .with_timeout(Duration::from_secs(5));
     transport.connect().await.unwrap();
 
-    // Give the burst a beat to fill the channel and hit backpressure
-    // (capacity 4, well under the 50 notifications emitted).
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Nobody drains the 50-notification burst before this request.
+    let request = json!({"jsonrpc": "2.0", "method": "ping", "id": 1});
+    let response = tokio::time::timeout(
+      Duration::from_secs(3),
+      transport.send_message(request.clone()),
+    )
+    .await
+    .expect("a full notifications queue must not block responses")
+    .unwrap();
+    assert_eq!(response, request);
 
-    let mut received = 0;
-    while received < 50 {
-      match transport.receive_message().await.unwrap() {
-        Some(_) => received += 1,
-        None => break, // timeout — nothing left to drain
-      }
+    let mut received = Vec::new();
+    while let Ok(Ok(Some(message))) =
+      tokio::time::timeout(Duration::from_millis(200), transport.receive_message()).await
+    {
+      received.push(message["params"]["i"].as_i64());
     }
     assert_eq!(
-      received, 50,
-      "all notifications must eventually be delivered, none dropped by backpressure"
+      received,
+      vec![Some(1), Some(2), Some(3), Some(4)],
+      "the queue keeps the first `capacity` notifications and drops the overflow"
     );
-
-    // The echo loop after the notification burst should still work,
-    // proving the reader task kept making forward progress.
-    let request = json!({"jsonrpc": "2.0", "method": "ping", "id": 1});
-    let response = transport.send_message(request.clone()).await.unwrap();
-    assert_eq!(response, request);
 
     transport.disconnect().await.unwrap();
   }

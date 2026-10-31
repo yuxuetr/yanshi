@@ -183,7 +183,8 @@ impl ClientBuilder {
     self
   }
 
-  /// Set maximum retry attempts
+  /// Set maximum retry attempts for transient failures. `tools/call` is
+  /// never retried: a timeout can land after the server ran the tool.
   ///
   /// # Arguments
   ///

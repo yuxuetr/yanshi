@@ -36,3 +36,21 @@ pub use mock::MockTransport;
 pub use stdio::StdioTransport;
 pub use streamable_http::StreamableHttpTransport;
 pub use traits::{Transport, TransportConfig, TransportType};
+
+/// Queues a server-initiated message for `receive_message` without
+/// waiting. A transport's reader also delivers responses, so blocking on
+/// a full queue would stall every in-flight request; overflow is dropped.
+pub(crate) fn queue_notification(
+  queue: &tokio::sync::mpsc::Sender<serde_json::Value>,
+  message: serde_json::Value,
+  transport: &'static str,
+) {
+  if let Err(tokio::sync::mpsc::error::TrySendError::Full(dropped)) = queue.try_send(message) {
+    tracing::warn!(
+      target = "yanshi_mcp::transport",
+      transport,
+      method = ?dropped.get("method"),
+      "notification queue full; dropping server notification"
+    );
+  }
+}

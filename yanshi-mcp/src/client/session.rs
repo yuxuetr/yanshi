@@ -435,7 +435,15 @@ impl MCPClient {
     let request_value = serde_json::to_value(&request)
       .map_err(|e| MCPError::from(e).context("Failed to serialize request"))?;
 
-    let retry_config = RetryConfig::new(self.config.max_retries, self.config.retry_backoff_ms);
+    // A timeout or transport error can land after the server received the
+    // request, so a retried `tools/call` may run the tool twice. MCP tool
+    // definitions carry no idempotency, so tool calls are sent at most once.
+    let max_retries = if request.method == "tools/call" {
+      0
+    } else {
+      self.config.max_retries
+    };
+    let retry_config = RetryConfig::new(max_retries, self.config.retry_backoff_ms);
     let timeout = self.config.timeout;
     // Borrow rather than clone — the closure runs sequentially
     // inside `retry_with_backoff` so the borrow lasts only across

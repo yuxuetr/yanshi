@@ -163,7 +163,7 @@ impl StreamableHttpTransport {
         // Server-initiated message scoped to this request (e.g.
         // `notifications/progress`). Forward to the same queue
         // `receive_message` drains for every other transport.
-        let _ = self.notifications_tx.send(value).await;
+        crate::transport::queue_notification(&self.notifications_tx, value, "streamable_http");
       }
     }
     final_response.ok_or_else(|| {

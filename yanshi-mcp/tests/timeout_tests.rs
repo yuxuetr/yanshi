@@ -485,3 +485,89 @@ async fn test_real_process_write_timeout_scenario() {
 
   transport.disconnect().await.unwrap();
 }
+
+/// Eval 2026-10-07 L5: a timed-out `tools/call` may already have run on the
+/// server, so retrying it re-executes a non-idempotent tool. MCP tool
+/// definitions carry no idempotency, so `tools/call` is sent at most once;
+/// read-only requests keep retrying.
+#[tokio::test]
+async fn timed_out_tools_call_is_not_replayed() {
+  use std::sync::atomic::{AtomicU32, Ordering};
+
+  struct TimeoutByMethod {
+    inner: MockTransport,
+    sends: Arc<AtomicU32>,
+  }
+
+  #[async_trait::async_trait]
+  impl Transport for TimeoutByMethod {
+    async fn connect(&mut self) -> yanshi_mcp::error::MCPResult<()> {
+      self.inner.connect().await
+    }
+
+    async fn send_message(
+      &self,
+      request: serde_json::Value,
+    ) -> yanshi_mcp::error::MCPResult<serde_json::Value> {
+      match request["method"].as_str() {
+        Some("tools/call") | Some("tools/list") => {
+          self.sends.fetch_add(1, Ordering::SeqCst);
+          Err(MCPError::timeout("simulated timeout".to_string(), Some(10)))
+        }
+        _ => self.inner.send_message(request).await,
+      }
+    }
+
+    async fn send_notification(
+      &self,
+      notification: serde_json::Value,
+    ) -> yanshi_mcp::error::MCPResult<()> {
+      self.inner.send_notification(notification).await
+    }
+
+    async fn receive_message(&self) -> yanshi_mcp::error::MCPResult<Option<serde_json::Value>> {
+      self.inner.receive_message().await
+    }
+
+    async fn disconnect(&mut self) -> yanshi_mcp::error::MCPResult<()> {
+      self.inner.disconnect().await
+    }
+
+    fn is_connected(&self) -> bool {
+      self.inner.is_connected()
+    }
+
+    fn transport_type(&self) -> yanshi_mcp::transport::TransportType {
+      self.inner.transport_type()
+    }
+  }
+
+  let sends = Arc::new(AtomicU32::new(0));
+  let mut inner = MockTransport::new();
+  inner.add_response(MockTransport::standard_initialize_response());
+  let mut client = ClientBuilder::new()
+    .with_transport(TimeoutByMethod {
+      inner,
+      sends: sends.clone(),
+    })
+    .with_max_retries(3)
+    .with_retry_backoff_ms(1)
+    .build()
+    .await
+    .unwrap();
+  client.connect().await.unwrap();
+
+  assert!(client.call_tool("charge_card", json!({})).await.is_err());
+  assert_eq!(
+    sends.swap(0, Ordering::SeqCst),
+    1,
+    "tools/call must be sent once"
+  );
+
+  assert!(client.list_tools().await.is_err());
+  assert_eq!(
+    sends.load(Ordering::SeqCst),
+    4,
+    "tools/list keeps its retries"
+  );
+}
