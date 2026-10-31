@@ -1587,7 +1587,7 @@ pub async fn cancel_run(
     return Err(ApiError::NotFound(format!("run {} not found", id)));
   }
 
-  if is_terminal_status(&run.status) {
+  if crate::events_stream::is_terminal_run_status(&run.status) {
     return Ok(Json(CancelRunResponse {
       run,
       cancelled: false,
@@ -1639,10 +1639,6 @@ pub async fn cancel_run(
     run,
     cancelled: true,
   }))
-}
-
-fn is_terminal_status(status: &str) -> bool {
-  matches!(status, "succeeded" | "failed" | "cancelled")
 }
 
 async fn publish_cancellation_event(

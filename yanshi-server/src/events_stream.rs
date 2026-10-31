@@ -425,7 +425,15 @@ pub struct EventsQuery {
 /// 2. Subscribes to the broker first so events emitted while we're still
 ///    setting up don't fall on the floor.
 /// 3. Replays any events with `seq > after_seq` (default `-1`) from the DB.
-/// 4. Forwards live broker events for as long as the channel stays open.
+/// 4. Forwards live broker events until a terminal event
+///    ([`is_terminal_run_event_kind`]) or the channel closes. A run that
+///    was already terminal when the request arrived gets the backfill
+///    only.
+///
+/// Ending on the terminal event rather than on channel close matters
+/// because only the replica executing the run closes the channel: a
+/// subscriber on any other replica, or one that attaches after the run
+/// finished, would otherwise hold an open stream forever.
 pub async fn stream_events(
   State(state): State<AppState>,
   Extension(tenant): Extension<TenantId>,
@@ -471,11 +479,31 @@ pub async fn stream_events(
     }
   }
 
+  let finished = is_terminal_run_status(&run.status)
+    || backfill
+      .iter()
+      .any(|event| is_terminal_run_event_kind(&event.kind));
   let backfill_stream = futures::stream::iter(backfill).map(BrokerItem::Event);
-  let live_stream = BroadcastStream::new(receiver).map(|res| match res {
-    Ok(event) => BrokerItem::Event(event),
-    Err(BroadcastStreamRecvError::Lagged(_)) => BrokerItem::Lagged,
-  });
+  let live_stream = if finished {
+    futures::future::Either::Left(futures::stream::empty())
+  } else {
+    futures::future::Either::Right(
+      BroadcastStream::new(receiver)
+        .map(|res| match res {
+          Ok(event) => BrokerItem::Event(event),
+          Err(BroadcastStreamRecvError::Lagged(_)) => BrokerItem::Lagged,
+        })
+        .scan(false, |ended, item| {
+          if *ended {
+            return futures::future::ready(None);
+          }
+          if let BrokerItem::Event(event) = &item {
+            *ended = is_terminal_run_event_kind(&event.kind);
+          }
+          futures::future::ready(Some(item))
+        }),
+    )
+  };
   let stream = backfill_stream
     .chain(live_stream)
     .map(serialise_item)
@@ -488,6 +516,27 @@ pub async fn stream_events(
         .text("keep-alive"),
     ),
   )
+}
+
+/// Event kinds after which a run emits nothing more: the Flow lifecycle
+/// terminals (in-process and distributed runs), the skill-run summary,
+/// the stub executor's summary, the cancel route's marker, and the
+/// lease-reclaim failure. `yanshi workflow logs --follow` mirrors this
+/// list; change both together.
+pub fn is_terminal_run_event_kind(kind: &str) -> bool {
+  matches!(
+    kind,
+    "workflow.completed"
+      | "workflow.failed"
+      | "workflow.cancelled"
+      | "skill_run_completed"
+      | "run_completed"
+      | "run.cancelled"
+  )
+}
+
+pub(crate) fn is_terminal_run_status(status: &str) -> bool {
+  matches!(status, "succeeded" | "failed" | "cancelled")
 }
 
 /// Internal stream item: a real event or a "you fell behind, reconnect" hint.
