@@ -27,7 +27,7 @@ pub struct CheckpointConfig {
 impl Default for CheckpointConfig {
   fn default() -> Self {
     Self {
-      checkpoint_dir: dirs::home_dir()
+      checkpoint_dir: std::env::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".yanshi")
         .join("checkpoints"),

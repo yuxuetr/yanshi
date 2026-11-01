@@ -63,6 +63,11 @@ _New entries go here. Will roll into the next tag (likely
   approval pipeline. Every caller already put the result straight into
   an `Arc`, so no bypass shipped; the type now rules it out. Register
   every tool before wrapping, and drop the caller's `Arc::new(...)`.
+- **`yanshi-graph` drops its `tokio` and `dirs` dependencies.** The only
+  runtime use of `tokio` was `From<tokio::time::error::Elapsed> for
+  YanshiError`, which nothing called and which reported
+  `duration_ms: 0`; it is removed. The default checkpoint dir uses
+  `std::env::home_dir`.
 - **`yanshi_tracing::StorageErrorPolicy::FailWorkflow` removed
   (`2125b36`).** It never failed a workflow: its `panic!` ran in the
   trace drain task after the workflow had finished, and the drain's

@@ -17,8 +17,6 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 async-trait = "0.1"
-tokio = { workspace = true, features = ["time"] }
-dirs = "5.0"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

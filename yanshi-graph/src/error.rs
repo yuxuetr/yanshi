@@ -344,14 +344,6 @@ impl From<std::io::Error> for YanshiError {
   }
 }
 
-impl From<tokio::time::error::Elapsed> for YanshiError {
-  fn from(_err: tokio::time::error::Elapsed) -> Self {
-    YanshiError::TimeoutExceeded {
-      duration_ms: 0, // Duration not available from Elapsed error
-    }
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
