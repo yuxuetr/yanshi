@@ -38,8 +38,8 @@
 //!
 //! ## Command translation
 //!
-//! `wrap_command` rewrites the `Command` wholesale (same pattern as
-//! [`crate::sandbox::macos::MacosSandboxExecBackend`]): the caller's
+//! `wrap_command` rewrites the `Command` wholesale (same pattern as the
+//! macOS-only `crate::sandbox::macos::MacosSandboxExecBackend`): the caller's
 //! program/args become the command run *inside* the container image, not on
 //! the host. `scope.working_directory` is bind-mounted into the container at
 //! a fixed path and becomes the container's own working directory —

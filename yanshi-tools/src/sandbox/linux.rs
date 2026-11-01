@@ -93,8 +93,8 @@
 //! cgroup v2 hierarchy (`memory.max` hard-caps resident memory with an
 //! OOM-kill on breach; `pids.max` hard-caps the whole descendant process
 //! tree, the primary defense against a fork bomb when [`Capability::Exec`]
-//! is granted) — see [`resolve_cgroup_root`] for how the writable cgroup
-//! directory is found (root vs. non-root) and [`setup_cgroup_for_spawn`]
+//! is granted) — see `resolve_cgroup_root` for how the writable cgroup
+//! directory is found (root vs. non-root) and `setup_cgroup_for_spawn`
 //! for how a per-spawn leaf cgroup is built and the child migrated into it.
 //! `max_cpu_secs` does **not** route through cgroups (`cpu.max` is a
 //! *rate* cap — a fraction of CPU per period — not the cumulative "total
@@ -104,7 +104,7 @@
 //! POSIX gives `RLIMIT_CPU` exactly the right semantics on both platforms.
 //!
 //! When no writable cgroup delegation is available (see
-//! [`resolve_cgroup_root`]'s doc comment for the non-root case), a call
+//! `resolve_cgroup_root`'s doc comment for the non-root case), a call
 //! that requested `max_memory_bytes` / `max_pids` degrades to spawning
 //! without them — logged via `tracing::warn!`, matching the same
 //! best-effort philosophy as a Landlock ruleset build failure above. This
@@ -372,7 +372,7 @@ fn apply_cpu_rlimit(max_cpu_secs: u64) -> std::io::Result<()> {
 /// systemd at all) rather than erroring; per the TODO's own "非 root 场景
 /// 走 systemd delegation 或降级 Permissive" allowance, callers degrade
 /// silently for that spawn rather than treat this as fatal.
-/// Probe, without side effects beyond [`resolve_cgroup_root`]'s own
+/// Probe, without side effects beyond `resolve_cgroup_root`'s own
 /// idempotent `subtree_control` writes, whether this process can actually
 /// delegate a usable cgroup v2 subtree right now. Exposed `pub` (the
 /// `linux` module itself is `pub`) so the integration test suite
