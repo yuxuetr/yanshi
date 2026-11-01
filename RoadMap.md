@@ -83,8 +83,18 @@ Each item below was checked against the code on 2026-11-01.
 
 - Walk the production deployment checklist in
   `docs/RELEASE_NOTES_v1.0.0-rc.1.md` (P7.4-FU4) on a real deployment.
-- Install the Helm chart (`charts/yanshi`) on a real cluster. It has only
-  been rendered and linted so far.
+- Install the Helm chart on a production-shaped cluster. On 2026-11-01 it
+  was installed on two single-node k3s v1.36 clusters (Postgres 18 and 16,
+  `securityProfile: production`, bearer token from `existingSecret`). The
+  smoke checks passed on both: probes, 401/403, a fixed DAG to `succeeded`
+  with SSE backfill, gateway policy rejecting a `shell` node, readiness
+  503 while Postgres is down, and runs surviving a pod restart. With
+  `replicaCount: 2`, cross-pod live SSE, cross-pod cancel and the
+  per-tenant admission cap also passed. The rehearsal found and fixed the
+  Dockerfile missing protoc, duplicated and never-closing SSE on the
+  non-executing replica, and the stale single-replica chart guard. Not yet
+  covered: multi-node scheduling, Ingress/TLS, autoscaling, image pulls
+  from a registry, and upgrades between chart versions.
 
 ### Features that exist only as library APIs
 
