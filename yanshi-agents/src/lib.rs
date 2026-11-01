@@ -1,14 +1,11 @@
-//! Yanshi Agents - Reusable AI Agent Applications
-//!
-//! This crate provides shared utilities, traits, and common components
-//! for building AI agent applications using Yanshi.
+//! Yanshi Agents - the agent-native runtimes (ReAct, Plan-Execute,
+//! supervisors, dynamic workflows) and their DAG composition helpers.
 //!
 //! ## ReAct Agent (Phase 1)
 //! Use [`react::ReActAgent`] for autonomous Thought/Action/Observation loops.
 
 pub mod checkpoint;
 pub mod citation;
-pub mod common;
 pub mod delegation;
 pub mod dynamic;
 pub mod eval;
@@ -26,12 +23,8 @@ pub use yanshi_agent_spi::runtime;
 pub mod supervisor;
 pub mod token_counter_adapter;
 pub mod tools;
-pub mod traits;
 
-// Re-export common types and utilities
 pub use checkpoint::FileLoopCheckpointer;
-pub use common::*;
-pub use traits::*;
 
 // Re-export core Yanshi types for convenience
 pub use yanshi_graph::{AsyncNode, YanshiError};

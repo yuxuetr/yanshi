@@ -68,6 +68,12 @@ _New entries go here. Will roll into the next tag (likely
   YanshiError`, which nothing called and which reported
   `duration_ms: 0`; it is removed. The default checkpoint dir uses
   `std::env::home_dir`.
+- **`yanshi_agents::{common, traits}` removed.** The PDF parser, batch
+  processor, file/output helpers and the `AgentApplication` /
+  `FileAgent` / `BatchAgent` / `AgentConfig` traits served only the
+  paper_* apps deleted earlier; nothing else used them, yet `pub use
+  common::*` put them at the crate root. `yanshi-agents` no longer
+  depends on `reqwest`.
 - **`yanshi_tracing::StorageErrorPolicy::FailWorkflow` removed
   (`2125b36`).** It never failed a workflow: its `panic!` ran in the
   trace drain task after the workflow had finished, and the drain's

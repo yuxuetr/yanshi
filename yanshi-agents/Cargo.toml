@@ -37,7 +37,6 @@ serde_yaml = "0.9"
 tokio = { workspace = true, features = ["full"] }
 # Concurrent supervisor children abort when their handle is dropped (eval A3).
 tokio-util = { version = "0.7.11", features = ["rt"] }
-reqwest = { workspace = true, features = ["multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 uuid = { workspace = true }
