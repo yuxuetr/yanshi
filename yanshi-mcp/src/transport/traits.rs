@@ -88,7 +88,7 @@ pub trait Transport: Send + Sync {
   /// `&self` so multiple concurrent calls can be in flight at once
   /// over the same transport. Implementations correlate responses
   /// back to the right caller via the JSON-RPC `id` field — see
-  /// [`StdioTransport`]'s reader-task + per-request oneshot
+  /// [`StdioTransport`](super::StdioTransport)'s reader-task + per-request oneshot
   /// demultiplexer.
   async fn send_message(&self, request: Value) -> MCPResult<Value>;
 
