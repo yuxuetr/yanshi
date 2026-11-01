@@ -54,6 +54,10 @@ _New entries go here. Will roll into the next tag (likely
   statuses don't. Workflows that branched on `status == 500` should use
   the node's failure instead. `HttpTool::send` (new) returns the real
   status and full body.
+- **`VectorStore::hybrid_search` removed.** Its default ignored `alpha`
+  and ran a plain similarity search; no store overrode it and nothing
+  called it. Hybrid retrieval is `retrieval::hybrid::HybridRetriever`,
+  which the `rag` node and `yanshi rag ops search` already use.
 - **`yanshi_tracing::StorageErrorPolicy::FailWorkflow` removed
   (`2125b36`).** It never failed a workflow: its `panic!` ran in the
   trace drain task after the workflow had finished, and the drain's

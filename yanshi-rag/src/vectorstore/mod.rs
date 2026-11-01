@@ -52,22 +52,6 @@ pub trait VectorStore: Send + Sync {
     filter: Option<Filter>,
   ) -> Result<Vec<SearchResult>>;
 
-  /// Hybrid search combining semantic and keyword search
-  async fn hybrid_search(
-    &self,
-    collection: &str,
-    query: &str,
-    top_k: usize,
-    _alpha: f32, // 0.0 = pure keyword, 1.0 = pure semantic
-    filter: Option<Filter>,
-  ) -> Result<Vec<SearchResult>> {
-    // Default implementation: fall back to semantic search
-    tracing::warn!("Hybrid search not implemented, falling back to semantic search");
-    self
-      .similarity_search(collection, query, top_k, filter)
-      .await
-  }
-
   /// Get collection statistics
   async fn get_collection_stats(&self, collection: &str) -> Result<CollectionStats>;
 }
