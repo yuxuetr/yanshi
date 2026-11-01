@@ -385,6 +385,27 @@ jobs:
       - name: Run workspace doc tests
         run: cargo test --workspace --doc
 
+  rustdoc:
+    # X7: the workspace went from 87 rustdoc warnings to 0 (4a450f5); this
+    # keeps it there. `--all-features` matches clippy so feature-gated
+    # items' doc comments (broken intra-doc links, unclosed HTML tags like
+    # `<name>`) are checked too.
+    name: cargo doc (deny warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # yanshi-server / yanshi-worker-proto build.rs needs protoc.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build workspace docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --all-features
+
   features:
     name: cargo check features (${{ matrix.name }})
     runs-on: ubuntu-latest
@@ -634,6 +655,7 @@ jobs:
       - proto-validate
       - test
       - doctest
+      - rustdoc
       - features
       - examples
       - rag-eval-smoke
@@ -657,6 +679,7 @@ jobs:
           echo "proto-validate: ${{ needs.proto-validate.result }}"
           echo "test: ${{ needs.test.result }}"
           echo "doctest: ${{ needs.doctest.result }}"
+          echo "rustdoc: ${{ needs.rustdoc.result }}"
           echo "features: ${{ needs.features.result }}"
           echo "examples: ${{ needs.examples.result }}"
           echo "rag-eval-smoke: ${{ needs.rag-eval-smoke.result }}"
@@ -676,6 +699,7 @@ jobs:
           test "${{ needs.proto-validate.result }}" = "success"
           test "${{ needs.test.result }}" = "success"
           test "${{ needs.doctest.result }}" = "success"
+          test "${{ needs.rustdoc.result }}" = "success"
           test "${{ needs.features.result }}" = "success"
           test "${{ needs.examples.result }}" = "success"
           test "${{ needs.rag-eval-smoke.result }}" = "success"
