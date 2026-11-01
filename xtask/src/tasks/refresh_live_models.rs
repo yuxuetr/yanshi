@@ -14,6 +14,12 @@
 //! Output (one row per provider): `status default-id (n alternatives shown)`.
 //! Status is one of:
 //!   - `ok`       — the hard-coded default appears in the provider's model list
+//!     and a one-message call to it did not return 404 (the call's HTTP
+//!     status is printed; a 400/429/5xx doesn't mean the model is gone)
+//!   - `uncallable` — listed in `/models`, but a real call returns 404. Google
+//!     keeps retired models listed while answering "no longer available to
+//!     new users" (seen with `gemini-2.5-flash`, 2026-11), so the listing
+//!     alone reports a false `ok`
 //!   - `missing`  — the default is NOT in the list; treat as a vendor-side
 //!     deprecation, copy a suggested replacement into the test
 //!     source or override via `YANSHI_LIVE_<P>_TEXT_MODEL` in
@@ -24,7 +30,7 @@
 //!
 //! Flags:
 //!   --keep-going        don't exit non-zero on per-provider HTTP errors
-//!   --include <name>    repeatable; restrict to a subset of providers
+//!   --include NAME      repeatable; restrict to a subset of providers
 //!
 //! The output is the source of truth — the operator copy-pastes the suggested
 //! replacement into `provider_consistency_live.rs::run_text_path` (the only
@@ -142,10 +148,23 @@ struct LiveProbeOutcome {
 
 #[derive(Debug, Clone)]
 enum ProbeStatus {
-  Ok,
-  Missing { suggestions: Vec<String> },
-  Skipped { reason: String },
-  Error { reason: String },
+  /// Listed, and the call's HTTP status was not 404.
+  Ok {
+    call_status: u16,
+  },
+  /// Listed, but calling it returned 404.
+  Uncallable {
+    body_excerpt: String,
+  },
+  Missing {
+    suggestions: Vec<String>,
+  },
+  Skipped {
+    reason: String,
+  },
+  Error {
+    reason: String,
+  },
 }
 
 pub fn refresh_live_models_from_args(
@@ -227,11 +246,13 @@ pub fn refresh_live_models_from_args(
   // Summary + exit code.
   let mut ok_count = 0usize;
   let mut missing_count = 0usize;
+  let mut uncallable_count = 0usize;
   let mut skipped_count = 0usize;
   let mut error_count = 0usize;
   for o in &outcomes {
     match o.status {
-      ProbeStatus::Ok => ok_count += 1,
+      ProbeStatus::Ok { .. } => ok_count += 1,
+      ProbeStatus::Uncallable { .. } => uncallable_count += 1,
       ProbeStatus::Missing { .. } => missing_count += 1,
       ProbeStatus::Skipped { .. } => skipped_count += 1,
       ProbeStatus::Error { .. } => error_count += 1,
@@ -239,9 +260,10 @@ pub fn refresh_live_models_from_args(
   }
   let _ = writeln!(
     out,
-    "\n[refresh] summary: {ok_count} ok, {missing_count} missing, {skipped_count} skipped, {error_count} error"
+    "\n[refresh] summary: {ok_count} ok, {missing_count} missing, {uncallable_count} uncallable, {skipped_count} skipped, {error_count} error"
   );
 
+  let missing_count = missing_count + uncallable_count;
   if missing_count > 0 {
     // Missing models are a soft failure — surface them but don't make
     // operators pass --keep-going. The whole point of the tool is to
@@ -249,7 +271,7 @@ pub fn refresh_live_models_from_args(
     // condition.
     let _ = writeln!(
       out,
-      "[refresh] {missing_count} provider(s) need attention; copy the suggested replacement into yanshi-llm/tests/provider_consistency_live.rs::run_text_path"
+      "[refresh] {missing_count} provider(s) need attention; update the default in yanshi-llm/tests/provider_consistency_live.rs and in this file's probe table"
     );
   }
   if error_count > 0 && !keep_going {
@@ -296,7 +318,7 @@ fn probe_provider(probe: &LiveModelProbe) -> LiveProbeOutcome {
     return LiveProbeOutcome {
       provider: probe.name,
       default_text_model: probe.default_text_model.to_string(),
-      status: ProbeStatus::Ok,
+      status: call_status(probe, &api_key),
     };
   }
   // Rolling-alias-with-dated-revisions fallback. Anthropic's
@@ -314,7 +336,7 @@ fn probe_provider(probe: &LiveModelProbe) -> LiveProbeOutcome {
     return LiveProbeOutcome {
       provider: probe.name,
       default_text_model: format!("{} (via dated revision {dated})", probe.default_text_model),
-      status: ProbeStatus::Ok,
+      status: call_status(probe, &api_key),
     };
   }
   // Missing: pick up to 3 plausible alternatives. The heuristic is
@@ -338,12 +360,20 @@ fn probe_provider(probe: &LiveModelProbe) -> LiveProbeOutcome {
 
 fn print_probe_line(out: &mut impl Write, outcome: &LiveProbeOutcome) {
   match &outcome.status {
-    ProbeStatus::Ok => {
+    ProbeStatus::Ok { call_status } => {
       let _ = writeln!(
         out,
-        "  ✓ {:<10} ok       default={}",
+        "  ✓ {:<10} ok       default={} (call HTTP {call_status})",
         outcome.provider, outcome.default_text_model
       );
+    }
+    ProbeStatus::Uncallable { body_excerpt } => {
+      let _ = writeln!(
+        out,
+        "  ✗ {:<10} uncallable default={} is listed in /models but a call returned 404",
+        outcome.provider, outcome.default_text_model
+      );
+      let _ = writeln!(out, "      {body_excerpt}");
     }
     ProbeStatus::Missing { suggestions } => {
       let _ = writeln!(
@@ -383,6 +413,109 @@ fn resolve_api_key(key_envs: &[&str]) -> Option<String> {
     }
   }
   None
+}
+
+/// Call the default model once and classify the result. Only a 404 means
+/// "this model is gone for this key"; a curl failure or any other status
+/// is reported but doesn't fail the model.
+fn call_status(probe: &LiveModelProbe, api_key: &str) -> ProbeStatus {
+  match call_default_model(probe, api_key) {
+    Ok((404, body)) => ProbeStatus::Uncallable {
+      body_excerpt: body
+        .chars()
+        .take(300)
+        .collect::<String>()
+        .replace('\n', " "),
+    },
+    Ok((status, _)) => ProbeStatus::Ok {
+      call_status: status,
+    },
+    Err(reason) => ProbeStatus::Error {
+      reason: format!("listed, but the test call failed: {reason}"),
+    },
+  }
+}
+
+/// The URL and JSON body of a minimal one-message call to `model`.
+fn call_request(endpoint: LiveModelsEndpoint, model: &str) -> (String, serde_json::Value) {
+  let message = serde_json::json!([{ "role": "user", "content": "ping" }]);
+  match endpoint {
+    LiveModelsEndpoint::OpenAICompat(models_url) => (
+      // Every OpenAI-compatible vendor here serves chat next to /models.
+      format!(
+        "{}/chat/completions",
+        models_url.trim_end_matches("/models")
+      ),
+      serde_json::json!({ "model": model, "messages": message, "max_tokens": 16 }),
+    ),
+    LiveModelsEndpoint::Anthropic(models_url) => (
+      format!("{}/messages", models_url.trim_end_matches("/models")),
+      serde_json::json!({ "model": model, "messages": message, "max_tokens": 16 }),
+    ),
+    LiveModelsEndpoint::Google(models_url) => (
+      format!("{models_url}/{model}:generateContent"),
+      serde_json::json!({
+        "contents": [{ "parts": [{ "text": "ping" }] }],
+        "generationConfig": { "maxOutputTokens": 16 },
+      }),
+    ),
+  }
+}
+
+/// POST the minimal call via `curl`; returns the HTTP status and body.
+fn call_default_model(probe: &LiveModelProbe, api_key: &str) -> Result<(u16, String)> {
+  let (url, body) = call_request(probe.endpoint, probe.default_text_model);
+  let mut cmd = Command::new("curl");
+  cmd
+    .arg("--silent")
+    .arg("--show-error")
+    .arg("--max-time")
+    .arg("60")
+    .arg("-X")
+    .arg("POST")
+    .arg("-H")
+    .arg("Content-Type: application/json");
+  match probe.endpoint {
+    LiveModelsEndpoint::OpenAICompat(_) => {
+      cmd
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {api_key}"));
+    }
+    LiveModelsEndpoint::Anthropic(_) => {
+      cmd.arg("-H").arg(format!("x-api-key: {api_key}"));
+      cmd.arg("-H").arg("anthropic-version: 2023-06-01");
+    }
+    LiveModelsEndpoint::Google(_) => {
+      cmd.arg("-H").arg(format!("x-goog-api-key: {api_key}"));
+    }
+  }
+  // The status goes on its own last line so it can be split off the body.
+  cmd
+    .arg("--write-out")
+    .arg("\n%{http_code}")
+    .arg("--data")
+    .arg(body.to_string())
+    .arg(&url);
+  let output = cmd
+    .output()
+    .with_context(|| format!("spawning curl for {}", probe.name))?;
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!("curl exited {} (stderr: {})", output.status, stderr.trim());
+  }
+  split_status(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Split curl's `<body>\n<status>` output.
+fn split_status(stdout: &str) -> Result<(u16, String)> {
+  let (body, status) = stdout
+    .rsplit_once('\n')
+    .ok_or_else(|| anyhow::anyhow!("curl output has no status line"))?;
+  let status = status
+    .trim()
+    .parse::<u16>()
+    .with_context(|| format!("parsing curl status {status:?}"))?;
+  Ok((status, body.to_string()))
 }
 
 /// Hit the provider's models endpoint via `curl` and return a sorted
@@ -556,11 +689,43 @@ mod refresh_live_models_tests {
     LiveModelProbe {
       name: "google",
       key_envs: &["GEMINI_API_KEY"],
-      default_text_model: "gemini-2.5-flash",
+      default_text_model: "gemini-3.5-flash",
       endpoint: LiveModelsEndpoint::Google(
         "https://generativelanguage.googleapis.com/v1beta/models",
       ),
     }
+  }
+
+  #[test]
+  fn call_request_targets_each_vendors_chat_endpoint() {
+    let (url, body) = call_request(openai_probe().endpoint, "gpt-4o-mini");
+    assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+    assert_eq!(body["model"], "gpt-4o-mini");
+    let (url, body) = call_request(
+      LiveModelsEndpoint::OpenAICompat("https://open.bigmodel.cn/api/paas/v4/models"),
+      "glm-5.1",
+    );
+    assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4/chat/completions");
+    assert_eq!(body["max_tokens"], 16);
+    let (url, _) = call_request(
+      LiveModelsEndpoint::Anthropic("https://api.anthropic.com/v1/models"),
+      "claude-haiku-4-5",
+    );
+    assert_eq!(url, "https://api.anthropic.com/v1/messages");
+    let (url, body) = call_request(google_probe().endpoint, "gemini-3.5-flash");
+    assert_eq!(
+      url,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+    );
+    assert_eq!(body["generationConfig"]["maxOutputTokens"], 16);
+  }
+
+  #[test]
+  fn split_status_takes_the_last_line_as_the_status() {
+    let (status, body) = split_status("{\"error\":\n\"gone\"}\n404").unwrap();
+    assert_eq!(status, 404);
+    assert_eq!(body, "{\"error\":\n\"gone\"}");
+    assert!(split_status("no status").is_err());
   }
 
   #[test]
