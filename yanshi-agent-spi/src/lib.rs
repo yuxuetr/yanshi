@@ -1,9 +1,9 @@
 //! `yanshi-agent-spi` — the agent-runtime contracts of the Yanshi kernel.
 //!
 //! Holds the interfaces a runtime loop and its governors agree on: the
-//! [`AgentRuntime`](runtime::AgentRuntime) trait, the structured
-//! [`AgentStep`](runtime::AgentStep) / [`AgentEvent`](runtime::AgentEvent)
-//! records, [`AgentContext`](runtime::AgentContext), `RuntimeLimits`, the
+//! [`AgentRuntime`] trait, the structured
+//! [`AgentStep`] / [`AgentEvent`]
+//! records, [`AgentContext`], `RuntimeLimits`, the
 //! cancellation token, and the event/memory hook traits.
 //!
 //! Extracted from `yanshi-agents` in P-A1.1 (RFC §4 agent-spi). The concrete
@@ -12,7 +12,7 @@
 //! paths. This lets `yanshi-harness` govern a runtime by depending on the
 //! contract rather than the `agents` impl crate (the P-A2.1 target).
 //!
-//! The [`capability`] module holds the [`Capability`](capability::Capability)
+//! The [`capability`] module holds the [`Capability`]
 //! contract (RFC §2): a packaged ability that `lower()`s to tools + context.
 //! `yanshi-skills` implements it for a Skill so a surface can merge any
 //! capability into a runtime's registry + prompt uniformly.

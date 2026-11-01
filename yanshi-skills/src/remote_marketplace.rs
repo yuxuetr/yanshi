@@ -561,7 +561,7 @@ impl Ed25519SignatureVerifier {
 }
 
 /// V3.5: shared Ed25519 key-loading logic, extracted from
-/// [`Ed25519SignatureVerifier::load_public_key`] so
+/// `Ed25519SignatureVerifier::load_public_key` so
 /// `yanshi-cli`'s plugin-signing path (a different manifest type,
 /// `yanshi_core::plugin::manifest::PluginSignature`, not
 /// [`MarketplaceSignature`]) can reuse the exact same key-file

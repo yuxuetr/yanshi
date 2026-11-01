@@ -613,8 +613,8 @@ impl HarnessRuntime {
   /// keeps working) and stamps `InterruptAnswered` as the first thing
   /// it does.
   ///
-  /// Only supports [`InnerRuntime::Opaque`] today — a
-  /// [`InnerRuntime::TurnDriven`]-wrapped runtime is type-erased behind
+  /// Only supports `InnerRuntime::Opaque` today — a
+  /// `InnerRuntime::TurnDriven`-wrapped runtime is type-erased behind
   /// [`TurnDrivenRuntime`], which has no equivalent resume method (that
   /// trait's whole point is the caller owning turn pacing, which
   /// doesn't compose with a one-shot resume call); `--context-refresh`

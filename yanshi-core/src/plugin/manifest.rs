@@ -190,11 +190,11 @@ pub struct Capabilities {
   /// "allow outbound network"; future versions may parse domain rules.
   #[serde(default)]
   pub network: Vec<String>,
-  /// Process / exec grants. Non-empty grants the [`Exec`-equivalent] cap.
+  /// Process / exec grants. Non-empty grants the `Exec`-equivalent cap.
   #[serde(default)]
   pub processes: Vec<String>,
   /// Allowed environment variable names. Non-empty grants the
-  /// [`Env`-equivalent] cap (the OS-sandbox layer cannot currently
+  /// `Env`-equivalent cap (the OS-sandbox layer cannot currently
   /// scrub env vars at exec time on macOS / Linux, so this is recorded
   /// for audit only).
   #[serde(default)]

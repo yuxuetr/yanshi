@@ -1,5 +1,5 @@
 //! `code_exec`: run LLM-generated Python inside a strongly-isolated
-//! [`ContainerBackend`] (S4.2, `docs/RFC_LLM_CODE_EXECUTION.md`).
+//! [`ContainerBackend`](crate::sandbox::container::ContainerBackend) (S4.2, `docs/RFC_LLM_CODE_EXECUTION.md`).
 //!
 //! Unlike [`crate::builtin::ScriptTool`] (which only ever runs author-signed,
 //! hash-pinned files under a skill's `scripts/` directory), `code_exec` runs
@@ -25,7 +25,7 @@
 //!
 //! **Mandatory strong isolation**: unlike `ScriptTool`/`ShellTool`'s opt-in
 //! `os_sandbox`, `code_exec` refuses to run at all
-//! ([`ToolError::SandboxViolation`]) when [`ContainerBackend::is_enforcing`]
+//! ([`ToolError::SandboxViolation`]) when [`ContainerBackend::is_enforcing`](crate::sandbox::container::ContainerBackend::is_enforcing)
 //! is false — there is no safe degraded mode for content that was never
 //! vetted (see `sandbox::container`'s module docs).
 

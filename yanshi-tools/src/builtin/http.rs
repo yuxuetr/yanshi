@@ -155,7 +155,7 @@ impl HttpTool {
 
   /// Build the tool (30 s timeout, no auto-redirects, Yanshi
   /// user-agent — the actual `reqwest::Client` used for each request is
-  /// built lazily per redirect hop, see [`Self::build_pinned_client`]).
+  /// built lazily per redirect hop, see `Self::build_pinned_client`).
   /// Q1.2.2: returns the build error instead of panicking — TLS init
   /// failures, OS resource exhaustion, or a fingerprint-cert load
   /// problem should never abort the host process. Validated eagerly

@@ -44,7 +44,7 @@ pub struct SqlitePreferenceStore {
 impl SqlitePreferenceStore {
   /// Open (or create) a preference database at `path`.
   ///
-  /// Q2.1.1/Q2.1.2: pool via [`sqlite_pool::build_pool`].
+  /// Q2.1.1/Q2.1.2: pool via `sqlite_pool::build_pool`.
   pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, MemoryError> {
     let pool = sqlite_pool::build_pool(path).await?;
     let store = Self { pool };

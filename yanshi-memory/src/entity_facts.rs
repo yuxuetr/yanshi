@@ -47,7 +47,7 @@ impl SqliteEntityFactStore {
   /// Open (or create) an entity-facts database at `path`.
   ///
   /// Q2.1.1/Q2.1.2: pool is built via the shared
-  /// [`sqlite_pool::build_pool`] helper (WAL + busy_timeout + FK).
+  /// `sqlite_pool::build_pool` helper (WAL + busy_timeout + FK).
   pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, MemoryError> {
     let pool = sqlite_pool::build_pool(path).await?;
     let store = Self { pool };

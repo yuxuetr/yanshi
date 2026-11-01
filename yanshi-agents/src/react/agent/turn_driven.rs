@@ -172,7 +172,7 @@ impl LoopState {
 /// runtime `SessionFinished` error. The object-safe [`LoopSession`] trait (which
 /// the Harness drives through `Box<dyn LoopSession>`) cannot express this — a
 /// `&mut self` method cannot consume the typestate — so that path keeps an
-/// internal runtime guard in [`ReActTurnDriver`].
+/// internal runtime guard in `ReActTurnDriver`.
 pub struct ReActLoopSession<'a> {
   pub(crate) agent: &'a mut ReActAgent,
   pub(crate) state: LoopState,

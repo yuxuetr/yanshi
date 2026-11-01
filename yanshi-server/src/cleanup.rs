@@ -504,8 +504,8 @@ async fn sweep_run_dir_local(root: &Path, days: i64, dry_run: bool) -> Result<u6
 
 /// V4.4: filesystem-only counterpart to [`cleanup_expired`] for callers
 /// with no Postgres connection at all — sweeps `run_dir_root` (via
-/// [`sweep_run_dir_local`]'s mtime-only heuristic) and `trace_dir_root`
-/// (via the already-DB-free [`sweep_trace_dir`]), skipping every
+/// `sweep_run_dir_local`'s mtime-only heuristic) and `trace_dir_root`
+/// (via the already-DB-free `sweep_trace_dir`), skipping every
 /// DB-backed sweep (`runs`/`events`/`artifacts`) entirely. The returned
 /// [`CleanupReport`]'s DB-related counters stay at their `Default::default()`
 /// zero rather than lying about work that was never attempted.

@@ -23,7 +23,7 @@ pub struct RagSearchTool {
 }
 
 impl RagSearchTool {
-  /// Wrap a backend with the default `top_k` of [`DEFAULT_TOP_K`].
+  /// Wrap a backend with the default `top_k` of `DEFAULT_TOP_K`.
   pub fn new(backend: Arc<dyn KnowledgeBackend>) -> Self {
     Self {
       backend,

@@ -51,7 +51,7 @@ use crate::tenant::TenantId;
 /// Postgres NOTIFY channel carrying cross-replica approval decisions
 /// (W4.2e). Unlike [`crate::runs::RUN_CANCELLATION_NOTIFY_CHANNEL`],
 /// `PendingApprovalRegistry::decide` needs the full decision — not just
-/// an id — so the payload is the JSON-encoded [`ApprovalDecisionNotifyPayload`]
+/// an id — so the payload is the JSON-encoded `ApprovalDecisionNotifyPayload`
 /// rather than a bare id string. Well under Postgres's ~8000-byte NOTIFY
 /// payload cap (a decision is a handful of short strings/timestamps).
 ///

@@ -1,6 +1,6 @@
 //! Monotonic event sequencing — [`Seq`] + [`SeqAllocator`] (P-A3.4).
 //!
-//! Every [`HarnessEvent`](crate::event::HarnessEvent) carries a `seq`: a
+//! Every [`HarnessEvent`] carries a `seq`: a
 //! per-session monotonic ordinal that lets a sink (JSONL replay, the SSE
 //! broker, the Postgres event log) reconstruct the exact order events were
 //! produced. The wire field stays a plain `u64` so the frozen beta contract is

@@ -485,7 +485,7 @@ pub struct KnowledgeConfig {
   /// tool searches with the caller's query verbatim.
   ///
   /// All rag-tier `[[knowledge]]` entries share one backend / one
-  /// `rag_search` tool (see [`crate::builder::register_knowledge_backends`]
+  /// `rag_search` tool (see `crate::builder::register_knowledge_backends`
   /// doc comment), so this is effectively a skill-wide setting: the first
   /// entry (in manifest order) that sets it wins. Skills with a single
   /// rag-tier entry — the common case — have no ambiguity here.

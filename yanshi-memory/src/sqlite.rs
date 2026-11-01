@@ -17,7 +17,7 @@ pub struct SqliteMemory {
 impl SqliteMemory {
   /// Open (or create) a SQLite database file at `path`.
   ///
-  /// Q2.1.1/Q2.1.2: connection goes through [`sqlite_pool::build_pool`]
+  /// Q2.1.1/Q2.1.2: connection goes through `sqlite_pool::build_pool`
   /// which applies WAL + `busy_timeout` + `foreign_keys` PRAGMAs and
   /// constructs the connect options from a raw path (no URL parsing,
   /// so paths with `?`/`#`/spaces no longer silently fail).

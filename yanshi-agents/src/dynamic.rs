@@ -281,7 +281,7 @@ pub fn compile_plan_to_flow(
 }
 
 /// Same as [`compile_plan_to_flow`], but any step whose id is a key in
-/// `precomputed` compiles to a [`PrecomputedResultNode`] instead of a real
+/// `precomputed` compiles to a `PrecomputedResultNode` instead of a real
 /// tool/agent node — used by [`DynamicWorkflowAgent::run_with_replan`] (L1.1)
 /// so a revised plan can carry forward already-succeeded steps without
 /// re-running them. No parent [`AgentStepGovernance`] — equivalent to
@@ -623,7 +623,7 @@ impl DynamicWorkflowAgent {
   /// whether it failed outright or was never attempted because an
   /// upstream dependency failed — is treated as still outstanding.
   /// Already-succeeded steps are never re-run: their results are carried
-  /// forward as [`PrecomputedResultNode`]s, and the planner is asked for a
+  /// forward as `PrecomputedResultNode`s, and the planner is asked for a
   /// revised plan covering only what's still missing, given the goal, the
   /// ids (and results) already available, and why the rest failed.
   /// Repeats until everything succeeds or `max_replans` revisions have

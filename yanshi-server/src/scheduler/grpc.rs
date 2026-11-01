@@ -54,8 +54,8 @@ fn extract_admission_token<T>(request: &Request<T>) -> Option<String> {
 }
 
 /// Server-side authenticated worker gRPC service. Each call extracts
-/// `authorization` metadata, builds a [`WorkerCredential`], and routes
-/// through [`AuthenticatedControlPlane`] which enforces PSK / JWT /
+/// `authorization` metadata, builds a [`WorkerCredential`](super::admission::WorkerCredential), and routes
+/// through [`AuthenticatedControlPlane`](super::admission::AuthenticatedControlPlane) which enforces PSK / JWT /
 /// fleet-cap admission before delegating to the inner protocol.
 ///
 /// Closes Q1.6.1: the unauthenticated [`GrpcWorkerService`] is still
@@ -89,7 +89,7 @@ where
   /// it binds its own independent socket and does not. Anyone who
   /// could reach that socket could inject arbitrary `WorkerTask`s into
   /// the queue, regardless of the configured admission policy. Now
-  /// routes through [`AuthenticatedControlPlane::admit_any`], the same
+  /// routes through [`AuthenticatedControlPlane::admit_any`](super::admission::AuthenticatedControlPlane::admit_any), the same
   /// identity-agnostic check documented for every RPC in
   /// `docs/DISTRIBUTED.md` § Worker Admission.
   async fn submit_task(

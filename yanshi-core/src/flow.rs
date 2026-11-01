@@ -1855,7 +1855,7 @@ fn map_outputs_with_summary(
 /// The `Flow` IR lives in `yanshi-graph`; this trait is the executor half of
 /// the IR ≠ executor split (P-A1.3, RFC §5). Bring it into scope
 /// (`use yanshi_core::FlowExt`) to run a flow. Every method delegates to the
-/// internal [`FlowExecutor`].
+/// internal `FlowExecutor`.
 pub trait FlowExt: Sized {
   /// Enable checkpointing with a custom configuration (validated eagerly).
   fn with_checkpointing(self, config: CheckpointConfig) -> Result<Self, YanshiError>;

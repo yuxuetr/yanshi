@@ -44,7 +44,7 @@ const DISTRIBUTED_SUPPORTED_NODE_TYPES: &[&str] =
 /// - any node with `run_if` set — `DistributedDagScheduler::is_ready`
 ///   never reads it, so a conditional node would execute unconditionally
 ///   instead of being silently skipped as the in-process executor would.
-/// - any node whose `type` isn't in [`DISTRIBUTED_SUPPORTED_NODE_TYPES`].
+/// - any node whose `type` isn't in `DISTRIBUTED_SUPPORTED_NODE_TYPES`.
 pub fn validate_distributed_flow(flow: &FlowDefinitionV2) -> Result<(), ApiError> {
   if !flow.inputs.is_empty() {
     return Err(ApiError::BadRequest(

@@ -47,7 +47,7 @@ pub struct SemanticMemory {
 impl SemanticMemory {
   /// Open (or create) a persistent SQLite database at `path`.
   ///
-  /// Q2.1.1/Q2.1.2: pool via [`sqlite_pool::build_pool`].
+  /// Q2.1.1/Q2.1.2: pool via `sqlite_pool::build_pool`.
   pub async fn open<P: AsRef<Path>>(
     path: P,
     embedder: Arc<dyn EmbeddingProvider>,

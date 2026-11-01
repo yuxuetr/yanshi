@@ -41,7 +41,7 @@ pub enum ReActError {
     attempts: usize,
   },
 
-  /// V2.4: [`ReActAgent::resume_from_loop_checkpoint`] was handed a
+  /// V2.4: [`ReActAgent::resume_from_loop_checkpoint`](crate::react::ReActAgent::resume_from_loop_checkpoint) was handed a
   /// checkpoint that isn't a valid resume target for this agent — e.g. a
   /// `PlanExecute` checkpoint, or one with an unsupported schema version.
   #[error("cannot resume from loop checkpoint: {message}")]
@@ -128,7 +128,7 @@ impl MemorySummaryBackend for CompactMemorySummary {
   }
 }
 
-/// Configuration for a [`ReActAgent`].
+/// Configuration for a [`ReActAgent`](crate::react::ReActAgent).
 #[derive(Debug, Clone)]
 pub struct ReActConfig {
   /// LLM model identifier (e.g. `"gpt-4o"`, `"claude-3-5-sonnet"`)
@@ -206,7 +206,7 @@ pub struct ReActConfig {
   /// fails to parse as JSON or fails schema validation is rejected with the
   /// validation errors fed back into memory and the loop continues for
   /// another attempt, bounded by [`Self::max_schema_correction_attempts`].
-  /// Unlike [`VerificationStrategy`] rejection (which force-accepts once
+  /// Unlike [`VerificationStrategy`](crate::verification::VerificationStrategy) rejection (which force-accepts once
   /// [`Self::max_verification_attempts`] is exhausted), exhausting the
   /// schema-correction budget is a hard [`ReActError::SchemaValidationFailed`]
   /// — a schema is a caller-declared hard contract, not an advisory
@@ -383,7 +383,7 @@ pub const FINAL_ANSWER_TOOL_NAME: &str = "final_answer";
 /// `output_schema` to know what shape to validate — `ask_user` needs no
 /// config to be safe, it's one inert extra tool spec until the model
 /// chooses to call it). Calling it pauses the loop with
-/// [`AgentStopReason::AwaitingInput`] instead of dispatching a real
+/// [`AgentStopReason::AwaitingInput`](crate::runtime::AgentStopReason::AwaitingInput) instead of dispatching a real
 /// tool — see `run_one_turn`'s interception, checked *before* the
 /// `final_answer` scan so a model batching both stops cleanly.
 pub const ASK_USER_TOOL_NAME: &str = "ask_user";

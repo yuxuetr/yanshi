@@ -12,8 +12,8 @@
 //! `yanshi_tracing::redaction` or `yanshi_llm::prompt_fingerprint`.
 //!
 //! The grammar of a "bad" call is intentionally narrow:
-//!   (debug|info|warn|error)!(... <danger> = (%|?) ...)
-//! where <danger> is one of `DANGER_FIELDS`. Trailing-suffix variants like
+//!   (debug|info|warn|error)!(... `<danger>` = (%|?) ...)
+//! where `<danger>` is one of `DANGER_FIELDS`. Trailing-suffix variants like
 //! `prompt_len`, `prompt_sha`, `response_fingerprint`, `body_size` are safe
 //! because they encode a metric, not the raw value, so the pattern only
 //! matches the danger word followed by whitespace + `=`.

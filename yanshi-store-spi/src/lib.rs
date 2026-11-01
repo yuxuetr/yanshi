@@ -3,31 +3,31 @@
 //! This crate holds the *interfaces and data types* for the kernel's
 //! storage axes:
 //!
-//! - **Conversation memory** — the [`MemoryStore`](store::MemoryStore) trait,
-//!   the [`Message`](types::Message) / [`Role`](types::Role) /
-//!   [`TokenCounter`](types::TokenCounter) types, and the shared
-//!   [`MemoryError`](error::MemoryError). The concrete stores (`SessionMemory`,
+//! - **Conversation memory** — the [`MemoryStore`] trait,
+//!   the [`Message`] / [`Role`] /
+//!   [`TokenCounter`] types, and the shared
+//!   [`MemoryError`]. The concrete stores (`SessionMemory`,
 //!   `SqliteMemory`, `SemanticMemory`, …) remain in `yanshi-memory`, which
 //!   re-exports everything here under its original paths.
-//! - **Knowledge retrieval** — the [`KnowledgeBackend`](knowledge::KnowledgeBackend)
-//!   trait + [`KnowledgeChunk`](knowledge::KnowledgeChunk) /
-//!   [`KnowledgeError`](knowledge::KnowledgeError) (RFC §9). The concrete
+//! - **Knowledge retrieval** — the [`KnowledgeBackend`]
+//!   trait + [`KnowledgeChunk`] /
+//!   [`KnowledgeError`] (RFC §9). The concrete
 //!   backends (BM25 in-memory + vector store) live in `yanshi-rag`.
 //! - **Task summary checkpoint** (L2.1) — the
-//!   [`TaskSummaryStore`](task_summary::TaskSummaryStore) trait +
-//!   [`TaskSummary`](task_summary::TaskSummary), a structured "task
+//!   [`TaskSummaryStore`] trait +
+//!   [`TaskSummary`], a structured "task
 //!   narrative" checkpoint distinct from the raw message log, generated on
 //!   memory compaction and surfaced again on the next run for the same
 //!   session. Concrete stores live in `yanshi-memory`.
 //! - **Project memory** (L3.1, U2.5) — the
-//!   [`ProjectMemoryStore`](project::ProjectMemoryStore) trait +
-//!   [`ProjectFact`](project::ProjectFact) + [`project_key_for_path`](project::project_key_for_path),
+//!   [`ProjectMemoryStore`] trait +
+//!   [`ProjectFact`] + [`project_key_for_path`],
 //!   durable facts about a project shared across every session that runs
 //!   against it. Concrete stores (`InMemoryProjectMemoryStore` /
 //!   `SqliteProjectMemoryStore`) live in `yanshi-memory`.
-//! - **Preference** (U2.6) — the [`PreferenceStore`](preference::PreferenceStore)
-//!   trait + [`PreferenceScope`](preference::PreferenceScope) /
-//!   [`PreferenceValue`](preference::PreferenceValue), durable per-user
+//! - **Preference** (U2.6) — the [`PreferenceStore`]
+//!   trait + [`PreferenceScope`] /
+//!   [`PreferenceValue`], durable per-user
 //!   key/value storage. U2.2/U2.5 originally left this off `store-spi`
 //!   because its write methods took `&mut self`; U2.6 found that
 //!   constraint wasn't load-bearing (see `preference` module docs) and

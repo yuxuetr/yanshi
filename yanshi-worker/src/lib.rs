@@ -13,9 +13,9 @@
 //! - `template` → [`yanshi_nodes::nodes::template::TemplateNode`]
 //! - `file` → [`yanshi_nodes::nodes::file::FileNode`]
 //! - `mock` → in-crate stub used by the scheduler smoke tests
-//! - `llm` → [`yanshi_nodes::nodes::llm::LlmNode`]
+//! - `llm` → [`yanshi_nodes_ai::nodes::llm::LlmNode`]
 //! - `http` → [`yanshi_nodes::nodes::http::HttpNode`]
-//! - `mcp` → [`yanshi_nodes::nodes::mcp::MCPNode`]
+//! - `mcp` → [`yanshi_nodes_ai::nodes::mcp::MCPNode`]
 //! - `agent` → minimal [`yanshi_agents::react::ReActAgent`] loop with an
 //!   empty [`yanshi_tools::ToolRegistry`]
 //!

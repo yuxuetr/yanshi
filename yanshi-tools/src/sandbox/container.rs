@@ -1,8 +1,8 @@
 //! Strongly-isolated `ContainerBackend` for the `code_exec` tool (S4.2,
 //! `docs/RFC_LLM_CODE_EXECUTION.md`).
 //!
-//! The existing OS sandbox backends ([`crate::sandbox::macos`],
-//! [`crate::sandbox::linux`]) are syscall/path-scoped containment on top of
+//! The existing OS sandbox backends (`crate::sandbox::macos`,
+//! `crate::sandbox::linux`) are syscall/path-scoped containment on top of
 //! the *shared host kernel* — the right tier for author-signed content
 //! (`ScriptTool`), but explicitly called out by the RFC as insufficient once
 //! the content being run is adversarial by construction on every single
@@ -90,7 +90,7 @@
 //! ## Non-root execution (mandatory)
 //!
 //! The container always runs as a fixed unprivileged uid
-//! ([`CONTAINER_UID`]), for two reasons verified empirically this session:
+//! (`CONTAINER_UID`), for two reasons verified empirically this session:
 //! defense in depth for adversarial content, and because Linux's kernel
 //! exempts root (uid 0) from `RLIMIT_NPROC` entirely — the `max_pids`
 //! `--ulimit nproc=` limit below is silently unenforced against a root

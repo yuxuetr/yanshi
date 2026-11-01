@@ -7,7 +7,7 @@
 //! multi-megabyte `file:write` body went whole into the JSONL / SSE log.
 //! Both the runtime's post-step translation
 //! ([`crate::runtime`]) and the hook layer's approval path
-//! ([`crate::hooks_runtime`]) now funnel through [`redact_and_cap`] so the
+//! ([`crate::hooks_runtime`]) now funnel through `redact_and_cap` so the
 //! contract holds uniformly and the redaction call is not duplicated.
 
 use yanshi_tracing::redaction::{RedactionConfig, redact_value};

@@ -589,7 +589,7 @@ impl PlanExecuteAgent {
   /// retry within one run — see that type's doc comment), `PlanExecuteAgent`
   /// plans in a single LLM call per attempt; there's no iterative loop to
   /// hook a retry into internally. So a schema mismatch here retries the
-  /// *whole* cycle via [`Self::run_with_context_once`], which is the
+  /// *whole* cycle via `Self::run_with_context_once`, which is the
   /// architecturally honest equivalent for a "plan once, execute" runtime.
   /// Byte-identical to the pre-V2.1 single-call behaviour when
   /// `output_schema` is `None`.

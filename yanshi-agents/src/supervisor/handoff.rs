@@ -182,7 +182,7 @@ pub enum HandoffSupervisorError {
 /// another participant.
 ///
 /// Implements [`AgentRuntime`], so it can be embedded in [`AgentNode`] just
-/// like a [`ReActAgent`] or [`PlanExecuteAgent`].
+/// like a [`ReActAgent`](crate::react::ReActAgent) or [`PlanExecuteAgent`].
 ///
 /// [`AgentNode`]: crate::nodes::AgentNode
 /// [`PlanExecuteAgent`]: crate::PlanExecuteAgent
@@ -510,7 +510,7 @@ impl HandoffSupervisorBuilder {
 
   /// Register an agent. The factory receives the shared [`HandoffTool`] and
   /// must include it in the constructed agent's tool registry. Accepts any
-  /// [`AgentRuntime`] (W3.2) — a [`ReActAgent`], a [`PlanExecuteAgent`], or
+  /// [`AgentRuntime`] (W3.2) — a [`ReActAgent`](crate::react::ReActAgent), a [`PlanExecuteAgent`], or
   /// even a nested [`Supervisor`](crate::Supervisor) — not just `ReActAgent`.
   ///
   /// [`PlanExecuteAgent`]: crate::PlanExecuteAgent

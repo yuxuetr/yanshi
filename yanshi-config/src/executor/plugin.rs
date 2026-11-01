@@ -194,7 +194,7 @@ fn env_truthy(name: &str) -> bool {
   matches!(std::env::var(name), Ok(v) if !matches!(v.as_str(), "" | "0"))
 }
 
-/// Errors returned by [`select_preparer`]. Today there's exactly one,
+/// Errors returned by `select_preparer`. Today there's exactly one,
 /// kept as an enum so future policy gates (signature-required, network
 /// admission band) can land additively without breaking callers.
 #[derive(Debug)]

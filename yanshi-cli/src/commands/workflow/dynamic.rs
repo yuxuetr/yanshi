@@ -23,7 +23,7 @@
 //! - `--approve none|cli|auto-allow|auto-deny` routes every call through the
 //!   Harness [`wrap_registry`] approval pipeline (the same `Arc<ToolRegistry>`
 //!   is shared by the planner and the compiler, so governance is not
-//!   bypassed); [`RequireApprovalForEveryCall`] makes that true regardless of
+//!   bypassed); `RequireApprovalForEveryCall` makes that true regardless of
 //!   `--profile`, since `HookConfig`'s own escalation only auto-requires
 //!   approval for `production`. T1.3: leaving `--approve` unset defaults to
 //!   `cli` under `local`/`production` — an LLM-authored plan is adversarial

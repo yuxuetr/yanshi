@@ -1,13 +1,13 @@
 //! `yanshi harness resume-loop` — resume a ReAct or Plan-Execute agent
 //! loop from its last saved
-//! [`yanshi_agent_spi::checkpoint::AgentLoopCheckpoint`] (V2.4),
+//! [`AgentLoopCheckpoint`](yanshi_agents::checkpoint::AgentLoopCheckpoint) (V2.4),
 //! continuing from the interrupted turn instead of restarting the
 //! session from scratch.
 //!
 //! Distinct from `yanshi harness resume`, which is JSONL-replay-only
 //! (it re-prints the persisted event log and never touches the agent
 //! loop). This command rebuilds the agent exactly as `harness run` does
-//! (same [`super::run::build_agent`] helper, so tool registry / memory /
+//! (same `super::run::build_agent` helper, so tool registry / memory /
 //! skill wiring stay identical, and `--runtime` selects the same
 //! `ReActAgent` / `PlanExecuteAgent` dispatch), loads the checkpoint
 //! `harness run` wrote by default, and dispatches to the matching
@@ -15,7 +15,7 @@
 //! execution.
 //!
 //! V2.3: also resolves an answer to a pending
-//! [`yanshi_agent_spi::runtime::AgentStopReason::AwaitingInput`]
+//! [`AgentStopReason::AwaitingInput`](yanshi_agents::runtime::AgentStopReason::AwaitingInput)
 //! question — from `--answer`, or an interactive stdin prompt when the
 //! checkpoint is paused and `--answer` is omitted.
 //!

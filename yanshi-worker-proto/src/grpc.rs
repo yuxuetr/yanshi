@@ -94,9 +94,9 @@ impl GrpcWorkerProtocol {
 
   /// Pin the admission token attached to every outgoing call as
   /// `authorization: Bearer <token>` metadata. Required when the
-  /// server side runs [`AuthenticatedGrpcWorkerService`]; harmless
+  /// server side runs `AuthenticatedGrpcWorkerService`; harmless
   /// (just ignored) when the server is the unauthenticated
-  /// [`GrpcWorkerService`].
+  /// `GrpcWorkerService`.
   pub fn with_admission_token(mut self, token: impl Into<String>) -> Self {
     self.admission_token = Some(Arc::from(token.into()));
     self
@@ -458,7 +458,7 @@ pub fn worker_heartbeat_from_proto(
   })
 }
 
-/// Convert a `pb::ClaimTaskRequest` into a [`ClaimHints`]
+/// Convert a `pb::ClaimTaskRequest` into a [`ClaimHints`](crate::protocol::ClaimHints)
 /// (P10.16.2-FU1). Empty values map cleanly to "no preference"
 /// so pre-FU1 workers continue to get FIFO dispatch.
 pub fn claim_hints_from_proto(
