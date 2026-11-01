@@ -21,10 +21,12 @@ use axum::{
   http::{Request, StatusCode, header::CONTENT_TYPE},
 };
 use futures::future::join_all;
+use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
 use yanshi_db::Database;
 use yanshi_server::AppState;
+use yanshi_server::runs::{RunContext, RunExecutor};
 
 const FIXED_DAG_WORKFLOW: &str = r#"
 name: Cross-Replica Admission Test DAG
@@ -34,6 +36,14 @@ nodes:
     parameters:
       template: "hello cross-replica"
 "#;
+
+/// Leaves every run `queued`, so it holds its admission slot.
+struct NeverFinishes;
+
+#[async_trait::async_trait]
+impl RunExecutor for NeverFinishes {
+  async fn execute(&self, _ctx: RunContext) {}
+}
 
 fn live_url() -> Option<String> {
   std::env::var("YANSHI_DATABASE_TEST_URL").ok()
@@ -46,8 +56,17 @@ async fn two_replica_states(
   let db_a = Database::connect_and_migrate(&url, 8).await.ok()?;
   let db_b = Database::connect(&url, 8).await.ok()?;
 
-  let state_a = AppState::new(db_a).with_security_defaults(defaults.clone());
-  let state_b = AppState::new(db_b).with_security_defaults(defaults);
+  // Admitted runs must keep their slot for the whole burst. With the real
+  // executor a template run finishes in milliseconds, frees its slot, and
+  // a later submission in the same burst is legitimately admitted — the
+  // test then fails on fast machines (3 or 4 of 4 admitted) and passes on
+  // slow ones.
+  let state_a = AppState::new(db_a)
+    .with_security_defaults(defaults.clone())
+    .with_executor(Arc::new(NeverFinishes));
+  let state_b = AppState::new(db_b)
+    .with_security_defaults(defaults)
+    .with_executor(Arc::new(NeverFinishes));
 
   Some((state_a, state_b))
 }
