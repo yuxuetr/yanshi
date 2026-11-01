@@ -40,13 +40,8 @@ fn live_url() -> Option<String> {
 async fn two_replica_states() -> Option<(AppState, AppState)> {
   let url = live_url()?;
   let db_a = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query(
-    "TRUNCATE harness_sessions, harness_session_events, approval_decision_intents \
-     RESTART IDENTITY CASCADE",
-  )
-  .execute(&db_a.pool)
-  .await
-  .ok()?;
+  // No TRUNCATE: tests run in parallel and each uses fresh ids, so a
+  // global reset only races sibling tests.
   let db_b = Database::connect(&url, 4).await.ok()?;
 
   let state_a = AppState::new(db_a.clone());

@@ -32,10 +32,8 @@ fn live_url() -> Option<String> {
 async fn fresh_state() -> Option<AppState> {
   let url = live_url()?;
   let db = Database::connect_and_migrate(&url, 4).await.ok()?;
-  sqlx::query("TRUNCATE runs RESTART IDENTITY CASCADE")
-    .execute(&db.pool)
-    .await
-    .ok()?;
+  // No TRUNCATE: tests run in parallel and each uses fresh ids, so a
+  // global reset only races sibling tests.
   Some(AppState::new(db))
 }
 
