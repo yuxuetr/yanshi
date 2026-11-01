@@ -16,6 +16,7 @@
 //! This ensures the Agent continues to run even when the embedding service is
 //! temporarily unreachable.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -204,6 +205,67 @@ impl SemanticMemory {
     Ok(())
   }
 
+  /// The `k` messages of `session_id` whose embeddings are most similar
+  /// to `query_vec`, best first, with their cosine scores. `None` when
+  /// the session has no embeddings (callers fall back to keyword search).
+  /// The matched messages load in one query rather than one per hit.
+  async fn ranked_messages(
+    &self,
+    session_id: &str,
+    query_vec: &[f32],
+    k: usize,
+  ) -> Result<Option<Vec<(Message, f32)>>, MemoryError> {
+    let rows = sqlx::query("SELECT message_id, vector FROM embeddings WHERE session_id = ?1")
+      .bind(session_id)
+      .fetch_all(&self.pool)
+      .await
+      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
+    if rows.is_empty() {
+      return Ok(None);
+    }
+
+    let mut scored: Vec<(String, f32)> = rows
+      .iter()
+      .filter_map(|row| {
+        let msg_id: String = row.try_get("message_id").ok()?;
+        let bytes: Vec<u8> = row.try_get("vector").ok()?;
+        let score = Self::cosine_similarity(query_vec, &Self::blob_to_vec(&bytes));
+        Some((msg_id, score))
+      })
+      .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k);
+    if scored.is_empty() {
+      return Ok(Some(Vec::new()));
+    }
+
+    let placeholders = vec!["?"; scored.len()].join(", ");
+    let sql = format!(
+      "SELECT id, session_id, role, content, timestamp, tool_name, token_count
+       FROM messages WHERE id IN ({placeholders})"
+    );
+    let mut fetch = sqlx::query(&sql);
+    for (msg_id, _) in &scored {
+      fetch = fetch.bind(msg_id);
+    }
+    let mut by_id: HashMap<String, Message> = fetch
+      .fetch_all(&self.pool)
+      .await
+      .map_err(|e| MemoryError::StorageError(e.to_string()))?
+      .iter()
+      .filter_map(|row| {
+        let id: String = row.try_get("id").ok()?;
+        Some((id, row_to_message(row).ok()?))
+      })
+      .collect();
+    Ok(Some(
+      scored
+        .into_iter()
+        .filter_map(|(msg_id, score)| by_id.remove(&msg_id).map(|message| (message, score)))
+        .collect(),
+    ))
+  }
+
   /// Keyword (LIKE) fallback used when embeddings are unavailable.
   async fn keyword_search(
     &self,
@@ -355,53 +417,13 @@ impl MemoryStore for SemanticMemory {
   ) -> Result<Vec<Message>, MemoryError> {
     // Attempt semantic search; degrade to keyword on any failure
     match self.embedder.embed_text(query).await {
-      Ok(query_vec) => {
-        // Load all stored embedding vectors for this session
-        let rows = sqlx::query("SELECT message_id, vector FROM embeddings WHERE session_id = ?1")
-          .bind(session_id)
-          .fetch_all(&self.pool)
-          .await
-          .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
-        if rows.is_empty() {
+      Ok(query_vec) => match self.ranked_messages(session_id, &query_vec, limit).await? {
+        Some(ranked) => Ok(ranked.into_iter().map(|(message, _)| message).collect()),
+        None => {
           tracing::debug!("No embeddings for session {session_id} — using keyword search");
-          return self.keyword_search(session_id, query, limit).await;
+          self.keyword_search(session_id, query, limit).await
         }
-
-        // Score all stored vectors
-        let mut scored: Vec<(String, f32)> = rows
-          .iter()
-          .filter_map(|row| {
-            let msg_id: String = row.try_get("message_id").ok()?;
-            let bytes: Vec<u8> = row.try_get("vector").ok()?;
-            let vec = Self::blob_to_vec(&bytes);
-            let score = Self::cosine_similarity(&query_vec, &vec);
-            Some((msg_id, score))
-          })
-          .collect();
-
-        // Descending by score
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(limit);
-
-        // Fetch the matching messages (preserving score order)
-        let mut messages = Vec::with_capacity(scored.len());
-        for (msg_id, _score) in &scored {
-          if let Some(row) = sqlx::query(
-            "SELECT id, session_id, role, content, timestamp, tool_name, token_count
-                         FROM messages WHERE id = ?1",
-          )
-          .bind(msg_id)
-          .fetch_optional(&self.pool)
-          .await
-          .map_err(|e| MemoryError::StorageError(e.to_string()))?
-            && let Ok(msg) = row_to_message(&row)
-          {
-            messages.push(msg);
-          }
-        }
-        Ok(messages)
-      }
+      },
       Err(e) => {
         tracing::warn!("Query embedding failed, using keyword search: {}", e);
         self.keyword_search(session_id, query, limit).await
@@ -473,47 +495,13 @@ impl crate::layer::SemanticMemoryStore for SemanticMemory {
       }
     };
 
-    let rows = sqlx::query("SELECT message_id, vector FROM embeddings WHERE session_id = ?1")
-      .bind(session_id)
-      .fetch_all(&self.pool)
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?;
-
-    if rows.is_empty() {
-      let fallback = self.keyword_search(session_id, query, k).await?;
-      return Ok(fallback.into_iter().map(|m| (m, 0.0)).collect());
-    }
-
-    let mut scored: Vec<(String, f32)> = rows
-      .iter()
-      .filter_map(|row| {
-        let msg_id: String = row.try_get("message_id").ok()?;
-        let bytes: Vec<u8> = row.try_get("vector").ok()?;
-        let vec = Self::blob_to_vec(&bytes);
-        let score = Self::cosine_similarity(&query_vec, &vec);
-        Some((msg_id, score))
-      })
-      .collect();
-
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(k);
-
-    let mut out = Vec::with_capacity(scored.len());
-    for (msg_id, score) in scored {
-      if let Some(row) = sqlx::query(
-        "SELECT id, session_id, role, content, timestamp, tool_name, token_count
-         FROM messages WHERE id = ?1",
-      )
-      .bind(&msg_id)
-      .fetch_optional(&self.pool)
-      .await
-      .map_err(|e| MemoryError::StorageError(e.to_string()))?
-        && let Ok(msg) = row_to_message(&row)
-      {
-        out.push((msg, score));
+    match self.ranked_messages(session_id, &query_vec, k).await? {
+      Some(ranked) => Ok(ranked),
+      None => {
+        let fallback = self.keyword_search(session_id, query, k).await?;
+        Ok(fallback.into_iter().map(|m| (m, 0.0)).collect())
       }
     }
-    Ok(out)
   }
 }
 
@@ -816,6 +804,28 @@ mod tests {
     let results = mem.search(sid, "avocado", 1).await.unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].content, "apple");
+  }
+
+  #[tokio::test]
+  async fn search_semantic_keeps_score_order_across_hits() {
+    use crate::layer::SemanticMemoryStore;
+    let mem = in_mem(4).await;
+    let sid = "order-session";
+    for text in ["cherry", "apple", "banana", "date"] {
+      mem.add_message(Message::user(sid, text)).await.unwrap();
+    }
+
+    let hits = mem.search_semantic(Some(sid), "avocado", 3).await.unwrap();
+    assert_eq!(hits.len(), 3);
+    assert_eq!(hits[0].0.content, "apple");
+    assert!(
+      hits.windows(2).all(|pair| pair[0].1 >= pair[1].1),
+      "best first: {:?}",
+      hits
+        .iter()
+        .map(|(m, s)| (&m.content, s))
+        .collect::<Vec<_>>()
+    );
   }
 
   #[tokio::test]
