@@ -99,6 +99,13 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **The `Dockerfile` builds again.** The builder stage never installed
+  `protoc`, which `yanshi-worker-proto`'s `build.rs` needs, so
+  `docker build .` failed and the release `build-docker` job (which only
+  runs on a tag) would have failed too. The builder now installs
+  `protobuf-compiler`. Found by installing `charts/yanshi` on a real
+  k3s cluster.
+
 - **Retention sweep covers harness sessions and approval intents.** The
   cleanup sweep only reaped runs, events and artifacts, so
   `harness_sessions`, `harness_session_events`,
