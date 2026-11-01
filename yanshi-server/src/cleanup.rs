@@ -4,7 +4,9 @@
 //!
 //! 1. **DB sweep**: delete `events` older than `events_retention_days`,
 //!    `artifacts` older than `artifacts_retention_days`, and terminal
-//!    `runs` whose `finished_at` is older than `runs_retention_days`.
+//!    `runs` whose `finished_at` is older than `runs_retention_days`;
+//!    terminal harness sessions (with their events and checkpoints) and
+//!    approval decision intents past the same window.
 //!    Active runs (`queued` / `running`) are never touched. Cascading
 //!    foreign keys take care of `steps` and any per-run children.
 //! 2. **Filesystem sweep**: walk `run_dir_root` and delete directories
@@ -132,6 +134,14 @@ pub struct CleanupReport {
   /// when the trace dir is unset.
   #[serde(default)]
   pub trace_files_deleted: u64,
+  /// Terminal harness sessions past `runs_retention_days`; their events
+  /// and loop checkpoints cascade.
+  #[serde(default)]
+  pub harness_sessions_deleted: u64,
+  /// Approval decision intents decided more than `runs_retention_days`
+  /// ago (each is relayed to the parked replica within moments).
+  #[serde(default)]
+  pub approval_intents_deleted: u64,
   pub started_at: DateTime<Utc>,
   pub finished_at: DateTime<Utc>,
 }
@@ -170,6 +180,12 @@ pub async fn cleanup_expired(
     report.runs_deleted = terminal_ids.len() as u64;
   }
 
+  let days = config.runs_retention_days as i64;
+  report.harness_sessions_deleted =
+    sweep_or_count(&db.pool, EXPIRED_HARNESS_SESSIONS, days, config.dry_run).await?;
+  report.approval_intents_deleted =
+    sweep_or_count(&db.pool, EXPIRED_APPROVAL_INTENTS, days, config.dry_run).await?;
+
   // 2. Filesystem sweep (best-effort; never fail the whole call when
   //    a single dir errors — record the issue and continue).
   if let Some(root) = run_dir_root {
@@ -207,6 +223,35 @@ pub async fn cleanup_expired(
     report.artifacts_deleted,
   );
   Ok(report)
+}
+
+/// `FROM ... WHERE ...` clauses for [`sweep_or_count`]; `$1` is days.
+const EXPIRED_HARNESS_SESSIONS: &str = "FROM harness_sessions \
+   WHERE status IN ('completed', 'failed', 'cancelled') \
+     AND finished_at IS NOT NULL \
+     AND finished_at < NOW() - $1::INT * INTERVAL '1 day'";
+const EXPIRED_APPROVAL_INTENTS: &str = "FROM approval_decision_intents \
+   WHERE decided_at < NOW() - $1::INT * INTERVAL '1 day'";
+
+/// Delete the rows `from_where` selects, or count them on a dry run.
+async fn sweep_or_count(
+  pool: &PgPool,
+  from_where: &str,
+  days: i64,
+  dry_run: bool,
+) -> Result<u64, CleanupError> {
+  if dry_run {
+    let row = sqlx::query(&format!("SELECT COUNT(*)::BIGINT AS n {from_where}"))
+      .bind(days as i32)
+      .fetch_one(pool)
+      .await?;
+    return Ok(row.get::<i64, _>("n") as u64);
+  }
+  let result = sqlx::query(&format!("DELETE {from_where}"))
+    .bind(days as i32)
+    .execute(pool)
+    .await?;
+  Ok(result.rows_affected())
 }
 
 async fn list_terminal_runs(pool: &PgPool, days: i64) -> Result<Vec<Uuid>, CleanupError> {
@@ -745,6 +790,8 @@ mod tests {
       run_dirs_skipped_active: 1,
       run_ids_targeted: vec![Uuid::nil()],
       trace_files_deleted: 0,
+      harness_sessions_deleted: 0,
+      approval_intents_deleted: 0,
       started_at: Utc::now(),
       finished_at: Utc::now(),
     };

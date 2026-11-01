@@ -682,6 +682,8 @@ fn spawn_cleanup_loop(
             artifacts_deleted = report.artifacts_deleted,
             run_dirs_deleted = report.run_dirs_deleted,
             trace_files_deleted = report.trace_files_deleted,
+            harness_sessions_deleted = report.harness_sessions_deleted,
+            approval_intents_deleted = report.approval_intents_deleted,
             "background cleanup completed"
           );
         }

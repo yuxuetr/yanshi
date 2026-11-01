@@ -88,6 +88,16 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **Retention sweep covers harness sessions and approval intents.** The
+  cleanup sweep only reaped runs, events and artifacts, so
+  `harness_sessions`, `harness_session_events`,
+  `harness_loop_checkpoints` and `approval_decision_intents` grew
+  forever. Terminal harness sessions finished more than
+  `runs_retention_days` ago are now deleted (their events and
+  checkpoints cascade), as are approval intents decided before that
+  window. `CleanupReport` gains `harness_sessions_deleted` and
+  `approval_intents_deleted`.
+
 - **BM25 and MMR handle Chinese/Japanese text.** Terms were whitespace
   splits, so an unspaced sentence was one token and a Chinese query
   matched nothing short of the whole sentence; MMR's Jaccard similarity

@@ -111,6 +111,95 @@ async fn cleanup_dry_run_targets_old_terminal_runs_without_deleting() {
   );
 }
 
+async fn insert_harness_session(
+  db: &Database,
+  status: &str,
+  finished_days_ago: Option<i64>,
+) -> Uuid {
+  let id = Uuid::new_v4();
+  sqlx::query(
+    "INSERT INTO harness_sessions
+       (id, status, user_input, workspace_root, profile, runtime_kind, model, finished_at)
+     VALUES ($1, $2, 'hi', '/tmp', 'local', 'react', 'mock', $3)",
+  )
+  .bind(id)
+  .bind(status)
+  .bind(finished_days_ago.map(|days| Utc::now() - Duration::days(days)))
+  .execute(&db.pool)
+  .await
+  .unwrap();
+  sqlx::query(
+    "INSERT INTO harness_session_events (session_id, seq, kind, payload)
+     VALUES ($1, 0, 'session_started', '{}')",
+  )
+  .bind(id)
+  .execute(&db.pool)
+  .await
+  .unwrap();
+  id
+}
+
+async fn count(db: &Database, sql: &str, id: &str) -> i64 {
+  sqlx::query_scalar(sql)
+    .bind(id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn cleanup_sweeps_expired_harness_sessions_and_approval_intents() {
+  let _guard = CLEANUP_MUTEX.lock().await;
+  let Some(db) = fresh_db().await else {
+    eprintln!("skipping cleanup_sweeps_expired_harness_sessions_and_approval_intents");
+    return;
+  };
+
+  let old = insert_harness_session(&db, "completed", Some(60)).await;
+  let young = insert_harness_session(&db, "failed", Some(1)).await;
+  let running = insert_harness_session(&db, "running", None).await;
+  let old_intent = Uuid::new_v4().to_string();
+  let young_intent = Uuid::new_v4().to_string();
+  for (session, age_days) in [(&old_intent, 60), (&young_intent, 1)] {
+    sqlx::query(
+      "INSERT INTO approval_decision_intents (session_id, request_id, tenant_id, decision, decided_at)
+       VALUES ($1, 'r', 'default', '{}', $2)",
+    )
+    .bind(session)
+    .bind(Utc::now() - Duration::days(age_days))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+  }
+  let sessions = "SELECT COUNT(*) FROM harness_sessions WHERE id::TEXT = $1";
+  let events = "SELECT COUNT(*) FROM harness_session_events WHERE session_id::TEXT = $1";
+  let intents = "SELECT COUNT(*) FROM approval_decision_intents WHERE session_id = $1";
+
+  let cfg = CleanupConfig::for_profile(SecurityProfile::Local).with_dry_run(true);
+  let report = cleanup_expired(&db, None, None, &cfg).await.unwrap();
+  assert!(report.harness_sessions_deleted >= 1 && report.approval_intents_deleted >= 1);
+  assert_eq!(
+    count(&db, sessions, &old.to_string()).await,
+    1,
+    "dry run keeps rows"
+  );
+
+  let cfg = CleanupConfig::for_profile(SecurityProfile::Local);
+  let report = cleanup_expired(&db, None, None, &cfg).await.unwrap();
+  assert!(report.harness_sessions_deleted >= 1 && report.approval_intents_deleted >= 1);
+  assert_eq!(count(&db, sessions, &old.to_string()).await, 0);
+  assert_eq!(
+    count(&db, events, &old.to_string()).await,
+    0,
+    "events cascade"
+  );
+  for kept in [young, running] {
+    assert_eq!(count(&db, sessions, &kept.to_string()).await, 1, "{kept}");
+  }
+  assert_eq!(count(&db, intents, &old_intent).await, 0);
+  assert_eq!(count(&db, intents, &young_intent).await, 1);
+}
+
 #[tokio::test]
 async fn cleanup_deletes_terminal_runs_past_retention() {
   let _guard = CLEANUP_MUTEX.lock().await;
