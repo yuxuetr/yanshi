@@ -99,6 +99,15 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **Helm chart no longer refuses `replicaCount > 1`.** The W4.2a guard
+  (fail unless `allowMultiReplica=true`) and its "process-local, not yet
+  fixed" warning outlived W4.2, which moved SSE fan-out, run admission
+  and approval/cancellation onto Postgres. Both are removed and
+  `allowMultiReplica` is ignored. Verified with two replicas on k3s:
+  live SSE, cancel and the per-tenant concurrency cap all work across
+  pods. `docs/DEPLOYMENT.md` now lists what stays per pod (the run
+  artifact dir, the opt-in SQLite harness memory).
+
 - **Cross-replica SSE: no duplicate events, and the stream ends.** A
   `GET /v1/runs/{id}/events` subscriber on a replica that was not
   executing the run received every event that predated its

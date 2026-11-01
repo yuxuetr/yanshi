@@ -206,31 +206,32 @@ A `HorizontalPodAutoscaler` template is available but disabled by
 default (`autoscaling.enabled: false`) to keep the prior single-replica
 behavior for existing installs unchanged.
 
-**W4.2a — running more than one `yanshi-server` replica is not yet
-safe.** `yanshi-server` keeps several pieces of state process-local:
-SSE event fan-out (a run's live events only reach subscribers on the
-same pod that's executing it), per-tenant run-admission concurrency and
-rate limits (each pod enforces its own independent counter, so N
-replicas silently multiply the effective limit by N), and harness
-approval/cancellation routing (a decide/cancel request landing on a
-different pod than the one running the session either 404s or silently
-no-ops while still reporting success). This is tracked as `TODOs.md`
-W4.2 and not yet fixed. The chart therefore refuses to render
-`replicaCount > 1` or `autoscaling.minReplicas > 1` unless you set
-`allowMultiReplica: true` — an explicit, informed opt-out for operators
-who understand and accept the gaps above (or who have their own
-session-affine routing in front of the gateway that sidesteps most of
-them).
+**Running more than one replica.** Since W4.2 every piece of gateway
+state that has to be shared goes through Postgres: SSE fan-out (a
+subscriber on any pod sees a run executing on another), per-tenant run
+admission (one concurrency count and rate window per tenant, not one per
+pod), and run/harness approval and cancellation (a decide or cancel
+request works on whichever pod it lands on). Any pod can serve any
+request, so no session affinity is needed. Two things stay per pod:
 
-Once you've read that and decided to proceed, enable HPA to scale on
-CPU (and optionally memory) utilization:
+- the run artifact dir (`YANSHI_RUN_DIR`, the `scratch` emptyDir), so
+  `run_dir` paths in `GET /v1/runs/{id}` refer to the pod that ran it
+  and are lost when that pod goes away. The database stays the system
+  of record for runs and events.
+- the opt-in SQLite harness memory (`YANSHI_HARNESS_MEMORY_DB`, see
+  below), which assumes a single node.
+
+Earlier chart versions refused `replicaCount > 1` unless
+`allowMultiReplica=true` was set; that guard is gone and the value is
+ignored.
+
+To scale on CPU (and optionally memory) utilization, enable the HPA:
 
 ```bash
 helm install yanshi charts/yanshi \
   --set image.repository=yanshi \
   --set image.tag=server \
   --set existingSecret=yanshi-db \
-  --set allowMultiReplica=true \
   --set autoscaling.enabled=true \
   --set autoscaling.minReplicas=2 \
   --set autoscaling.maxReplicas=5 \
