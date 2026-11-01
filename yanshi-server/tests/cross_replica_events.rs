@@ -64,7 +64,7 @@ async fn event_published_via_replica_a_reaches_a_subscriber_on_replica_b() {
   };
 
   let run_id = Uuid::new_v4();
-  let tenant_id = "default".to_string();
+  let tenant_id = format!("tenant-cross-events-{}", Uuid::new_v4());
   state_a
     .repos
     .runs
@@ -87,6 +87,7 @@ async fn event_published_via_replica_a_reaches_a_subscriber_on_replica_b() {
     .oneshot(
       Request::builder()
         .uri(format!("/v1/runs/{run_id}/events"))
+        .header("X-Yanshi-Tenant", &tenant_id)
         .body(Body::empty())
         .unwrap(),
     )
@@ -152,7 +153,7 @@ async fn replica_with_no_local_subscriber_does_not_create_a_channel_entry() {
   };
 
   let run_id = Uuid::new_v4();
-  let tenant_id = "default".to_string();
+  let tenant_id = format!("tenant-cross-events-{}", Uuid::new_v4());
   state_a
     .repos
     .runs
@@ -190,5 +191,93 @@ async fn replica_with_no_local_subscriber_does_not_create_a_channel_entry() {
     state_b.event_broker.receiver_count(run_id),
     0,
     "replica B must not create a channel entry for a run nobody local is watching"
+  );
+}
+
+/// Regression (found on a 2-replica k3s install): a subscriber on the
+/// replica that is *not* executing the run got every event that predated
+/// its subscription twice — once from the DB backfill, then again live.
+/// Replica B's channel for the run is brand new (`last_forwarded_seq =
+/// -1`), so the next NOTIFY made the catch-up fetch re-page from the
+/// start and republish what the backfill had already sent.
+#[tokio::test]
+async fn subscriber_on_replica_b_sees_backfilled_events_exactly_once() {
+  let Some((state_a, state_b)) = two_replica_states().await else {
+    eprintln!("skipping subscriber_on_replica_b_sees_backfilled_events_exactly_once");
+    return;
+  };
+
+  let run_id = Uuid::new_v4();
+  let tenant_id = format!("tenant-cross-events-{}", Uuid::new_v4());
+  state_a
+    .repos
+    .runs
+    .create(NewRun {
+      id: run_id,
+      workflow: "@test".to_string(),
+      status: RunStatus::Running,
+      run_dir: None,
+      tenant_id: tenant_id.clone(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
+    })
+    .await
+    .expect("run row created via replica A");
+
+  let publish = |seq: i64, kind: &str| {
+    let repos = state_a.repos.clone();
+    let broker = state_a.event_broker.clone();
+    let event = NewEvent {
+      run_id,
+      seq,
+      kind: kind.to_string(),
+      payload: json!({"seq": seq}),
+      tenant_id: Some(tenant_id.clone()),
+    };
+    async move { events_stream::publish_through(&repos, &broker, event).await }
+  };
+
+  // Two events land before anyone on replica B is watching.
+  publish(0, "workflow.started").await.expect("seq 0");
+  publish(1, "node.started").await.expect("seq 1");
+
+  let app_b = create_router(state_b.clone());
+  let sse_response = app_b
+    .oneshot(
+      Request::builder()
+        .uri(format!("/v1/runs/{run_id}/events"))
+        .header("X-Yanshi-Tenant", &tenant_id)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(sse_response.status(), StatusCode::OK);
+  let mut body = sse_response.into_body().into_data_stream();
+  tokio::time::sleep(Duration::from_millis(150)).await;
+
+  publish(2, "workflow.completed").await.expect("seq 2");
+
+  let mut buf = String::new();
+  let read = timeout(Duration::from_secs(10), async {
+    while let Some(Ok(chunk)) = body.next().await {
+      buf.push_str(&String::from_utf8_lossy(&chunk));
+    }
+  })
+  .await;
+  assert!(
+    read.is_ok(),
+    "stream did not end on the terminal event. captured:\n{buf}"
+  );
+
+  let ids: Vec<&str> = buf
+    .lines()
+    .filter_map(|line| line.strip_prefix("id:"))
+    .map(str::trim)
+    .collect();
+  assert_eq!(
+    ids,
+    ["0", "1", "2"],
+    "each event exactly once, in order. captured:\n{buf}"
   );
 }

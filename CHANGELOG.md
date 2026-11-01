@@ -99,6 +99,17 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **Cross-replica SSE: no duplicate events, and the stream ends.** A
+  `GET /v1/runs/{id}/events` subscriber on a replica that was not
+  executing the run received every event that predated its
+  subscription twice (DB backfill, then again from the NOTIFY
+  catch-up, which re-paged from seq 0 for the freshly created
+  channel), and its stream never closed after the terminal event,
+  because the live tail only stopped when a *further* event arrived
+  and nobody closes that replica's channel. The live tail now drops
+  events with `seq` at or below the last one sent and ends right
+  after the terminal event. Found on a 2-replica k3s install.
+
 - **The `Dockerfile` builds again.** The builder stage never installed
   `protoc`, which `yanshi-worker-proto`'s `build.rs` needs, so
   `docker build .` failed and the release `build-docker` job (which only

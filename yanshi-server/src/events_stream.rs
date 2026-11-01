@@ -487,22 +487,7 @@ pub async fn stream_events(
   let live_stream = if finished {
     futures::future::Either::Left(futures::stream::empty())
   } else {
-    futures::future::Either::Right(
-      BroadcastStream::new(receiver)
-        .map(|res| match res {
-          Ok(event) => BrokerItem::Event(event),
-          Err(BroadcastStreamRecvError::Lagged(_)) => BrokerItem::Lagged,
-        })
-        .scan(false, |ended, item| {
-          if *ended {
-            return futures::future::ready(None);
-          }
-          if let BrokerItem::Event(event) = &item {
-            *ended = is_terminal_run_event_kind(&event.kind);
-          }
-          futures::future::ready(Some(item))
-        }),
-    )
+    futures::future::Either::Right(live_events(receiver, after_seq))
   };
   let stream = backfill_stream
     .chain(live_stream)
@@ -515,6 +500,45 @@ pub async fn stream_events(
         .interval(Duration::from_secs(15))
         .text("keep-alive"),
     ),
+  )
+}
+
+/// The live tail of an SSE stream: broker events with `seq > last_seq`,
+/// ending right after the first terminal event.
+///
+/// The seq filter is what keeps the backfill and the live channel from
+/// overlapping. On a replica that isn't executing the run, the channel
+/// is created by this subscription with no forwarded history, so the
+/// next NOTIFY catch-up republishes everything from seq 0 — including
+/// what the backfill already sent. The same overlap can happen locally
+/// for an event published between `subscribe` and the backfill query.
+///
+/// Ending inside `unfold` matters: stopping only when the next item
+/// arrives would hang forever on a replica whose channel nobody closes.
+fn live_events(
+  receiver: broadcast::Receiver<StreamedEvent>,
+  last_seq: i64,
+) -> impl futures::Stream<Item = BrokerItem> {
+  futures::stream::unfold(
+    (BroadcastStream::new(receiver), last_seq, false),
+    |(mut inner, mut last_seq, ended)| async move {
+      if ended {
+        return None;
+      }
+      loop {
+        match inner.next().await? {
+          Ok(event) if event.seq <= last_seq => continue,
+          Ok(event) => {
+            last_seq = event.seq;
+            let terminal = is_terminal_run_event_kind(&event.kind);
+            return Some((BrokerItem::Event(event), (inner, last_seq, terminal)));
+          }
+          Err(BroadcastStreamRecvError::Lagged(_)) => {
+            return Some((BrokerItem::Lagged, (inner, last_seq, false)));
+          }
+        }
+      }
+    },
   )
 }
 
