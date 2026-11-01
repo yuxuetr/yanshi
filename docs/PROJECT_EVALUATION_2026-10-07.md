@@ -191,7 +191,7 @@
 | 项 | 证据 |
 |---|---|
 | ✔ **`yanshi-tool`（52 个测试）、`yanshi-tools-ai`（19 个）、`xtask`（86 个）不在 CI 测试矩阵里** | `quality.yml:281-314` |
-| 没有覆盖率门禁、没有 MSRV、没有 cargo-deny；没有 `cargo doc -D warnings`，而 CLAUDE.md 的提交前清单要求它 | — |
+| 没有覆盖率门禁、没有 MSRV、没有 cargo-deny；~~没有 `cargo doc -D warnings`，而 CLAUDE.md 的提交前清单要求它~~（2026-11-01 已加 `rustdoc` CI 任务，`8f739ad`） | — |
 | 本地没设 `YANSHI_DATABASE_TEST_URL` 时，37 个 DB 测试**静默通过**；CI 里也没有"必须连上 DB"的断言 | — |
 | `[workspace.dependencies]` 只收了 4 个包；Cargo.lock 中 55 个 crate 存在多个版本（reqwest 0.12/0.13、prost 0.13/0.14 等） | `Cargo.toml:61-65` |
 | crate 版本分散在 0.1.0、0.2.0、0.3.0-alpha，而 `v1.0.0-rc.1` tag 已经存在 | — |

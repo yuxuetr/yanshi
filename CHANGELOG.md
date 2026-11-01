@@ -604,6 +604,12 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Changed
 
+- **CI now fails on rustdoc warnings.** A new `rustdoc` job in
+  `quality.yml` runs `cargo doc --workspace --no-deps --all-features`
+  with `RUSTDOCFLAGS=-D warnings` and is part of `release-gate`. Its
+  first run caught intra-doc links in `yanshi-tools`' sandbox modules
+  that only resolve on macOS; they are now plain code spans.
+
 - **Three giant files split into modules, no behavior change (W5.4).**
   `yanshi-agents/src/react/agent.rs` (8,254 lines, one inherent
   `impl ReActAgent` block of 62 methods) split into
