@@ -61,6 +61,13 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Security
 
+- **`arxiv` node: HTTPS only, bounded download and unpack.** Search used
+  plain `http://export.arxiv.org`; requests had no timeout; the e-print
+  archive was read and gunzipped without a size cap (a gzip bomb could
+  exhaust memory). Requests now refuse non-HTTPS URLs and time out at
+  60 s; the archive is capped at 50 MiB and its decompressed source at
+  200 MiB.
+
 - `shell` / `script` children no longer inherit the host environment;
   only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`,
   `TERM` plus explicitly set vars pass through (`7e84236`).

@@ -36,7 +36,7 @@ static ARXIV_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
   reason = "compile-time regex literals; covered by unit tests in module"
 )]
 static ARXIV_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
-  Regex::new(r"<id>http://arxiv\.org/abs/(\d{4}\.\d{4,5})(?:v(\d+))?</id>")
+  Regex::new(r"<id>https?://arxiv\.org/abs/(\d{4}\.\d{4,5})(?:v(\d+))?</id>")
     .expect("ARXIV_ID_RE pattern is malformed — this is a bug in yanshi-nodes")
 });
 #[allow(
@@ -68,6 +68,62 @@ static LATEX_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"\\[a-zA-Z@]+\s*(?:\\\[.*?\])?\s*(?:\{.*?\})?")
     .expect("LATEX_TAG_RE is malformed — bug in yanshi-nodes")
 });
+
+/// Largest e-print archive the node downloads.
+const MAX_ARCHIVE_BYTES: usize = 50 * 1024 * 1024;
+/// Largest decompressed source it unpacks (a gzip bomb stops here).
+const MAX_EXPANDED_BYTES: usize = 200 * 1024 * 1024;
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn async_error(message: impl std::fmt::Display) -> YanshiError {
+  YanshiError::AsyncExecutionError {
+    message: message.to_string(),
+  }
+}
+
+fn http_client() -> Result<reqwest::Client, YanshiError> {
+  reqwest::Client::builder()
+    .timeout(REQUEST_TIMEOUT)
+    .https_only(true)
+    .build()
+    .map_err(async_error)
+}
+
+/// Read a response body, failing once it exceeds `limit` bytes.
+async fn read_body_bounded(
+  mut response: reqwest::Response,
+  limit: usize,
+) -> Result<Vec<u8>, YanshiError> {
+  if response
+    .content_length()
+    .is_some_and(|len| len > limit as u64)
+  {
+    return Err(async_error(format!("arXiv archive exceeds {limit} bytes")));
+  }
+  let mut body = Vec::new();
+  while let Some(chunk) = response.chunk().await.map_err(async_error)? {
+    if body.len() + chunk.len() > limit {
+      return Err(async_error(format!("arXiv archive exceeds {limit} bytes")));
+    }
+    body.extend_from_slice(&chunk);
+  }
+  Ok(body)
+}
+
+/// Gunzip `compressed`, failing once the output exceeds `limit` bytes.
+fn gunzip_bounded(compressed: &[u8], limit: usize) -> Result<Vec<u8>, YanshiError> {
+  let mut expanded = Vec::new();
+  GzDecoder::new(compressed)
+    .take(limit as u64 + 1)
+    .read_to_end(&mut expanded)
+    .map_err(async_error)?;
+  if expanded.len() > limit {
+    return Err(async_error(format!(
+      "arXiv source expands beyond {limit} bytes"
+    )));
+  }
+  Ok(expanded)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArxivNode {
@@ -209,15 +265,18 @@ impl ArxivNode {
     // Use arXiv API to search for papers
     let encoded_query = urlencoding::encode(query);
     let api_url = format!(
-      "http://export.arxiv.org/api/query?search_query=all:{}&start=0&max_results=1",
+      "https://export.arxiv.org/api/query?search_query=all:{}&start=0&max_results=1",
       encoded_query
     );
 
-    let response = reqwest::get(&api_url)
-      .await
-      .map_err(|e| YanshiError::AsyncExecutionError {
-        message: format!("Failed to search arXiv: {}", e),
-      })?;
+    let response =
+      http_client()?
+        .get(&api_url)
+        .send()
+        .await
+        .map_err(|e| YanshiError::AsyncExecutionError {
+          message: format!("Failed to search arXiv: {}", e),
+        })?;
 
     let body = response
       .text()
@@ -256,25 +315,14 @@ impl ArxivNode {
       v_id = paper_id,
       v_num = version
     );
-    let response = reqwest::get(&url)
+    let response = http_client()?
+      .get(&url)
+      .send()
       .await
-      .map_err(|e| YanshiError::AsyncExecutionError {
-        message: e.to_string(),
-      })?;
-    let compressed_bytes =
-      response
-        .bytes()
-        .await
-        .map_err(|e| YanshiError::AsyncExecutionError {
-          message: e.to_string(),
-        })?;
-    let mut decoder = GzDecoder::new(&compressed_bytes[..]);
-    let mut decompressed_data = Vec::new();
-    decoder
-      .read_to_end(&mut decompressed_data)
-      .map_err(|e| YanshiError::AsyncExecutionError {
-        message: e.to_string(),
-      })?;
+      .and_then(reqwest::Response::error_for_status)
+      .map_err(async_error)?;
+    let compressed_bytes = read_body_bounded(response, MAX_ARCHIVE_BYTES).await?;
+    let decompressed_data = gunzip_bounded(&compressed_bytes, MAX_EXPANDED_BYTES)?;
     let mut archive = Archive::new(&decompressed_data[..]);
 
     let mut main_content = String::new();
@@ -348,12 +396,39 @@ fn contains_document_marker(content: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-  use super::contains_document_marker;
+  use super::{ARXIV_ID_RE, contains_document_marker, gunzip_bounded};
 
   /// Q3.8.6 regression: pre-fix the search literal was
   /// `r"\\begin{document}"` (two backslashes) and therefore never
   /// matched real LaTeX (which uses a single backslash). Confirm
   /// both a positive (real LaTeX) and negative (no marker) sample.
+  #[test]
+  fn gunzip_stops_at_the_expansion_limit() {
+    use flate2::{Compression, write::GzEncoder};
+    use std::io::Write;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(&vec![0u8; 1024 * 1024]).unwrap();
+    let bomb = encoder.finish().unwrap();
+    assert!(bomb.len() < 4096, "1 MiB of zeros compresses to a few KiB");
+
+    let err = gunzip_bounded(&bomb, 64 * 1024).unwrap_err();
+    assert!(err.to_string().contains("expands beyond"), "{err}");
+    assert_eq!(
+      gunzip_bounded(&bomb, 1024 * 1024).unwrap().len(),
+      1024 * 1024
+    );
+  }
+
+  #[test]
+  fn search_result_ids_parse_over_either_scheme() {
+    for scheme in ["http", "https"] {
+      let body = format!("<id>{scheme}://arxiv.org/abs/2401.01234v3</id>");
+      let caps = ARXIV_ID_RE.captures(&body).unwrap();
+      assert_eq!(&caps[1], "2401.01234");
+      assert_eq!(&caps[2], "3");
+    }
+  }
+
   #[test]
   fn detects_real_latex_begin_document_marker() {
     let real_latex = r#"\documentclass{article}
