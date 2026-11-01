@@ -530,6 +530,12 @@ async fn assert_live_stream_non_empty(mut stream: Box<dyn yanshi_llm::StreamingR
   );
 }
 
+/// Default Google text model for the text and streaming live tests.
+/// `gemini-1.5-flash` was retired from v1beta; `gemini-2.0-flash` and
+/// (since 2026-11) `gemini-2.5-flash` are "no longer available to new
+/// users" (404) even though `/v1beta/models` still lists them.
+const GOOGLE_TEXT_MODEL: &str = "gemini-3.5-flash";
+
 /// Minimum-cost model per provider for live smoke tests.
 ///
 /// Override via the matching env var when a provider deprecates a model. The
@@ -794,10 +800,7 @@ where
     // both 404 against current Anthropic tiers; `claude-haiku-4-5` is the
     // current cheapest model per CLAUDE.md.
     "anthropic" => live_text_model(provider_name, "claude-haiku-4-5"),
-    // `gemini-1.5-flash` was retired from v1beta; `gemini-2.0-flash` is
-    // "no longer available to new users" per the API; `gemini-2.5-flash`
-    // is the current cheap-tier model.
-    "google" => live_text_model(provider_name, "gemini-2.5-flash"),
+    "google" => live_text_model(provider_name, GOOGLE_TEXT_MODEL),
     // The whole `moonshot-v1-*` lineage disappeared from Moonshot's
     // `/v1/models` on 2026-08-31 (404 `resource_not_found_error`);
     // `kimi-k2.6` is the cheapest chat model still listed.
@@ -874,7 +877,7 @@ async fn google_live_streaming_path() {
   };
   let provider =
     GoogleProvider::with_client(no_proxy_client(), &api_key, None).expect("google provider");
-  let model = live_text_model("google", "gemini-2.5-flash");
+  let model = live_text_model("google", GOOGLE_TEXT_MODEL);
 
   let stream = tokio::time::timeout(
     Duration::from_secs(30),

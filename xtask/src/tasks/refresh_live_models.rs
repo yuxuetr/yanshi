@@ -54,7 +54,9 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
   LiveModelProbe {
     name: "google",
     key_envs: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-    default_text_model: "gemini-2.5-flash",
+    // Listed is not callable: `gemini-2.5-flash` stays in `/models` but
+    // 404s for new keys, which this listing check cannot see.
+    default_text_model: "gemini-3.5-flash",
     endpoint: LiveModelsEndpoint::Google("https://generativelanguage.googleapis.com/v1beta/models"),
   },
   LiveModelProbe {
