@@ -311,7 +311,7 @@ async fn main() -> Result<()> {
     .with_max_iterations(4)
     .with_budget_tokens(60_000);
   let mut agent =
-    ReActAgent::new(config, memory, Arc::new(wrapped_registry)).with_session_id(session_id);
+    ReActAgent::new(config, memory, wrapped_registry).with_session_id(session_id);
 
   // ── 4. Drive the agent ─────────────────────────────────────────────
   let prompt = if let Some(diff) = &prefetched_diff {

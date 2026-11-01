@@ -457,7 +457,7 @@ async fn build_session_agent(
     LoopRuntimeKind::React => Box::new(build_session_react_agent(inputs, hook_config).await?),
     LoopRuntimeKind::PlanExecute => {
       let tools = build_default_tool_registry(&inputs.workspace_root)?;
-      let registry = Arc::new(wrap_registry(tools, hook_config));
+      let registry = wrap_registry(tools, hook_config);
       let memory = build_harness_memory().await?;
       let plan_config = PlanExecuteConfig::new(&inputs.model);
       Box::new(PlanExecuteAgent::new(plan_config, memory, registry))
@@ -490,7 +490,7 @@ async fn build_session_react_agent(
     let registry = wrap_registry(tools, hook_config);
     let react_config = ReActConfig::new(&inputs.model);
     let memory = build_harness_memory().await?;
-    return Ok(ReActAgent::new(react_config, memory, Arc::new(registry)));
+    return Ok(ReActAgent::new(react_config, memory, registry));
   };
 
   let manifest = SkillLoader::load(skill_dir).map_err(|e| {
@@ -521,7 +521,7 @@ async fn build_session_react_agent(
     snapshot.register(tool);
   }
   let wrapped = wrap_registry(snapshot, hook_config);
-  agent = agent.with_tools(Arc::new(wrapped));
+  agent = agent.with_tools(wrapped);
   Ok(agent)
 }
 

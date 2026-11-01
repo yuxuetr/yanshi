@@ -114,7 +114,7 @@ pub async fn execute(
 
   // Optionally decorate every tool with the Harness approval/audit pipeline.
   let registry = match approve_provider(&approve)? {
-    None => registry,
+    None => Arc::new(registry),
     Some(provider) => {
       let sinks =
         SinkChain::new().push(Arc::new(StdoutEventSink::new()) as Arc<dyn HarnessEventSink>);
@@ -134,7 +134,6 @@ pub async fn execute(
       wrap_registry(registry, hook_config)
     }
   };
-  let registry = Arc::new(registry);
 
   // One up-front planning call against the (governed) tool table. The agent
   // requires a `FlowRunner` for its own `run()`, though this command compiles +

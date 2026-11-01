@@ -698,7 +698,7 @@ async fn build_chat_runtime(
     for tool in agent.tools().list() {
       snapshot.register(tool);
     }
-    agent = agent.with_tools(Arc::new(wrap_registry(snapshot, hook_config)));
+    agent = agent.with_tools(wrap_registry(snapshot, hook_config));
   }
 
   // `context_refresh && plan_execute` was already rejected above, so

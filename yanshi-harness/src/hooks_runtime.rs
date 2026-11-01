@@ -212,12 +212,12 @@ impl HookConfig {
   }
 }
 
-/// Wrap every tool already registered in `registry` with a
-/// [`HookedTool`] that runs the configured hooks + approval flow on
-/// every call. Returns the same registry (mutated in-place) so the
-/// caller can keep using the existing [`yanshi_tool::ToolPolicy`] +
-/// capability state.
-pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> ToolRegistry {
+/// Wrap every tool registered in `registry` with a [`HookedTool`] that
+/// runs the configured hooks + approval flow on every call. The
+/// registry keeps its [`yanshi_tool::ToolPolicy`] + capability state and
+/// comes back behind an `Arc`, so nothing can register an unwrapped tool
+/// into it afterwards; register every tool before wrapping.
+pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> Arc<ToolRegistry> {
   let shared_config = Arc::new(SharedHookConfig {
     session_id: config.session_id,
     profile: config.profile,
@@ -239,7 +239,7 @@ pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> ToolRegi
     };
     registry.register(Arc::new(hooked));
   }
-  registry
+  Arc::new(registry)
 }
 
 struct SharedHookConfig {

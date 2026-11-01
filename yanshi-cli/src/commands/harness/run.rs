@@ -200,7 +200,7 @@ pub async fn execute(
       snapshot.register(tool);
     }
     let wrapped = wrap_registry(snapshot, hook_config);
-    agent = agent.with_tools(Arc::new(wrapped));
+    agent = agent.with_tools(wrapped);
   }
 
   // §6: `--context-refresh` drives the agent turn-by-turn at the harness

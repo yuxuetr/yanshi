@@ -125,14 +125,14 @@ async fn run_flow_emits_session_started_flow_runtime_and_stopped_completed() {
     SinkChain::new().push(sink.clone()),
   )
   .with_seq_counter(harness.seq_counter());
-  let registry = Arc::new(wrap_registry(
+  let registry = wrap_registry(
     {
       let mut r = ToolRegistry::new();
       r.register(Arc::new(WriterTool));
       r
     },
     hook,
-  ));
+  );
 
   let flow = single_tool_flow(registry);
   let result = harness
@@ -234,14 +234,14 @@ async fn run_flow_governs_tool_calls_autodeny_blocks_and_fails() {
   )
   .with_profile(HarnessProfile::Production)
   .with_seq_counter(harness.seq_counter());
-  let registry = Arc::new(wrap_registry(
+  let registry = wrap_registry(
     {
       let mut r = ToolRegistry::new();
       r.register(Arc::new(WriterTool));
       r
     },
     hook,
-  ));
+  );
 
   let flow = single_tool_flow(registry);
   let result = harness

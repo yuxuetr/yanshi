@@ -58,6 +58,11 @@ _New entries go here. Will roll into the next tag (likely
   and ran a plain similarity search; no store overrode it and nothing
   called it. Hybrid retrieval is `retrieval::hybrid::HybridRetriever`,
   which the `rag` node and `yanshi rag ops search` already use.
+- **`yanshi_harness::wrap_registry` returns `Arc<ToolRegistry>`.** A
+  tool registered into the returned registry skipped the hook and
+  approval pipeline. Every caller already put the result straight into
+  an `Arc`, so no bypass shipped; the type now rules it out. Register
+  every tool before wrapping, and drop the caller's `Arc::new(...)`.
 - **`yanshi_tracing::StorageErrorPolicy::FailWorkflow` removed
   (`2125b36`).** It never failed a workflow: its `panic!` ran in the
   trace drain task after the workflow had finished, and the drain's

@@ -905,7 +905,7 @@ async fn run_skill_agent(
     snapshot.register(tool);
   }
   let wrapped = wrap_registry(snapshot, hook_config);
-  agent = agent.with_tools(Arc::new(wrapped));
+  agent = agent.with_tools(wrapped);
 
   let context = AgentContext::new(&session_id, user_input, &model);
   // `ReActAgent` has an inherent `run(&mut self, &str) -> Result<String, _>`
