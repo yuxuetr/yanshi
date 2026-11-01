@@ -56,6 +56,8 @@ yanshi workflow validate path/to/workflow.yml --strict
 | `mcp` | `server_command`, `tool_name` | - | `tool_params`, `parameters.timeout_ms`/`parameters.max_retries` (MCP-client-only, see note above) |
 | `rag` | `operation`, `collection` | - | `qdrant_url`, `embedding_model`, `query`, `documents`, `top_k`, `search_type`, `alpha`, `rerank`, `lambda`, `vector_size`, `distance` |
 
+`http` 输出 `status`（真实的 2xx 状态码）和 `body`；非 2xx 响应会让节点失败，错误信息为 `HTTP <code>: <body 摘要>`。5xx 和 429 可重试，其余状态码不可重试。
+
 ## 参数类型
 
 - `String`: YAML string。

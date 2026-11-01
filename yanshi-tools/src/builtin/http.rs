@@ -25,6 +25,13 @@ const CLOUD_METADATA_IPS: &[IpAddr] = &[
   IpAddr::V4(std::net::Ipv4Addr::new(100, 100, 100, 200)),
 ];
 
+/// Final status and full body of a request made by [`HttpTool::send`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+  pub status: StatusCode,
+  pub body: String,
+}
+
 /// Make HTTP GET / POST requests with domain sandbox enforcement.
 pub struct HttpTool {
   policy: Arc<SandboxPolicy>,
@@ -36,6 +43,116 @@ pub struct HttpTool {
 }
 
 impl HttpTool {
+  /// Perform the request (sandbox checks, pinned DNS, per-hop redirect
+  /// re-validation) and return the final status with the full body.
+  /// `execute` builds the agent-facing [`ToolOutput`] from this; callers
+  /// that need the real status code (the workflow `http` node) use it
+  /// directly.
+  pub async fn send(&self, params: &Value) -> Result<HttpResponse, ToolError> {
+    let url = params["url"]
+      .as_str()
+      .ok_or_else(|| ToolError::InvalidParams {
+        message: "Missing required parameter 'url'".to_string(),
+      })?;
+
+    let mut current_url = Url::parse(url).map_err(|error| ToolError::InvalidParams {
+      message: format!("Invalid URL '{}': {}", url, error),
+    })?;
+
+    let method = params["method"].as_str().unwrap_or("GET");
+
+    for redirect_count in 0..=MAX_REDIRECTS {
+      let validated_addrs = self.validate_url_allowed(&current_url).await?;
+      // V3.3: a redirect hop can land on a different host entirely, so
+      // the pinned client is rebuilt fresh every iteration from this
+      // iteration's own validated addresses — never hoisted out of the
+      // loop or reused across hops.
+      let host = current_url
+        .host_str()
+        .ok_or_else(|| ToolError::InvalidParams {
+          message: format!("Cannot parse host from URL: {}", current_url),
+        })?;
+      let client = self.build_pinned_client(host, &validated_addrs)?;
+
+      let mut builder = match method.to_uppercase().as_str() {
+        "GET" => client.get(current_url.clone()),
+        "POST" => client.post(current_url.clone()),
+        "PUT" => client.put(current_url.clone()),
+        "DELETE" => client.delete(current_url.clone()),
+        "PATCH" => client.patch(current_url.clone()),
+        "HEAD" => client.head(current_url.clone()),
+        other => {
+          return Err(ToolError::InvalidParams {
+            message: format!(
+              "Unsupported HTTP method '{}'. Use GET / POST / PUT / DELETE / PATCH / HEAD",
+              other
+            ),
+          });
+        }
+      };
+
+      // Attach custom headers
+      if let Some(headers) = params["headers"].as_object() {
+        for (k, v) in headers {
+          if let Some(v_str) = v.as_str() {
+            builder = builder.header(k.as_str(), v_str);
+          }
+        }
+      }
+
+      // Attach body for methods that can carry one (POST/PUT/PATCH).
+      let method_upper = method.to_uppercase();
+      if matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH")
+        && let Some(body) = params["body"].as_str()
+      {
+        builder = builder.body(body.to_string());
+      }
+
+      let response = builder.send().await.map_err(|e| ToolError::HttpError {
+        message: e.to_string(),
+      })?;
+
+      if is_redirect(response.status()) {
+        let location = response
+          .headers()
+          .get(LOCATION)
+          .ok_or_else(|| ToolError::HttpError {
+            message: format!(
+              "HTTP redirect from '{}' did not include Location",
+              current_url
+            ),
+          })?
+          .to_str()
+          .map_err(|error| ToolError::HttpError {
+            message: format!("Invalid redirect Location header: {}", error),
+          })?;
+
+        if redirect_count == MAX_REDIRECTS {
+          return Err(ToolError::HttpError {
+            message: format!("Too many redirects after {}", MAX_REDIRECTS),
+          });
+        }
+
+        current_url = current_url
+          .join(location)
+          .map_err(|error| ToolError::HttpError {
+            message: format!("Invalid redirect Location '{}': {}", location, error),
+          })?;
+        continue;
+      }
+
+      let status = response.status();
+      let body = response.text().await.map_err(|e| ToolError::HttpError {
+        message: e.to_string(),
+      })?;
+      return Ok(HttpResponse { status, body });
+    }
+
+    Err(ToolError::HttpError {
+      message: format!("Too many redirects after {}", MAX_REDIRECTS),
+    })
+  }
+
   /// Build the tool (30 s timeout, no auto-redirects, Yanshi
   /// user-agent — the actual `reqwest::Client` used for each request is
   /// built lazily per redirect hop, see [`Self::build_pinned_client`]).
@@ -225,133 +342,33 @@ impl Tool for HttpTool {
   }
 
   async fn execute(&self, params: Value) -> Result<ToolOutput, ToolError> {
-    let url = params["url"]
-      .as_str()
-      .ok_or_else(|| ToolError::InvalidParams {
-        message: "Missing required parameter 'url'".to_string(),
-      })?;
+    let HttpResponse { status, body } = self.send(&params).await?;
 
-    let mut current_url = Url::parse(url).map_err(|error| ToolError::InvalidParams {
-      message: format!("Invalid URL '{}': {}", url, error),
-    })?;
+    // Truncate very long responses. Byte length can't stand in for char
+    // count on multi-byte UTF-8 bodies, and slicing by byte offset can
+    // land mid-character and panic — walk char_indices to find a safe
+    // boundary at the Nth char instead.
+    let char_count = body.chars().count();
+    let content = if char_count > self.max_response_chars {
+      let truncate_at = body
+        .char_indices()
+        .nth(self.max_response_chars)
+        .map(|(byte_index, _)| byte_index)
+        .unwrap_or(body.len());
+      format!(
+        "{}... [truncated — total {} chars]",
+        &body[..truncate_at],
+        char_count
+      )
+    } else {
+      body
+    };
 
-    let method = params["method"].as_str().unwrap_or("GET");
-
-    for redirect_count in 0..=MAX_REDIRECTS {
-      let validated_addrs = self.validate_url_allowed(&current_url).await?;
-      // V3.3: a redirect hop can land on a different host entirely, so
-      // the pinned client is rebuilt fresh every iteration from this
-      // iteration's own validated addresses — never hoisted out of the
-      // loop or reused across hops.
-      let host = current_url
-        .host_str()
-        .ok_or_else(|| ToolError::InvalidParams {
-          message: format!("Cannot parse host from URL: {}", current_url),
-        })?;
-      let client = self.build_pinned_client(host, &validated_addrs)?;
-
-      let mut builder = match method.to_uppercase().as_str() {
-        "GET" => client.get(current_url.clone()),
-        "POST" => client.post(current_url.clone()),
-        "PUT" => client.put(current_url.clone()),
-        "DELETE" => client.delete(current_url.clone()),
-        "PATCH" => client.patch(current_url.clone()),
-        "HEAD" => client.head(current_url.clone()),
-        other => {
-          return Err(ToolError::InvalidParams {
-            message: format!(
-              "Unsupported HTTP method '{}'. Use GET / POST / PUT / DELETE / PATCH / HEAD",
-              other
-            ),
-          });
-        }
-      };
-
-      // Attach custom headers
-      if let Some(headers) = params["headers"].as_object() {
-        for (k, v) in headers {
-          if let Some(v_str) = v.as_str() {
-            builder = builder.header(k.as_str(), v_str);
-          }
-        }
-      }
-
-      // Attach body for methods that can carry one (POST/PUT/PATCH).
-      let method_upper = method.to_uppercase();
-      if matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH")
-        && let Some(body) = params["body"].as_str()
-      {
-        builder = builder.body(body.to_string());
-      }
-
-      let response = builder.send().await.map_err(|e| ToolError::HttpError {
-        message: e.to_string(),
-      })?;
-
-      if is_redirect(response.status()) {
-        let location = response
-          .headers()
-          .get(LOCATION)
-          .ok_or_else(|| ToolError::HttpError {
-            message: format!(
-              "HTTP redirect from '{}' did not include Location",
-              current_url
-            ),
-          })?
-          .to_str()
-          .map_err(|error| ToolError::HttpError {
-            message: format!("Invalid redirect Location header: {}", error),
-          })?;
-
-        if redirect_count == MAX_REDIRECTS {
-          return Err(ToolError::HttpError {
-            message: format!("Too many redirects after {}", MAX_REDIRECTS),
-          });
-        }
-
-        current_url = current_url
-          .join(location)
-          .map_err(|error| ToolError::HttpError {
-            message: format!("Invalid redirect Location '{}': {}", location, error),
-          })?;
-        continue;
-      }
-
-      let status = response.status();
-      let body = response.text().await.map_err(|e| ToolError::HttpError {
-        message: e.to_string(),
-      })?;
-
-      // Truncate very long responses. Byte length can't stand in for char
-      // count on multi-byte UTF-8 bodies, and slicing by byte offset can
-      // land mid-character and panic — walk char_indices to find a safe
-      // boundary at the Nth char instead.
-      let char_count = body.chars().count();
-      let content = if char_count > self.max_response_chars {
-        let truncate_at = body
-          .char_indices()
-          .nth(self.max_response_chars)
-          .map(|(byte_index, _)| byte_index)
-          .unwrap_or(body.len());
-        format!(
-          "{}... [truncated — total {} chars]",
-          &body[..truncate_at],
-          char_count
-        )
-      } else {
-        body
-      };
-
-      return if status.is_success() {
-        Ok(ToolOutput::success(content))
-      } else {
-        Ok(ToolOutput::error(format!("HTTP {}: {}", status, content)))
-      };
+    if status.is_success() {
+      Ok(ToolOutput::success(content))
+    } else {
+      Ok(ToolOutput::error(format!("HTTP {}: {}", status, content)))
     }
-
-    Err(ToolError::HttpError {
-      message: format!("Too many redirects after {}", MAX_REDIRECTS),
-    })
   }
 }
 
@@ -642,6 +659,37 @@ mod tests {
 
     assert_eq!(output.content, "ok");
     server_task.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn send_reports_the_real_status() {
+    let policy = Arc::new(SandboxPolicy {
+      allow_loopback_network_access: true,
+      ..SandboxPolicy::default()
+    });
+    let tool = test_tool(policy);
+    for (raw, code, is_error) in [
+      (
+        "HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nok",
+        201,
+        false,
+      ),
+      (
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 4\r\n\r\ngone",
+        404,
+        true,
+      ),
+    ] {
+      let (url, server_task) = spawn_one_response_server(raw).await;
+      let response = tool.send(&json!({ "url": url })).await.unwrap();
+      assert_eq!(response.status.as_u16(), code);
+      server_task.await.unwrap();
+
+      let (url, server_task) = spawn_one_response_server(raw).await;
+      let output = tool.execute(json!({ "url": url })).await.unwrap();
+      assert_eq!(output.is_error, is_error, "{code}: {}", output.content);
+      server_task.await.unwrap();
+    }
   }
 
   #[tokio::test]

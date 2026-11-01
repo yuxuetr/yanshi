@@ -2,14 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use reqwest::StatusCode;
 use serde_json::{Value, json};
 use yanshi_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   error::YanshiError,
   value::FlowValue,
 };
-use yanshi_tools::builtin::HttpTool;
-use yanshi_tools::{SandboxPolicy, Tool};
+use yanshi_tools::SandboxPolicy;
+use yanshi_tools::builtin::{HttpResponse, HttpTool};
 
 /// Workflow node that performs an HTTP request.
 ///
@@ -61,10 +62,8 @@ impl AsyncNode for HttpNode {
     let headers = get_optional_map_input(inputs, "headers")?;
     let body = get_optional_string_input(inputs, "body")?;
 
-    // Build the params object expected by HttpTool. `usize::MAX` for
-    // max_response_chars preserves the legacy node behavior of returning
-    // the full response body; HttpTool's 8 KB default only matters for
-    // its agent-tool usage where a long body is noisy in transcripts.
+    // `send` returns the full body; HttpTool's 8 KB truncation only
+    // applies to its agent-facing `execute`.
     let mut params = json!({
         "url": url,
         "method": method,
@@ -76,32 +75,48 @@ impl AsyncNode for HttpNode {
       params["headers"] = json!(h);
     }
 
-    let tool = HttpTool::new(self.policy.clone())
-      .map_err(|err| YanshiError::AsyncExecutionError {
+    let tool =
+      HttpTool::new(self.policy.clone()).map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("HttpNode failed to build HTTP client: {err}"),
-      })?
-      .with_max_response_chars(usize::MAX);
-
-    let output = tool
-      .execute(params)
+      })?;
+    let response = tool
+      .send(&params)
       .await
       .map_err(|err| YanshiError::AsyncExecutionError {
         message: err.to_string(),
       })?;
-
-    // HttpTool emits a single-text-part `ToolOutput`. We don't have the
-    // HTTP status code at this layer because the tool flattens it into
-    // the body for prompt-engineering ergonomics, so the node returns
-    // `body` (with the legacy field name preserved) and signals success
-    // via `output.is_error`.
-    let mut outputs = HashMap::new();
-    outputs.insert(
-      "status".to_string(),
-      FlowValue::Json(json!(if output.is_error { 500 } else { 200 })),
-    );
-    outputs.insert("body".to_string(), FlowValue::Json(json!(output.content)));
-    Ok(outputs)
+    response_outputs(response)
   }
+}
+
+/// Longest body excerpt carried in a non-2xx error message.
+const ERROR_BODY_CHARS: usize = 2048;
+
+/// A 2xx response becomes `status` (the real code) + `body`; any other
+/// status fails the node, so retries and the run status see the failure
+/// instead of downstream nodes consuming an error page as data.
+fn response_outputs(response: HttpResponse) -> AsyncNodeResult {
+  let HttpResponse { status, body } = response;
+  if !status.is_success() {
+    let excerpt: String = body.chars().take(ERROR_BODY_CHARS).collect();
+    let message = format!("HTTP {status}: {excerpt}");
+    // 5xx and 429 may succeed on a later attempt; other statuses won't,
+    // so they use the variant the distributed scheduler never retries.
+    return Err(
+      if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+        YanshiError::AsyncExecutionError { message }
+      } else {
+        YanshiError::NodeExecutionFailed { message }
+      },
+    );
+  }
+  let mut outputs = HashMap::new();
+  outputs.insert(
+    "status".to_string(),
+    FlowValue::Json(json!(status.as_u16())),
+  );
+  outputs.insert("body".to_string(), FlowValue::Json(json!(body)));
+  Ok(outputs)
 }
 
 fn get_string_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a str, YanshiError> {
@@ -158,6 +173,44 @@ fn get_optional_map_input(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn response(status: u16, body: &str) -> HttpResponse {
+    HttpResponse {
+      status: StatusCode::from_u16(status).unwrap(),
+      body: body.to_string(),
+    }
+  }
+
+  #[test]
+  fn non_success_status_fails_the_node() {
+    for (code, retryable) in [(404, false), (302, false), (500, true), (429, true)] {
+      let err = response_outputs(response(code, "nope")).unwrap_err();
+      assert_eq!(
+        matches!(err, YanshiError::AsyncExecutionError { .. }),
+        retryable,
+        "{code}"
+      );
+      assert!(
+        err.to_string().contains(&format!("HTTP {code}")) && err.to_string().contains("nope"),
+        "{code}: {err}"
+      );
+    }
+    let long = "x".repeat(ERROR_BODY_CHARS * 2);
+    let err = response_outputs(response(500, &long))
+      .unwrap_err()
+      .to_string();
+    assert!(
+      err.len() < ERROR_BODY_CHARS + 100,
+      "body excerpt is bounded"
+    );
+  }
+
+  #[test]
+  fn success_reports_the_real_status_and_full_body() {
+    let outputs = response_outputs(response(201, "created")).unwrap();
+    assert_eq!(outputs["status"], FlowValue::Json(json!(201)));
+    assert_eq!(outputs["body"], FlowValue::Json(json!("created")));
+  }
 
   /// Q1.3.2 regression: a freshly-constructed `HttpNode` must refuse
   /// SSRF attempts at the cloud-metadata IP without the operator

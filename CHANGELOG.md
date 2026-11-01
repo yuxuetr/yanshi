@@ -46,6 +46,14 @@ _New entries go here. Will roll into the next tag (likely
   so `Unknown` tools (most MCP and script tools) ran unapproved. `http`
   `PUT` / `DELETE` are now `NonIdempotent`; only `GET` / `HEAD` stay
   `Idempotent`.
+- **`http` workflow node fails on a non-2xx response.** It used to
+  return `Ok` with a made-up `status` (`200` for any success, `500` for
+  any failure), so downstream nodes consumed error pages as data. Now
+  `status` is the real 2xx code, and any other status fails the node
+  with `HTTP <code>: <body excerpt>`; 5xx and 429 stay retryable, other
+  statuses don't. Workflows that branched on `status == 500` should use
+  the node's failure instead. `HttpTool::send` (new) returns the real
+  status and full body.
 - **`yanshi_tracing::StorageErrorPolicy::FailWorkflow` removed
   (`2125b36`).** It never failed a workflow: its `panic!` ran in the
   trace drain task after the workflow had finished, and the drain's
