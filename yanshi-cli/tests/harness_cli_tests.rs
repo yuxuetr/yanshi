@@ -73,7 +73,11 @@ fn harness_chat_accepts_approve_cli() {
   // prompt reads from the REPL's shared stdin line reader instead of racing
   // it, so the combo is accepted: the REPL starts with `approve: cli` in its
   // banner and exits cleanly on `exit`.
+  let run_dir = TempDir::new().unwrap();
   let mut cmd = Command::cargo_bin("yanshi").unwrap();
+  // Each chat opens <run-dir>/harness/memory.sqlite; sharing ~/.yanshi
+  // across parallel tests trips SQLite's "database is locked".
+  cmd.env("YANSHI_RUN_DIR", run_dir.path());
   cmd.args(["harness", "chat", "--model", "mock", "--approve", "cli"]);
   cmd.write_stdin("exit\n");
   cmd
@@ -93,7 +97,11 @@ fn harness_chat_accepts_approve_cli() {
 
 #[test]
 fn harness_chat_defaults_to_cli_approval_under_local_profile_without_approve_flag() {
+  let run_dir = TempDir::new().unwrap();
   let mut cmd = Command::cargo_bin("yanshi").unwrap();
+  // Each chat opens <run-dir>/harness/memory.sqlite; sharing ~/.yanshi
+  // across parallel tests trips SQLite's "database is locked".
+  cmd.env("YANSHI_RUN_DIR", run_dir.path());
   // Neither --approve nor --profile passed: --profile defaults to
   // "local", which must resolve --approve to "cli".
   cmd.args(["harness", "chat", "--model", "mock"]);
@@ -106,7 +114,11 @@ fn harness_chat_defaults_to_cli_approval_under_local_profile_without_approve_fla
 
 #[test]
 fn harness_chat_stays_unsupervised_under_dev_profile_without_approve_flag() {
+  let run_dir = TempDir::new().unwrap();
   let mut cmd = Command::cargo_bin("yanshi").unwrap();
+  // Each chat opens <run-dir>/harness/memory.sqlite; sharing ~/.yanshi
+  // across parallel tests trips SQLite's "database is locked".
+  cmd.env("YANSHI_RUN_DIR", run_dir.path());
   cmd.args(["harness", "chat", "--model", "mock", "--profile", "dev"]);
   cmd.write_stdin("exit\n");
   cmd
