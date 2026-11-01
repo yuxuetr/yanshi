@@ -79,6 +79,13 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **BM25 and MMR handle Chinese/Japanese text.** Terms were whitespace
+  splits, so an unspaced sentence was one token and a Chinese query
+  matched nothing short of the whole sentence; MMR's Jaccard similarity
+  had the same blind spot. Runs of Han/kana now index as overlapping
+  character bigrams (other words are unchanged), shared by BM25 —
+  including skill `rag` knowledge — and MMR.
+
 - Harness `:cancel` stops the running agent; a terminal run/session
   status can no longer be overwritten by a late executor write
   (`bf834e4`).

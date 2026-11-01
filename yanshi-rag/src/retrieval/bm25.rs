@@ -120,13 +120,7 @@ impl BM25Retriever {
 
   /// Tokenize text into lowercase terms
   fn tokenize(text: &str) -> Vec<String> {
-    text
-      .to_lowercase()
-      .split_whitespace()
-      .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric()))
-      .filter(|s| !s.is_empty())
-      .map(|s| s.to_string())
-      .collect()
+    tokenize(text)
   }
 
   /// Compute term frequencies for a document
@@ -389,9 +383,93 @@ impl Default for BM25Retriever {
   }
 }
 
+/// Han ideographs and Japanese kana: scripts written without spaces
+/// between words. Hangul is space-delimited and stays a word character.
+fn is_unspaced_script(c: char) -> bool {
+  matches!(c,
+    '\u{3040}'..='\u{30FF}'
+    | '\u{3400}'..='\u{4DBF}'
+    | '\u{4E00}'..='\u{9FFF}'
+    | '\u{F900}'..='\u{FAFF}'
+    | '\u{20000}'..='\u{2A6DF}')
+}
+
+/// Lowercased terms for indexing and querying. Whitespace-separated words
+/// keep their inner punctuation; runs of Han/kana, which have no spaces to
+/// split on, become overlapping character bigrams (a lone character stays
+/// a unigram), so "人工智能" matches inside "机器学习是人工智能的一个分支".
+pub(crate) fn tokenize(text: &str) -> Vec<String> {
+  let mut tokens = Vec::new();
+  for word in text.to_lowercase().split_whitespace() {
+    if !word.chars().any(is_unspaced_script) {
+      let word = word.trim_matches(|c: char| !c.is_alphanumeric());
+      if !word.is_empty() {
+        tokens.push(word.to_string());
+      }
+      continue;
+    }
+    let mut segment = String::new();
+    let mut run: Vec<char> = Vec::new();
+    for c in word.chars() {
+      if is_unspaced_script(c) {
+        push_segment(&mut tokens, &mut segment);
+        run.push(c);
+      } else {
+        push_bigrams(&mut tokens, &mut run);
+        if c.is_alphanumeric() {
+          segment.push(c);
+        } else {
+          push_segment(&mut tokens, &mut segment);
+        }
+      }
+    }
+    push_segment(&mut tokens, &mut segment);
+    push_bigrams(&mut tokens, &mut run);
+  }
+  tokens
+}
+
+fn push_segment(tokens: &mut Vec<String>, segment: &mut String) {
+  if !segment.is_empty() {
+    tokens.push(std::mem::take(segment));
+  }
+}
+
+fn push_bigrams(tokens: &mut Vec<String>, run: &mut Vec<char>) {
+  match run.len() {
+    0 => {}
+    1 => tokens.push(run[0].to_string()),
+    _ => tokens.extend(run.windows(2).map(|pair| pair.iter().collect::<String>())),
+  }
+  run.clear();
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn chinese_queries_match_chinese_documents() {
+    let mut retriever = BM25Retriever::new();
+    retriever.add_document("ml", "机器学习是人工智能的一个分支。");
+    retriever.add_document("weather", "今天天气很好，适合出门散步。");
+    retriever.add_document("mixed", "Rust 语言的所有权模型");
+
+    let results = retriever.search("人工智能", 3);
+    assert_eq!(
+      results.first().map(|r| r.id.as_str()),
+      Some("ml"),
+      "{results:?}"
+    );
+    assert!(results.iter().all(|r| r.id != "weather"), "{results:?}");
+
+    let results = retriever.search("rust 所有权", 3);
+    assert_eq!(
+      results.first().map(|r| r.id.as_str()),
+      Some("mixed"),
+      "{results:?}"
+    );
+  }
 
   #[test]
   fn test_tokenize() {
@@ -403,6 +481,14 @@ mod tests {
 
     let tokens3 = BM25Retriever::tokenize("");
     assert_eq!(tokens3.len(), 0);
+
+    assert_eq!(tokenize("人工智能"), vec!["人工", "工智", "智能"]);
+    assert_eq!(tokenize("用Rust写，好"), vec!["用", "rust", "写", "好"]);
+    assert_eq!(
+      tokenize("e-mail"),
+      vec!["e-mail"],
+      "non-CJK words unchanged"
+    );
   }
 
   #[test]

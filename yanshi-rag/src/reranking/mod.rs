@@ -3,7 +3,7 @@
 //! Re-ranking improves search quality by reordering results based on relevance
 //! and diversity criteria.
 
-use crate::{error::Result, types::SearchResult};
+use crate::{error::Result, retrieval::bm25::tokenize, types::SearchResult};
 use std::collections::HashSet;
 
 /// Re-ranking strategy trait
@@ -66,12 +66,14 @@ impl MMRReRanking {
     }
   }
 
-  /// Compute Jaccard similarity between two documents
+  /// Compute Jaccard similarity between two documents over the BM25
+  /// terms (so unspaced Chinese/Japanese text compares by bigrams instead
+  /// of as one whole-sentence token).
   ///
   /// Jaccard similarity = |A ∩ B| / |A ∪ B|
   fn jaccard_similarity(&self, doc1: &str, doc2: &str) -> f32 {
-    let tokens1: HashSet<&str> = doc1.split_whitespace().collect();
-    let tokens2: HashSet<&str> = doc2.split_whitespace().collect();
+    let tokens1: HashSet<String> = tokenize(doc1).into_iter().collect();
+    let tokens2: HashSet<String> = tokenize(doc2).into_iter().collect();
 
     if tokens1.is_empty() && tokens2.is_empty() {
       return 1.0; // Both empty, consider identical
@@ -210,6 +212,23 @@ mod tests {
       score,
       metadata: HashMap::new(),
     }
+  }
+
+  #[test]
+  fn mmr_demotes_near_duplicate_chinese_results() {
+    let reranker = MMRReRanking::new(0.5);
+    let results = vec![
+      create_test_result("a", "机器学习是人工智能的一个分支", 0.9),
+      create_test_result("a-dup", "机器学习是人工智能的重要分支", 0.88),
+      create_test_result("other", "今天天气很好适合散步", 0.8),
+    ];
+    let ids: Vec<String> = reranker
+      .rerank("q", results)
+      .unwrap()
+      .into_iter()
+      .map(|r| r.id)
+      .collect();
+    assert_eq!(ids, ["a", "other", "a-dup"]);
   }
 
   #[test]
