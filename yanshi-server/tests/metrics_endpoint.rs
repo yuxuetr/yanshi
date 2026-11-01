@@ -25,7 +25,15 @@ fn lazy_state() -> AppState {
   })
 }
 
+/// Every `/metrics` scrape first writes this test's per-`AppState`
+/// numbers (live state sizes, harness session counts) into
+/// process-global gauges, then renders them. Parallel tests each scrape
+/// their own state, so without this lock another test's scrape can
+/// overwrite a gauge between the write and the render.
+static SCRAPE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn fetch_metrics_body(app: axum::Router) -> String {
+  let _scrape = SCRAPE.lock().await;
   let response = app
     .oneshot(
       Request::builder()
@@ -45,6 +53,7 @@ async fn fetch_metrics_body(app: axum::Router) -> String {
 #[tokio::test]
 async fn metrics_endpoint_returns_ok_and_text_plain() {
   let _ = metrics::init_recorder();
+  let _scrape = SCRAPE.lock().await;
   let app = create_router(lazy_state());
   let response = app
     .oneshot(
@@ -74,6 +83,7 @@ async fn metrics_endpoint_bypasses_auth() {
   // an Authorization header must still succeed — Prometheus
   // scrapers don't carry tokens by default.
   let _ = metrics::init_recorder();
+  let _scrape = SCRAPE.lock().await;
   let app = create_router(lazy_state());
   let response = app
     .oneshot(
@@ -276,6 +286,7 @@ async fn metrics_endpoint_scrape_time_handler_survives_unreachable_db() {
   // show stale gauges for the affected panel than miss every
   // other metric in the scrape.
   let _ = metrics::init_recorder();
+  let _scrape = SCRAPE.lock().await;
   let app = create_router(lazy_state());
   let response = app
     .oneshot(
@@ -430,6 +441,7 @@ async fn metrics_endpoint_returns_empty_body_when_recorder_uninstalled() {
   // sticks, so the body will be non-empty. The contract still
   // holds for an isolated boot — covered by the unit test
   // `metrics::tests::render_text_returns_empty_when_recorder_uninstalled`.
+  let _scrape = SCRAPE.lock().await;
   let app = create_router(lazy_state());
   let response = app
     .oneshot(
