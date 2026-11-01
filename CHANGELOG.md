@@ -215,6 +215,13 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`cargo xtask refresh-live-models` now calls each default model.**
+  A model listed in `/models` can still be retired: Google lists
+  `gemini-2.5-flash` but answers 404 "no longer available to new
+  users". After the listing check the probe sends one 16-token message
+  and reports a 404 as `uncallable`; other statuses are printed only.
+  The Google live-test default moved to `gemini-3.5-flash`.
+
 - **GLM Text2Image (CogView) + MiniMax TTS (T2A) implementations, closes
   P-LLM2.3 (Batch 3, Moonshot skipped).** New `GlmImageProvider`
   (`yanshi-llm/src/providers/glm_images.rs`) implements
