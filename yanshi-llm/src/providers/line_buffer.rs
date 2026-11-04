@@ -23,6 +23,16 @@ impl LineBuffer {
   }
 }
 
+/// True for the SSE `data: [DONE]` sentinel that ends an OpenAI-shaped
+/// stream. Readers stop here, not at the first `finish_reason`: with
+/// `stream_options.include_usage` the usage arrives in a separate frame
+/// *after* the finish chunk (Y2.1 / COR-1).
+pub(crate) fn is_sse_done(line: &str) -> bool {
+  line
+    .strip_prefix("data: ")
+    .is_some_and(|data| data.trim() == "[DONE]")
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -49,14 +59,4 @@ mod tests {
     assert_eq!(buffer.next_line().as_deref(), Some(""));
     assert_eq!(buffer.next_line(), None);
   }
-}
-
-/// True for the SSE `data: [DONE]` sentinel that ends an OpenAI-shaped
-/// stream. Readers stop here, not at the first `finish_reason`: with
-/// `stream_options.include_usage` the usage arrives in a separate frame
-/// *after* the finish chunk (Y2.1 / COR-1).
-pub(crate) fn is_sse_done(line: &str) -> bool {
-  line
-    .strip_prefix("data: ")
-    .is_some_and(|data| data.trim() == "[DONE]")
 }
