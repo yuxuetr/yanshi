@@ -668,6 +668,266 @@ impl AsyncNode for RenderMindmapNode {
   }
 }
 
+// ── render_audio (external: ffmpeg) ────────────────────────────────────
+
+/// `render_audio` (Y4.3): join audio clips in order and loudness-normalise
+/// the result (two-pass EBU R128) into one `mp3` / `wav` / `m4a` file.
+/// Inputs: `clips` (array of `File` values or paths, in order),
+/// `target_lufs` (default -16), `format` (default `mp3`). Outputs
+/// `<id>_output` (File) and `<id>_lufs` (measured loudness, `null` for
+/// silence, which is left unnormalised).
+///
+/// Every clip must resolve inside the run's artifact root: in the gateway
+/// the workflow is tenant-written, and this node must not become a way
+/// to read host files. ffmpeg runs through `common::sandboxed` with read
+/// access to that root only. The same operations are exposed to agents
+/// by the `media-tools` MCP server (`examples/ecosystem/mcp/media-tools`);
+/// this node is the DAG path, which needs no MCP feature or root flag.
+pub struct RenderAudioNode {
+  id: String,
+}
+
+impl RenderAudioNode {
+  pub fn new(id: impl Into<String>) -> Self {
+    Self { id: id.into() }
+  }
+}
+
+/// (extension, MIME type, encoder arguments) per output `format`.
+fn audio_format(format: &str) -> Option<(&'static str, &'static str, &'static [&'static str])> {
+  Some(match format {
+    "mp3" => ("mp3", "audio/mpeg", &["-c:a", "libmp3lame", "-b:a", "192k"]),
+    "wav" => ("wav", "audio/wav", &["-c:a", "pcm_s16le"]),
+    "m4a" => ("m4a", "audio/mp4", &["-c:a", "aac", "-b:a", "192k"]),
+    _ => return None,
+  })
+}
+
+/// The loudnorm JSON block ffmpeg prints at the end of stderr.
+fn loudnorm_stats(stderr: &str) -> Option<serde_json::Map<String, Value>> {
+  let start = stderr.rfind("\"input_i\"")?;
+  let open = stderr[..start].rfind('{')?;
+  let close = open + stderr[open..].find('}')?;
+  serde_json::from_str::<Value>(&stderr[open..=close])
+    .ok()?
+    .as_object()
+    .cloned()
+}
+
+fn stat_f64(stats: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
+  stats
+    .get(key)
+    .and_then(Value::as_str)
+    .and_then(|v| v.parse::<f64>().ok())
+    .filter(|v| v.is_finite())
+}
+
+impl RenderAudioNode {
+  fn clip_paths(&self, inputs: &AsyncNodeInputs) -> Result<Vec<std::path::PathBuf>, YanshiError> {
+    let raw: Vec<std::path::PathBuf> = match inputs.get("clips") {
+      Some(FlowValue::Json(Value::Array(items))) => items
+        .iter()
+        .map(|item| match item {
+          Value::String(path) => Ok(std::path::PathBuf::from(path)),
+          Value::Object(file) => file
+            .get("path")
+            .and_then(Value::as_str)
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| input_error(&self.id, "each clip needs a path")),
+          other => Err(input_error(&self.id, format!("clip {other} is not a path"))),
+        })
+        .collect::<Result<_, _>>()?,
+      Some(FlowValue::File { path, .. }) => vec![path.clone()],
+      _ => {
+        return Err(input_error(
+          &self.id,
+          "missing input 'clips' (an array of files)",
+        ));
+      }
+    };
+    if raw.is_empty() {
+      return Err(input_error(&self.id, "'clips' is empty"));
+    }
+    let root = yanshi_core::run_context::current_artifact_root()
+      .ok_or_else(|| input_error(&self.id, "render_audio runs only inside a workflow run"))?;
+    let root = root.canonicalize().unwrap_or(root);
+    raw
+      .into_iter()
+      .map(|clip| {
+        let resolved = clip
+          .canonicalize()
+          .map_err(|e| input_error(&self.id, format!("clip {}: {e}", clip.display())))?;
+        if resolved.starts_with(&root) {
+          Ok(resolved)
+        } else {
+          Err(input_error(
+            &self.id,
+            format!("clip {} is outside this run's artifacts", clip.display()),
+          ))
+        }
+      })
+      .collect()
+  }
+
+  async fn ffmpeg(
+    &self,
+    ffmpeg: &std::path::Path,
+    workdir: &std::path::Path,
+    root: &std::path::Path,
+    args: Vec<std::ffi::OsString>,
+  ) -> Result<std::process::Output, YanshiError> {
+    use crate::common::sandboxed;
+    let mut full: Vec<std::ffi::OsString> =
+      ["-hide_banner", "-nostdin", "-y"].map(Into::into).to_vec();
+    full.extend(args);
+    let output = sandboxed::run(sandboxed::SandboxedRun {
+      node: &self.id,
+      program: ffmpeg.to_path_buf(),
+      args: full,
+      workdir,
+      read_paths: vec![root.to_path_buf()],
+      write_paths: Vec::new(),
+      env: Vec::new(),
+      timeout: std::time::Duration::from_secs(600),
+    })
+    .await?;
+    if !output.status.success() {
+      return Err(YanshiError::NodeExecutionFailed {
+        message: format!(
+          "{}: ffmpeg exited with {}: {}",
+          self.id,
+          output.status,
+          sandboxed::output_tail(&output, 12)
+        ),
+      });
+    }
+    Ok(output)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for RenderAudioNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let clips = self.clip_paths(inputs)?;
+    let format = optional_str(inputs, "format").unwrap_or("mp3");
+    let (extension, mime, encoder) = audio_format(format).ok_or_else(|| {
+      input_error(
+        &self.id,
+        format!("unknown format '{format}': expected mp3, wav or m4a"),
+      )
+    })?;
+    let target = match inputs.get("target_lufs") {
+      Some(FlowValue::Json(Value::Number(n))) => n.as_f64().unwrap_or(-16.0),
+      _ => -16.0,
+    };
+    let ffmpeg = crate::common::sandboxed::find_tool("ffmpeg").ok_or_else(|| {
+      YanshiError::NodeExecutionFailed {
+        message: format!("{}: ffmpeg is not installed (`yanshi doctor`)", self.id),
+      }
+    })?;
+    let root = crate::common::artifacts::artifact_dir(&self.id)
+      .parent()
+      .and_then(std::path::Path::parent)
+      .map(std::path::Path::to_path_buf)
+      .ok_or_else(|| input_error(&self.id, "no artifact root"))?;
+    let workdir = crate::common::artifacts::artifact_dir(&self.id)
+      .join(format!(".audio-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&workdir).await.map_err(|e| {
+      input_error(
+        &self.id,
+        format!("cannot create {}: {e}", workdir.display()),
+      )
+    })?;
+
+    let produced = async {
+      // 1. Join, re-encoding to one PCM stream.
+      let joined = workdir.join("joined.wav");
+      let mut args: Vec<std::ffi::OsString> = Vec::new();
+      for clip in &clips {
+        args.push("-i".into());
+        args.push(clip.clone().into());
+      }
+      let streams: String = (0..clips.len()).map(|i| format!("[{i}:a]")).collect();
+      args.extend(
+        [
+          "-filter_complex".to_string(),
+          format!("{streams}concat=n={}:v=0:a=1[a]", clips.len()),
+          "-map".to_string(),
+          "[a]".to_string(),
+        ]
+        .map(Into::into),
+      );
+      args.push(joined.clone().into());
+      self.ffmpeg(&ffmpeg, &workdir, &root, args).await?;
+
+      // 2. Measure; 3. normalise (skipped for silence) and encode.
+      let base = format!("loudnorm=I={target}:TP=-1.5:LRA=11");
+      let measure = self
+        .ffmpeg(
+          &ffmpeg,
+          &workdir,
+          &root,
+          vec![
+            "-i".into(),
+            joined.clone().into(),
+            "-af".into(),
+            format!("{base}:print_format=json").into(),
+            "-f".into(),
+            "null".into(),
+            "-".into(),
+          ],
+        )
+        .await?;
+      let measured = loudnorm_stats(&String::from_utf8_lossy(&measure.stderr));
+      let out = workdir.join(format!("out.{extension}"));
+      let mut encode: Vec<std::ffi::OsString> = vec!["-i".into(), joined.clone().into()];
+      let mut lufs = None;
+      if let Some(stats) = &measured
+        && let (Some(i), Some(tp), Some(lra), Some(thresh), Some(offset)) = (
+          stat_f64(stats, "input_i"),
+          stat_f64(stats, "input_tp"),
+          stat_f64(stats, "input_lra"),
+          stat_f64(stats, "input_thresh"),
+          stat_f64(stats, "target_offset"),
+        )
+      {
+        encode.push("-af".into());
+        encode.push(
+          format!(
+            "{base}:measured_I={i}:measured_TP={tp}:measured_LRA={lra}:measured_thresh={thresh}:offset={offset}:linear=true:print_format=json"
+          )
+          .into(),
+        );
+        lufs = Some(target);
+      }
+      encode.extend(["-ar", "44100"].map(Into::into));
+      encode.extend(encoder.iter().map(Into::into));
+      encode.push(out.clone().into());
+      let encoded = self.ffmpeg(&ffmpeg, &workdir, &root, encode).await?;
+      if lufs.is_some() {
+        lufs = loudnorm_stats(&String::from_utf8_lossy(&encoded.stderr))
+          .and_then(|stats| stat_f64(&stats, "output_i"))
+          .or(lufs);
+      }
+      let bytes = tokio::fs::read(&out)
+        .await
+        .map_err(|e| YanshiError::NodeExecutionFailed {
+          message: format!("{}: ffmpeg wrote no output: {e}", self.id),
+        })?;
+      Ok::<_, YanshiError>((bytes, lufs))
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    let (bytes, lufs) = produced?;
+    let mut outputs = output(&self.id, write_artifact(&self.id, &bytes, mime).await?);
+    outputs.insert(
+      format!("{}_lufs", self.id),
+      FlowValue::Json(lufs.map_or(Value::Null, |v| serde_json::json!(v))),
+    );
+    Ok(outputs)
+  }
+}
+
 // ── render_document (external: pandoc, typst for PDF) ─────────────────
 
 /// `render_document` (Y3.3): Markdown → `docx` / `pptx` / `html` /
@@ -1130,5 +1390,78 @@ mod tests {
       deep = json!({"label": "n", "children": [deep]});
     }
     assert!(layout_tree(&deep).unwrap_err().contains("deeper"));
+  }
+
+  /// Needs ffmpeg: `cargo test -p yanshi-nodes --lib render_audio -- --ignored`.
+  #[tokio::test]
+  #[ignore = "needs ffmpeg"]
+  async fn render_audio_joins_and_normalises_clips() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    let clips_dir = root.join("artifacts").join("speak");
+    std::fs::create_dir_all(&clips_dir).expect("dir");
+    for (name, freq) in [("1.wav", 440), ("2.wav", 660)] {
+      let status = std::process::Command::new("ffmpeg")
+        .args([
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-y",
+          "-f",
+          "lavfi",
+          "-i",
+        ])
+        .arg(format!("sine=frequency={freq}:duration=1"))
+        .arg(clips_dir.join(name))
+        .status()
+        .expect("ffmpeg");
+      assert!(status.success());
+    }
+    let clips = json!([clips_dir.join("1.wav"), clips_dir.join("2.wav")]);
+    let outputs = run_context::with_artifact_root(
+      root.clone(),
+      RenderAudioNode::new("mix").execute(&inputs(&[("clips", clips)])),
+    )
+    .await
+    .expect("mixes");
+    let FlowValue::File { path, mime_type } = &outputs["mix_output"] else {
+      panic!("expected File");
+    };
+    assert_eq!(mime_type.as_deref(), Some("audio/mpeg"));
+    assert!(std::fs::metadata(path).expect("mp3").len() > 1000);
+    let FlowValue::Json(lufs) = &outputs["mix_lufs"] else {
+      panic!("lufs");
+    };
+    assert!(
+      (lufs.as_f64().expect("measured") + 16.0).abs() < 1.5,
+      "{lufs}"
+    );
+
+    // A clip outside the run's artifacts is refused.
+    let outside = tempfile::NamedTempFile::new().expect("tmp");
+    let err = run_context::with_artifact_root(
+      root,
+      RenderAudioNode::new("mix").execute(&inputs(&[("clips", json!([outside.path()]))])),
+    )
+    .await
+    .expect_err("outside");
+    assert!(
+      err.to_string().contains("outside this run's artifacts"),
+      "{err}"
+    );
+  }
+
+  #[test]
+  fn loudnorm_stats_are_read_from_the_last_json_block() {
+    let stderr = "frame=...\n[Parsed_loudnorm_0 @ 0x1] \n{\n\t\"input_i\" : \"-23.10\",\n\t\"output_i\" : \"-16.02\"\n}\n";
+    let stats = loudnorm_stats(stderr).expect("stats");
+    assert_eq!(stat_f64(&stats, "input_i"), Some(-23.1));
+    assert_eq!(stat_f64(&stats, "output_i"), Some(-16.02));
+    let silence = loudnorm_stats("{\n\"input_i\" : \"-inf\"\n}").expect("stats");
+    assert_eq!(
+      stat_f64(&silence, "input_i"),
+      None,
+      "silence is not normalised"
+    );
   }
 }

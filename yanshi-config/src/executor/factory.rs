@@ -210,6 +210,10 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     "render_markdown" => Ok(NodeType::Standard(Arc::new(
       yanshi_nodes::nodes::render::RenderMarkdownNode::new(&node_def.id),
     ))),
+    // Y4.3: ffmpeg join + loudness normalisation, sandboxed.
+    "render_audio" => Ok(NodeType::Standard(Arc::new(
+      yanshi_nodes::nodes::render::RenderAudioNode::new(&node_def.id),
+    ))),
     "render_mindmap" => Ok(NodeType::Standard(Arc::new(
       yanshi_nodes::nodes::render::RenderMindmapNode::new(&node_def.id),
     ))),

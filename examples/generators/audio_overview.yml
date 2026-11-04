@@ -1,0 +1,167 @@
+# Y4.3 — `audio_overview` generator (docs/RFC_CONTENT_STUDIO.md §3, §4.3).
+#
+# Source (a URL, fetched with the http node's SSRF filter, or pasted
+# text) → a two-voice script (llm, json_schema, one line per turn) →
+# every line voiced in parallel (Map → tts, the speaker's voice) →
+# joined and loudness-normalised (render_audio, ffmpeg) → one mp3 and a
+# `Deliverable` carrying the script.
+#
+#   yanshi workflow run examples/generators/audio_overview.yml \
+#     --input url https://example.org/article \
+#     --input tts_model <tts model> --input host_voice <voice> \
+#     --input guest_voice <voice> --output-dir out
+name: audio_overview
+description: "A two-voice audio overview of a source, as one loudness-normalised mp3"
+
+inputs:
+  url:
+    description: "Page to discuss (fetched with SSRF protection); leave empty to use `text`"
+    default: ""
+  text:
+    description: "Source text, used when `url` is empty"
+    default: ""
+  focus:
+    description: "What the conversation should cover"
+    default: "the main ideas, in plain language"
+  minutes:
+    description: "Approximate length in minutes"
+    default: 3
+  language:
+    description: "Language of the conversation"
+    default: "English"
+  tts_model:
+    description: "Registry name of the text-to-speech model"
+    default: "tts-1"
+  host_voice:
+    description: "Voice of the host"
+    default: "alloy"
+  guest_voice:
+    description: "Voice of the guest"
+    default: "nova"
+  target_lufs:
+    description: "Loudness target (podcast platforms: -16, broadcast: -23)"
+    default: -16
+
+nodes:
+  - id: options
+    type: template
+    parameters:
+      output_format: json
+      template: '{"has_url": {{ url != "" }}}'
+
+  # `url` (the workflow input) reaches the node directly.
+  - id: fetch
+    type: http
+    dependencies: ["options"]
+    run_if: "{{ nodes.options.outputs.has_url }}"
+
+  - id: source
+    type: template
+    input_mapping:
+      page: "{{ nodes.fetch.outputs.body }}"
+    parameters:
+      template: "{% if page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
+
+  - id: script_prompt
+    type: template
+    dependencies: ["source"]
+    input_mapping:
+      source_text: "{{ nodes.source.outputs.output }}"
+    parameters:
+      template: |
+        Write a {{ minutes }}-minute conversation in {{ language }} between a
+        curious host and a knowledgeable guest about the source below,
+        covering {{ focus }}. Natural spoken turns of one to three
+        sentences, no stage directions, no sound effects. The host opens
+        and closes. Every fact must come from the source.
+
+        SOURCE:
+        {{ source_text }}
+
+  - id: script
+    type: llm
+    dependencies: ["script_prompt"]
+    input_mapping:
+      prompt: "{{ nodes.script_prompt.outputs.output }}"
+    parameters:
+      system: "You write podcast scripts. Answer with JSON only."
+      json_schema:
+        type: object
+        required: [title, lines]
+        properties:
+          title: { type: string }
+          lines:
+            type: array
+            items:
+              type: object
+              required: [speaker, text]
+              properties:
+                speaker: { type: string, enum: [host, guest] }
+                text: { type: string }
+
+  # One item per line, carrying what the tts node inside the Map needs
+  # (a Map body sees only `item`, not the workflow inputs).
+  - id: lines
+    type: template
+    dependencies: ["script"]
+    input_mapping:
+      plan: "{{ nodes.script.outputs.output }}"
+    parameters:
+      output_format: json
+      template: |
+        {"items": [{% for l in plan.lines %}{"text": {{ l.text | json_encode() }}, "voice": {% if l.speaker == "guest" %}{{ guest_voice | json_encode() }}{% else %}{{ host_voice | json_encode() }}{% endif %}, "model": {{ tts_model | json_encode() }}}{% if not loop.last %},{% endif %}{% endfor %}]}
+
+  - id: voice_lines
+    type: map
+    dependencies: ["lines"]
+    input_mapping:
+      input_list: "{{ nodes.lines.outputs.items }}"
+    parameters:
+      parallel: true
+      max_concurrent: 4
+      template:
+        - id: say
+          type: tts
+          input_mapping:
+            input_template: "{{ item.text }}"
+            voice: "{{ item.voice }}"
+            model: "{{ item.model }}"
+
+  # The clips, in script order.
+  - id: clips
+    type: template
+    dependencies: ["voice_lines"]
+    input_mapping:
+      voiced: "{{ nodes.voice_lines.outputs.results }}"
+    parameters:
+      output_format: json
+      template: |
+        {"paths": [{% for r in voiced %}{{ r.say.Ok.say_output.path | json_encode() }}{% if not loop.last %},{% endif %}{% endfor %}]}
+
+  - id: episode
+    type: render_audio
+    dependencies: ["clips"]
+    input_mapping:
+      clips: "{{ nodes.clips.outputs.paths }}"
+    parameters:
+      format: mp3
+
+  - id: deliverable
+    type: template
+    dependencies: ["episode"]
+    input_mapping:
+      plan: "{{ nodes.script.outputs.output }}"
+      mp3: "{{ nodes.episode.outputs.episode_output }}"
+      lufs: "{{ nodes.episode.outputs.episode_lufs }}"
+    parameters:
+      output_format: json
+      template: |
+        {"deliverable": {
+          "kind": "audio_overview",
+          "title": {{ plan.title | json_encode() }},
+          "content": {"script": {{ plan.lines | json_encode() }}, "loudness_lufs": {{ lufs | json_encode() }}},
+          "citations": [],
+          "files": [
+            {"node_id": "episode", "name": {{ mp3 | split(pat="/") | last | json_encode() }}, "mime_type": "audio/mpeg", "role": "primary"}
+          ]
+        }}

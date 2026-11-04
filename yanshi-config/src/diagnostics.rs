@@ -646,7 +646,10 @@ pub struct ExternalToolReport {
 
 /// The binaries renderers shell out to, looked up on PATH.
 const EXTERNAL_TOOLS: &[(&str, &str)] = &[
-  ("ffmpeg", "media-tools MCP server: audio / video finishing"),
+  (
+    "ffmpeg",
+    "render_audio; media-tools MCP server: audio / video finishing",
+  ),
   ("ffprobe", "media-tools MCP server: media inspection"),
   ("pandoc", "render_document: docx / pptx / html / epub / pdf"),
   (

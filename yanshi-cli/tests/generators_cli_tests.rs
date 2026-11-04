@@ -171,3 +171,58 @@ fn mindmap_from_text_writes_svg_png_and_html() {
     assert_eq!(fixture.produced(node).len(), 1, "{node}");
   }
 }
+
+/// Y4.3 acceptance: mock chat + mock TTS → one mp3 in `--output-dir`.
+/// Needs ffmpeg (CI: the `media-tools` job).
+#[test]
+#[ignore = "needs ffmpeg"]
+fn audio_overview_from_text_writes_an_mp3() {
+  let fixture = Fixture::new();
+  fs::write(
+    fixture.home.path().join(".yanshi/models.yml"),
+    MOCK_REGISTRY.replace(
+      "providers:",
+      "  mock-tts:\n    vendor: mock\n    type: tts\n    model_id: mock-tts\nproviders:",
+    ),
+  )
+  .expect("registry");
+  let script = json!({"title": "Tides", "lines": [
+    {"speaker": "host", "text": "Welcome."},
+    {"speaker": "guest", "text": "Tides follow the moon."}
+  ]});
+  let template =
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/generators/audio_overview.yml");
+  Command::cargo_bin("yanshi")
+    .expect("binary")
+    .env("HOME", fixture.home.path())
+    .env(
+      "YANSHI_MODELS_CONFIG",
+      fixture.home.path().join(".yanshi/models.yml"),
+    )
+    .env("YANSHI_TRACE_DIR", fixture.work.path().join("traces"))
+    .env(
+      "YANSHI_MOCK_RESPONSES",
+      json!([script.to_string()]).to_string(),
+    )
+    .env_remove("YANSHI_SERVER_URL")
+    .args(["workflow", "run"])
+    .arg(template)
+    .arg("--run-dir")
+    .arg(fixture.work.path().join("runs"))
+    .args([
+      "--model",
+      "mock-model",
+      "--input",
+      "text",
+      "Tides follow the moon.",
+    ])
+    .args(["--input", "tts_model", "mock-tts"])
+    .arg("--output-dir")
+    .arg(fixture.out())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("audio/mpeg"));
+  let mp3 = fixture.produced("episode");
+  assert_eq!(mp3.len(), 1);
+  assert_eq!(mp3[0].extension().and_then(|e| e.to_str()), Some("mp3"));
+}

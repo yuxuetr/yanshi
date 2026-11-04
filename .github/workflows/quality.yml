@@ -649,6 +649,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Run the media-tools end-to-end test
         run: cargo test -p yanshi-mcp --test media_tools_e2e -- --ignored
+      # Y4.3: render_audio and the audio_overview generator also need ffmpeg.
+      - name: Run the ffmpeg-backed node and generator tests
+        run: |
+          cargo test -p yanshi-nodes --lib render_audio -- --ignored
+          cargo test -p yanshi-config --test generator_audio -- --ignored
+          cargo test -p yanshi-cli --test generators_cli_tests audio_overview -- --ignored
 
   release-gate:
     name: release gate

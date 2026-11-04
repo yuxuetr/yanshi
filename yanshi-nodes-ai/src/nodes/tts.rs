@@ -96,7 +96,17 @@ impl AsyncNode for TTSNode {
         message: format!("Failed to initialize Yanshi LLM service: {}", e),
       })?;
 
-    let mut resolved_input = self.input_template.clone();
+    // Y4.3: `model`, `voice` and `input_template` given as inputs (e.g.
+    // `input_mapping` from a Map `item`) override the parameters, so one
+    // node can speak every line of a two-voice script.
+    let string_input = |key: &str| match inputs.get(key) {
+      Some(FlowValue::Json(Value::String(s))) if !s.is_empty() => Some(s.clone()),
+      _ => None,
+    };
+    let model = string_input("model").unwrap_or_else(|| self.model.clone());
+    let voice = string_input("voice").unwrap_or_else(|| self.voice.clone());
+    let mut resolved_input =
+      string_input("input_template").unwrap_or_else(|| self.input_template.clone());
     for key in &self.input_keys {
       if let Some(value) = inputs.get(key) {
         let placeholder = format!("{{{{{}}}}}", key);
@@ -107,21 +117,21 @@ impl AsyncNode for TTSNode {
     // P-LLM.3: route through the modality dispatcher. The registry
     // entry for `self.model` decides which vendor handles the call
     // (today only StepFun; future vendors plug in transparently).
-    let provider = Yanshi::tts(&self.model)
+    let provider = Yanshi::tts(&model)
       .await
       .map_err(|e| YanshiError::ConfigurationError {
         message: format!(
           "Failed to resolve TTS provider for model '{}': {}",
-          self.model, e
+          model, e
         ),
       })?;
 
     let response_format = self.response_format.as_wire_str().to_string();
     let input_chars = resolved_input.chars().count();
     let request = TtsRequest {
-      model: self.model.clone(),
+      model: model.clone(),
       input: resolved_input,
-      voice: self.voice.clone(),
+      voice,
       response_format: Some(response_format),
       speed: self.speed,
       volume: None,
@@ -134,7 +144,7 @@ impl AsyncNode for TTSNode {
       .await
       .map_err(|e| crate::vendor_error::vendor_error("TTS synthesis failed", e))?;
     let seconds = crate::cost::wav_duration_seconds(&tts_response.audio);
-    crate::cost::record(&self.model, |p| p.cost_for_speech(input_chars, seconds))?;
+    crate::cost::record(&model, |p| p.cost_for_speech(input_chars, seconds))?;
 
     let value = match self.output_format {
       ArtifactOutputFormat::File => {

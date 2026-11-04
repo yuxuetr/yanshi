@@ -223,6 +223,11 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
         "fs.write".to_string(),
       ],
     ),
+    // Y4.3: runs ffmpeg under the OS sandbox over this run's artifacts.
+    "render_audio" => (
+      PermissionCategory::Exec,
+      vec!["exec".to_string(), "fs.write".to_string()],
+    ),
     // Y3.3: runs pandoc (and typst) under the OS sandbox, writing only
     // to its artifact directory.
     "render_document" => (

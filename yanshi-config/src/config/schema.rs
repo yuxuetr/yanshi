@@ -494,6 +494,11 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("title", ParamType::String),
       ParamSpec::optional("format", ParamType::String),
     ]),
+    "render_audio" => Some(vec![
+      ParamSpec::required_input("clips", ParamType::Any),
+      ParamSpec::optional("format", ParamType::String),
+      ParamSpec::optional("target_lufs", ParamType::Number),
+    ]),
     "render_mindmap" => Some(vec![
       ParamSpec::required_input("tree", ParamType::Any),
       ParamSpec::optional("format", ParamType::String),
@@ -514,8 +519,10 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("toc", ParamType::Bool),
     ]),
     "tts" => Some(vec![
-      ParamSpec::required("model", ParamType::String),
-      ParamSpec::required("voice", ParamType::String),
+      // Y4.3: all three may come from `input_mapping` (one node voicing
+      // every line of a script inside a Map).
+      ParamSpec::required_input("model", ParamType::String),
+      ParamSpec::required_input("voice", ParamType::String),
       ParamSpec::required_input("input_template", ParamType::String),
     ]),
     "while" => Some(vec![

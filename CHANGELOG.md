@@ -338,6 +338,18 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`audio_overview` generator and `render_audio` (Y4.3).**
+  `examples/generators/audio_overview.yml` turns a source into a
+  host/guest script (`llm` with `json_schema`, one turn per line). Each
+  line is voiced in parallel by a Map of `tts` with the speaker's voice,
+  then joined and loudness-normalised into one mp3. The new
+  `render_audio` node does the join and two-pass EBU R128 normalisation
+  through the shared sandbox, to `target_lufs` (default -16), as
+  mp3 / wav / m4a. Every clip must resolve inside the run's artifact
+  root, so a tenant-written workflow cannot read host files. Silence is
+  left unnormalised. `tts` now takes `model`, `voice` and
+  `input_template` as inputs, so one node can voice a whole script
+  inside a Map. The ffmpeg-backed tests run in CI's `media-tools` job.
 - **`mindmap` generator and `render_mindmap` (Y4.2).**
   `examples/generators/mindmap.yml` maps a source (`url` or `text`)
   into a labelled tree (`llm` with a recursive `json_schema`), then
