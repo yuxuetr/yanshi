@@ -131,3 +131,43 @@ fn report_from_a_url() {
   assert_eq!(fixture.produced("report_md").len(), 1);
   assert_eq!(fixture.produced("report_pdf").len(), 1);
 }
+
+/// Y4.2 acceptance: the mindmap generator writes SVG, PNG and HTML.
+#[test]
+fn mindmap_from_text_writes_svg_png_and_html() {
+  let fixture = Fixture::new();
+  let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/generators/mindmap.yml");
+  let tree = json!({"label": "Tides", "children": [{"label": "Moon"}, {"label": "Sun"}]});
+  Command::cargo_bin("yanshi")
+    .expect("binary")
+    .env("HOME", fixture.home.path())
+    .env(
+      "YANSHI_MODELS_CONFIG",
+      fixture.home.path().join(".yanshi/models.yml"),
+    )
+    .env("YANSHI_TRACE_DIR", fixture.work.path().join("traces"))
+    .env(
+      "YANSHI_MOCK_RESPONSES",
+      json!([tree.to_string()]).to_string(),
+    )
+    .env_remove("YANSHI_SERVER_URL")
+    .args(["workflow", "run"])
+    .arg(template)
+    .arg("--run-dir")
+    .arg(fixture.work.path().join("runs"))
+    .args([
+      "--model",
+      "mock-model",
+      "--input",
+      "text",
+      "Tides follow the moon and the sun.",
+    ])
+    .arg("--output-dir")
+    .arg(fixture.out())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Copied 3 artifact(s)"));
+  for node in ["map_svg", "map_png", "map_html"] {
+    assert_eq!(fixture.produced(node).len(), 1, "{node}");
+  }
+}

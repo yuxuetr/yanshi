@@ -417,6 +417,257 @@ impl AsyncNode for RenderMarkdownNode {
   }
 }
 
+// ── render_mindmap ──────────────────────────────────────────────────────
+
+/// `render_mindmap` (Y4.2): a tree `{"label": "...", "children": [...]}`
+/// (or a JSON string of one) → a left-to-right mind map as SVG (the
+/// default; `render_svg` turns it into a PNG), or `format: html`, an
+/// interactive markmap page. The HTML loads `markmap-autoloader` from a
+/// CDN when opened; the SVG is fully self-contained.
+pub struct RenderMindmapNode {
+  id: String,
+}
+
+impl RenderMindmapNode {
+  pub fn new(id: impl Into<String>) -> Self {
+    Self { id: id.into() }
+  }
+}
+
+const MINDMAP_MAX_NODES: usize = 400;
+const MINDMAP_MAX_DEPTH: usize = 8;
+/// One branch colour per top-level child (Okabe–Ito, colour-blind safe).
+const BRANCH_COLOURS: &[&str] = &[
+  "#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#7A6F00",
+];
+
+/// A laid-out node: depth, vertical centre, label and branch.
+#[derive(Debug)]
+struct Placed {
+  depth: usize,
+  y: f32,
+  label: String,
+  parent: Option<usize>,
+  branch: usize,
+}
+
+fn tree_label(node: &Value) -> Result<String, String> {
+  node
+    .get("label")
+    .or_else(|| node.get("title"))
+    .and_then(Value::as_str)
+    .map(|label| label.trim().to_string())
+    .filter(|label| !label.is_empty())
+    .ok_or_else(|| "every node needs a non-empty \"label\"".to_string())
+}
+
+fn tree_children(node: &Value) -> &[Value] {
+  node
+    .get("children")
+    .and_then(Value::as_array)
+    .map(Vec::as_slice)
+    .unwrap_or(&[])
+}
+
+/// Approximate rendered width of `text` at 14px: CJK and other wide
+/// characters take about one em, the rest about 0.55 em.
+fn label_width(text: &str) -> f32 {
+  text
+    .chars()
+    .map(|c| if (c as u32) >= 0x2E80 { 14.0 } else { 7.7 })
+    .sum()
+}
+
+/// Lay the tree out: leaves stacked 30px apart, each parent centred on
+/// its children. Returns nodes in depth-first order.
+fn layout_tree(root: &Value) -> Result<Vec<Placed>, String> {
+  fn visit(
+    node: &Value,
+    depth: usize,
+    parent: Option<usize>,
+    branch: usize,
+    next_leaf: &mut f32,
+    out: &mut Vec<Placed>,
+  ) -> Result<f32, String> {
+    if depth >= MINDMAP_MAX_DEPTH {
+      return Err(format!(
+        "the tree is deeper than {MINDMAP_MAX_DEPTH} levels"
+      ));
+    }
+    if out.len() >= MINDMAP_MAX_NODES {
+      return Err(format!("the tree has more than {MINDMAP_MAX_NODES} nodes"));
+    }
+    let index = out.len();
+    out.push(Placed {
+      depth,
+      y: 0.0,
+      label: tree_label(node)?,
+      parent,
+      branch,
+    });
+    let children = tree_children(node);
+    let y = if children.is_empty() {
+      let y = *next_leaf;
+      *next_leaf += 30.0;
+      y
+    } else {
+      let mut ys = Vec::with_capacity(children.len());
+      for (i, child) in children.iter().enumerate() {
+        let child_branch = if depth == 0 { i } else { branch };
+        ys.push(visit(
+          child,
+          depth + 1,
+          Some(index),
+          child_branch,
+          next_leaf,
+          out,
+        )?);
+      }
+      (ys[0] + ys[ys.len() - 1]) / 2.0
+    };
+    out[index].y = y;
+    Ok(y)
+  }
+  let mut placed = Vec::new();
+  let mut next_leaf = 20.0;
+  visit(root, 0, None, 0, &mut next_leaf, &mut placed)?;
+  Ok(placed)
+}
+
+fn mindmap_svg(root: &Value) -> Result<String, String> {
+  let placed = layout_tree(root)?;
+  let depth_count = placed.iter().map(|p| p.depth).max().unwrap_or(0) + 1;
+  // Column x positions: each column as wide as its widest label.
+  let mut column_width = vec![0.0f32; depth_count];
+  for p in &placed {
+    column_width[p.depth] = column_width[p.depth].max(label_width(&p.label) + 24.0);
+  }
+  let mut column_x = vec![20.0f32; depth_count];
+  for d in 1..depth_count {
+    column_x[d] = column_x[d - 1] + column_width[d - 1] + 48.0;
+  }
+  let width = column_x[depth_count - 1] + column_width[depth_count - 1] + 20.0;
+  let height = placed.iter().map(|p| p.y).fold(0.0, f32::max) + 30.0;
+  let colour = |p: &Placed| {
+    if p.depth == 0 {
+      "#222222"
+    } else {
+      BRANCH_COLOURS[p.branch % BRANCH_COLOURS.len()]
+    }
+  };
+
+  let mut svg = format!(
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w:.0}\" height=\"{h:.0}\" viewBox=\"0 0 {w:.0} {h:.0}\" \
+font-family=\"-apple-system, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif\">\n\
+<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n",
+    w = width,
+    h = height
+  );
+  for p in &placed {
+    if let Some(parent) = p.parent.map(|i| &placed[i]) {
+      let x1 = column_x[parent.depth] + label_width(&parent.label) + 16.0;
+      let x2 = column_x[p.depth] - 4.0;
+      let mid = (x1 + x2) / 2.0;
+      svg.push_str(&format!(
+        "<path d=\"M{x1:.1},{y1:.1} C{mid:.1},{y1:.1} {mid:.1},{y2:.1} {x2:.1},{y2:.1}\" fill=\"none\" stroke=\"{c}\" stroke-width=\"{sw}\" stroke-opacity=\"0.75\"/>\n",
+        y1 = parent.y,
+        y2 = p.y,
+        c = colour(p),
+        sw = if p.depth == 1 { 2.5 } else { 1.5 },
+      ));
+    }
+  }
+  for p in &placed {
+    let x = column_x[p.depth];
+    let w = label_width(&p.label) + 12.0;
+    let (fill, text_fill, weight) = if p.depth == 0 {
+      ("#222222", "#ffffff", "600")
+    } else {
+      (
+        "#ffffff",
+        "#1f2328",
+        if p.depth == 1 { "600" } else { "400" },
+      )
+    };
+    svg.push_str(&format!(
+      "<rect x=\"{x:.1}\" y=\"{ry:.1}\" width=\"{w:.1}\" height=\"22\" rx=\"6\" fill=\"{fill}\" stroke=\"{c}\" stroke-width=\"1.2\"/>\n\
+<text x=\"{tx:.1}\" y=\"{ty:.1}\" font-size=\"14\" font-weight=\"{weight}\" fill=\"{text_fill}\">{label}</text>\n",
+      ry = p.y - 11.0,
+      c = colour(p),
+      tx = x + 6.0,
+      ty = p.y + 5.0,
+      label = escape_html(&p.label),
+    ));
+  }
+  svg.push_str("</svg>\n");
+  Ok(svg)
+}
+
+/// The tree as nested Markdown headings / list, the markmap input format.
+fn mindmap_markdown(root: &Value) -> Result<String, String> {
+  fn visit(node: &Value, depth: usize, out: &mut String) -> Result<(), String> {
+    let label = tree_label(node)?;
+    if depth < 3 {
+      out.push_str(&format!("{} {label}\n", "#".repeat(depth + 1)));
+    } else {
+      out.push_str(&format!("{}- {label}\n", "  ".repeat(depth - 3)));
+    }
+    for child in tree_children(node) {
+      visit(child, depth + 1, out)?;
+    }
+    Ok(())
+  }
+  layout_tree(root)?; // same size / depth limits as the SVG
+  let mut markdown = String::new();
+  visit(root, 0, &mut markdown)?;
+  Ok(markdown)
+}
+
+fn mindmap_page(root: &Value) -> Result<String, String> {
+  let markdown = mindmap_markdown(root)?;
+  let title = tree_label(root)?;
+  // `</script` inside the template would end it early.
+  let safe = markdown.replace("</", "<\\/");
+  Ok(format!(
+    "<!doctype html>\n<html><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>{}</title><style>html,body,.markmap{{margin:0;width:100%;height:100%}}</style>\
+<script src=\"https://cdn.jsdelivr.net/npm/markmap-autoloader@0.18.12\"></script></head>\n\
+<body><div class=\"markmap\"><script type=\"text/template\">\n{safe}</script></div></body></html>\n",
+    escape_html(&title)
+  ))
+}
+
+#[async_trait]
+impl AsyncNode for RenderMindmapNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let tree = match inputs.get("tree") {
+      Some(FlowValue::Json(Value::String(text))) => serde_json::from_str(text)
+        .map_err(|e| input_error(&self.id, format!("tree is not JSON: {e}")))?,
+      Some(FlowValue::Json(value)) => value.clone(),
+      Some(_) => serde_json::from_str(&text_input(&self.id, inputs, "tree").await?)
+        .map_err(|e| input_error(&self.id, format!("tree is not JSON: {e}")))?,
+      None => return Err(input_error(&self.id, "missing input 'tree'")),
+    };
+    let (text, mime) = match optional_str(inputs, "format").unwrap_or("svg") {
+      "svg" => (mindmap_svg(&tree), "image/svg+xml"),
+      "html" => (mindmap_page(&tree), "text/html"),
+      "md" => (mindmap_markdown(&tree), "text/markdown"),
+      other => {
+        return Err(input_error(
+          &self.id,
+          format!("unknown format '{other}': expected svg, html or md"),
+        ));
+      }
+    };
+    let text = text.map_err(|e| input_error(&self.id, e))?;
+    Ok(output(
+      &self.id,
+      write_artifact(&self.id, text.as_bytes(), mime).await?,
+    ))
+  }
+}
+
 // ── render_document (external: pandoc, typst for PDF) ─────────────────
 
 /// `render_document` (Y3.3): Markdown → `docx` / `pptx` / `html` /
@@ -811,5 +1062,73 @@ mod tests {
     .await
     .expect_err("unknown format");
     assert!(err.to_string().contains("unknown format 'odt'"), "{err}");
+  }
+
+  fn sample_tree() -> Value {
+    json!({"label": "潮汐 Tides", "children": [
+      {"label": "Causes", "children": [{"label": "Moon"}, {"label": "Sun"}]},
+      {"label": "Effects", "children": [{"label": "Coastal flooding"}]},
+      {"label": "Rhythm"}
+    ]})
+  }
+
+  #[tokio::test]
+  async fn mindmap_svg_lays_out_every_node_and_renders_to_png() {
+    let (path, mime) = run(
+      &RenderMindmapNode::new("mm"),
+      inputs(&[("tree", sample_tree())]),
+    )
+    .await;
+    assert_eq!(mime, "image/svg+xml");
+    let svg = std::fs::read_to_string(&path).expect("svg");
+    for label in [
+      "潮汐 Tides",
+      "Causes",
+      "Moon",
+      "Sun",
+      "Effects",
+      "Coastal flooding",
+      "Rhythm",
+    ] {
+      assert!(svg.contains(&format!(">{label}</text>")), "{label} missing");
+    }
+    assert_eq!(
+      svg.matches("<path ").count(),
+      6,
+      "one link per non-root node"
+    );
+    let png = svg_to_png(&svg, None).expect("the SVG renders");
+    assert_eq!(&png[1..4], b"PNG");
+  }
+
+  #[tokio::test]
+  async fn mindmap_parents_sit_between_their_children() {
+    let placed = layout_tree(&sample_tree()).expect("layout");
+    let y = |label: &str| placed.iter().find(|p| p.label == label).expect(label).y;
+    assert!((y("Causes") - (y("Moon") + y("Sun")) / 2.0).abs() < 0.01);
+    assert!(y("Moon") < y("Sun") && y("Sun") < y("Coastal flooding"));
+  }
+
+  #[tokio::test]
+  async fn mindmap_html_embeds_markmap_markdown() {
+    let (path, mime) = run(
+      &RenderMindmapNode::new("mm"),
+      inputs(&[("tree", sample_tree()), ("format", json!("html"))]),
+    )
+    .await;
+    assert_eq!(mime, "text/html");
+    let html = std::fs::read_to_string(path).expect("html");
+    assert!(html.contains("markmap-autoloader"));
+    assert!(html.contains("# 潮汐 Tides\n## Causes\n### Moon"), "{html}");
+  }
+
+  #[test]
+  fn mindmap_rejects_unlabelled_and_oversized_trees() {
+    assert!(layout_tree(&json!({"children": []})).is_err());
+    let mut deep = json!({"label": "leaf"});
+    for _ in 0..10 {
+      deep = json!({"label": "n", "children": [deep]});
+    }
+    assert!(layout_tree(&deep).unwrap_err().contains("deeper"));
   }
 }

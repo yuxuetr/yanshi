@@ -338,6 +338,17 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`mindmap` generator and `render_mindmap` (Y4.2).**
+  `examples/generators/mindmap.yml` maps a source (`url` or `text`)
+  into a labelled tree (`llm` with a recursive `json_schema`), then
+  renders an SVG, a PNG (`render_svg`), an interactive markmap page, and
+  a `kind: mindmap` Deliverable. The new in-process `render_mindmap`
+  node lays a tree out left to right: parents centred on their
+  children, columns sized to their widest label, one colour-blind-safe
+  colour per top-level branch, CJK-aware label widths, and size / depth
+  limits. It can emit `svg`, `html` (markmap via its CDN autoloader)
+  or `md`. The existing `markmap` node needs a third-party API, so it
+  is not used here.
 - **`report` generator template (Y4.1).** `examples/generators/report.yml`
   is the first catalogue entry (RFC §3). The source is a `url`, fetched
   through the http node's SSRF filter, or pasted `text`. It is then

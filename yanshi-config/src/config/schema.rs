@@ -494,6 +494,10 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("title", ParamType::String),
       ParamSpec::optional("format", ParamType::String),
     ]),
+    "render_mindmap" => Some(vec![
+      ParamSpec::required_input("tree", ParamType::Any),
+      ParamSpec::optional("format", ParamType::String),
+    ]),
     "figure" => Some(vec![
       ParamSpec::required("language", ParamType::String),
       ParamSpec::optional("model", ParamType::String),
