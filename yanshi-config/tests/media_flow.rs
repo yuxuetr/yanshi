@@ -197,3 +197,53 @@ nodes:
     .expect_err("the prompt's marker fails the call");
   assert!(error.to_string().contains("400"), "{error}");
 }
+
+/// Y3.1: the three render nodes from YAML. `render_table` takes rows from
+/// `parameters`; `render_markdown` takes its Markdown from an upstream
+/// template through `input_mapping`; `render_svg` writes a PNG.
+#[tokio::test]
+async fn render_nodes_produce_files_from_yaml() {
+  let work = tempfile::TempDir::new().expect("tempdir");
+  let yaml = r##"
+name: "render"
+nodes:
+  - id: table
+    type: render_table
+    parameters:
+      format: csv
+      rows: [{ name: "Ada", year: 1843 }]
+  - id: note
+    type: template
+    parameters:
+      template: "# Notes\n\nBorn {{ year }}."
+      year: 1815
+  - id: page
+    type: render_markdown
+    dependencies: ["note"]
+    input_mapping:
+      markdown: "{{ nodes.note.outputs.output }}"
+  - id: chart
+    type: render_svg
+    parameters:
+      svg: '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#00ff00"/></svg>'
+"##;
+  let state = build_flow_from_yaml(yaml, None)
+    .expect("flow builds")
+    .execute_from_inputs_with_config(
+      HashMap::new(),
+      FlowExecutionConfig::serial().with_run_base_dir(work.path()),
+    )
+    .await
+    .expect("flow runs");
+  let file = |id: &str| match &state[id].as_ref().expect("node ok")[&format!("{id}_output")] {
+    FlowValue::File { path, .. } => path.clone(),
+    other => panic!("{id}: expected File, got {other:?}"),
+  };
+  assert_eq!(
+    std::fs::read_to_string(file("table")).expect("csv"),
+    "name,year\nAda,1843\n"
+  );
+  let html = std::fs::read_to_string(file("page")).expect("html");
+  assert!(html.contains("<h1>Notes</h1>") && html.contains("Born 1815."), "{html}");
+  assert_eq!(&std::fs::read(file("chart")).expect("png")[1..4], b"PNG");
+}

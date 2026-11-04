@@ -65,7 +65,9 @@ fn cargo_toml_feature_matrix_matches_audit_pinned_shape() {
     "template = [\"handlebars\"]",
     "batch = []",
     "conditional = []",
-    "default = [\"http\", \"file\", \"template\"]",
+    // Y3.1: in-process renderers, default-on.
+    "render = [\"dep:rust_xlsxwriter\", \"dep:resvg\", \"dep:pulldown-cmark\", \"dep:csv\"]",
+    "default = [\"http\", \"file\", \"template\", \"render\"]",
   ] {
     assert!(
       MANIFEST.contains(required),

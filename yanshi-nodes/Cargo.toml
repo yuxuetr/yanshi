@@ -44,7 +44,11 @@ homepage.workspace = true
 # `mcp` / `rag` / `llm` features + deps) moved to `yanshi-nodes-ai`. This
 # tool-tier crate keeps only `http` / `file` / `template` / `batch` /
 # `conditional` / `arxiv` / `markmap`, with no capability dependencies.
-default = ["http", "file", "template"]
+# Y3.1: in-process renderers (`render_table` / `render_svg` /
+# `render_markdown`). Default-on: they are the content-production
+# runtime's baseline deliverables; disable to drop resvg / xlsx / cmark.
+default = ["http", "file", "template", "render"]
+render = ["dep:rust_xlsxwriter", "dep:resvg", "dep:pulldown-cmark", "dep:csv"]
 http = ["reqwest"]
 file = []
 template = ["handlebars"]
@@ -89,6 +93,12 @@ anyhow = "1.0"
 # workspace (W0.7 made yanshi-core's `tracing` unconditional too).
 tracing = "0.1"
 
+# Y3.1 render nodes (feature `render`).
+csv = { version = "1", optional = true }
+rust_xlsxwriter = { version = "0.102", optional = true }
+resvg = { version = "0.49", optional = true }
+pulldown-cmark = { version = "0.13", optional = true }
+
 # Utilities
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
@@ -102,6 +112,9 @@ regex = "1.0"
 urlencoding = "2.1"
 
 [dev-dependencies]
+futures = "0.3"
+# Reads back render_table's xlsx in its round-trip test.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tokio-test = "0.4"
 tempfile = "3.3"
 # P10.2.1: per-node latency benches sit alongside the existing

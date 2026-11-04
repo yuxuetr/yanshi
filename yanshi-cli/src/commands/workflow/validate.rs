@@ -211,7 +211,8 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
   let mut constraints: BTreeMap<String, String> = BTreeMap::new();
   let mut notes: Vec<String> = Vec::new();
   let (category, capabilities) = match node.node_type.as_str() {
-    "template" | "markmap" | "batch" | "conditional" | "while" => {
+    "template" | "markmap" | "batch" | "conditional" | "while" | "render_table" | "render_svg"
+    | "render_markdown" => {
       (PermissionCategory::Pure, vec![])
     }
     "llm" => {

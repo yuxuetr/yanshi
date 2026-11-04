@@ -21,4 +21,7 @@ pub mod conditional;
 
 // Specialized content processing nodes (tool tier — no capability deps).
 pub mod arxiv;
+
 pub mod markmap;
+#[cfg(feature = "render")]
+pub mod render;

@@ -43,7 +43,7 @@ DAG execution engine and core abstractions:
 
 #### L2 — yanshi-nodes (tool tier) + yanshi-nodes-ai (capability tier)
 Split by the P-A nodes decomposition (`docs/RFC_NODES_DECOMPOSITION.md`) so the tool-tier crate carries no capability dependencies:
-- **`yanshi-nodes`** — tool-tier `AsyncNode`s (`template`, `file`, `http`, `batch`, `conditional`, `arxiv`, `markmap`). Depends only on the IR (`yanshi-core`/graph) + `yanshi-tools`. Feature flags: defaults `["http", "file", "template"]`; `batch` / `conditional` opt-in.
+- **`yanshi-nodes`** — tool-tier `AsyncNode`s (`template`, `file`, `http`, `batch`, `conditional`, `arxiv`, `markmap`, and the Y3.1 renderers `render_table` / `render_svg` / `render_markdown`). Depends only on the IR (`yanshi-core`/graph) + `yanshi-tools`. Owns the shared artifact writer (`common::artifacts`) the modality nodes re-export. Feature flags: defaults `["http", "file", "template", "render"]` (`render` pulls `resvg` / `rust_xlsxwriter` / `pulldown-cmark` / `csv`); `batch` / `conditional` opt-in.
 - **`yanshi-nodes-ai`** — capability-backed adapters (`llm`, `asr`, `tts`, `text_to_image`, `image_to_image`, `image_understand`, `image_edit`, `mcp`, `rag`). Depends on `yanshi-nodes` (shared `common`/`error`) + the capabilities (`yanshi-llm` always; `yanshi-mcp` / `yanshi-rag` behind the `mcp` / `rag` features). The AI-modality nodes ship without per-modality gates.
 
 The workflow YAML `type:` → node dispatch lives in `yanshi-config::executor::factory` (it imports tool nodes from `yanshi-nodes` and capability nodes from `yanshi-nodes-ai`); the `type:` strings are unchanged by the split. `yanshi-worker` keeps the tool tier and pulls `yanshi-nodes-ai` only for the `llm` / `mcp` payloads it dispatches.

@@ -338,6 +338,19 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **In-process render nodes (Y3.1).** Three new workflow node types,
+  each writing a `FlowValue::File` artifact:
+  - `render_table` turns `rows` (JSON array of objects or arrays, or a
+    JSON string) into CSV or XLSX (`format`, optional `columns`).
+  - `render_svg` turns `svg` into a PNG with resvg and system fonts
+    (`width` scales it; the canvas is capped at 8192² pixels).
+  - `render_markdown` turns `markdown` into one self-contained HTML page
+    with an inline stylesheet. Raw HTML in the source is escaped, since
+    the page can be served from the gateway origin.
+  Each also accepts its content as a `File` from an upstream node. The
+  artifact writer moved to `yanshi_nodes::common::artifacts`, which
+  `yanshi-nodes-ai` re-exports. The renderers sit behind a default-on
+  `render` feature of `yanshi-nodes`.
 - **Cost limits for workflows with billed media nodes (Y2.3).** `tts`,
   `text_to_image`, `image_to_image`, `image_edit` and `text_to_video`
   price each call against the pricing table: per image, per second of

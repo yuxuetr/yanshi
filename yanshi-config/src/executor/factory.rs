@@ -200,6 +200,16 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       let node = ImageUnderstandNode::new(&node_def.id, &model, &text_prompt, &image_source);
       Ok(NodeType::Standard(Arc::new(node)))
     }
+    // Y3.1: in-process renderers; all inputs are read at execute time.
+    "render_table" => Ok(NodeType::Standard(Arc::new(
+      yanshi_nodes::nodes::render::RenderTableNode::new(&node_def.id),
+    ))),
+    "render_svg" => Ok(NodeType::Standard(Arc::new(
+      yanshi_nodes::nodes::render::RenderSvgNode::new(&node_def.id),
+    ))),
+    "render_markdown" => Ok(NodeType::Standard(Arc::new(
+      yanshi_nodes::nodes::render::RenderMarkdownNode::new(&node_def.id),
+    ))),
     "markmap" => {
       // markdown content will be provided via input_mapping at runtime
       let markdown = get_string_param_optional(&node_def.parameters, "markdown");

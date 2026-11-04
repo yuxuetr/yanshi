@@ -469,6 +469,23 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
     "text_to_image" => Some(vec![
       ParamSpec::required("model", ParamType::String),
       ParamSpec::required_input("prompt", ParamType::String),
+      ParamSpec::optional("negative_prompt", ParamType::String),
+      ParamSpec::optional("size", ParamType::String),
+      ParamSpec::optional("output_format", ParamType::String),
+    ]),
+    // Y3.1 renderers.
+    "render_table" => Some(vec![
+      ParamSpec::required_input("rows", ParamType::Any),
+      ParamSpec::optional("format", ParamType::String),
+      ParamSpec::optional("columns", ParamType::SequenceOfStrings),
+    ]),
+    "render_svg" => Some(vec![
+      ParamSpec::required_input("svg", ParamType::String),
+      ParamSpec::optional("width", ParamType::Integer),
+    ]),
+    "render_markdown" => Some(vec![
+      ParamSpec::required_input("markdown", ParamType::String),
+      ParamSpec::optional("title", ParamType::String),
     ]),
     "tts" => Some(vec![
       ParamSpec::required("model", ParamType::String),
