@@ -276,6 +276,17 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`yanshi workflow run` reports and exports artifacts (Y1.4).** A local
+  run ends with an artifact table (node, output, MIME, size, path).
+  `--output-dir <dir>` copies each artifact to `<dir>/<node_id>/<file>`
+  and writes `<dir>/artifacts.json` (`run_id` plus, per file, `node_id`,
+  `output_key`, `mime_type`, `size_bytes`, `sha256`, relative `path` and
+  `source`). The CLI and the gateway pick artifacts by the same rule,
+  now `yanshi_core::run_context::collect_file_outputs`. `--output-dir`
+  is rejected with `--server`; use the Y1.3 routes there. The `--output`
+  JSON is unchanged (still the state pool keyed by node id); the
+  artifact list lives in the manifest rather than beside node ids it
+  could collide with.
 
 - **`cargo xtask refresh-live-models` now calls each default model.**
   A model listed in `/models` can still be retired: Google lists

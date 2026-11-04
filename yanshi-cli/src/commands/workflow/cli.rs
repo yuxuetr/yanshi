@@ -36,6 +36,10 @@ enum WorkflowCommands {
     /// Base directory for per-run workflow artifacts. Defaults to YANSHI_RUN_DIR or ~/.yanshi/runs.
     #[arg(long)]
     run_dir: Option<String>,
+    /// Copy every artifact the run produced to `<DIR>/<node_id>/<file>`
+    /// and write `<DIR>/artifacts.json` (size + SHA-256 per file).
+    #[arg(long, value_name = "DIR")]
+    output_dir: Option<String>,
     /// Submit the workflow to a remote `yanshi serve` instance instead
     /// of executing in-process. Falls back to YANSHI_SERVER_URL when
     /// the flag is omitted; if neither is set the CLI runs in-process.
@@ -264,6 +268,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
       execution_mode,
       max_concurrency,
       run_dir,
+      output_dir,
       server,
       auth_token,
       tenant,
@@ -298,6 +303,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
           run_dir.as_deref(),
           watch,
           output.as_deref(),
+          output_dir.as_deref(),
           &input,
           dry_run,
           &timeout,
@@ -341,6 +347,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
           execution_mode,
           max_concurrency,
           run_dir,
+          output_dir,
         )
         .await
       }

@@ -96,6 +96,7 @@ pub fn reject_local_only_flags(
   run_dir: Option<&str>,
   watch: bool,
   output: Option<&str>,
+  output_dir: Option<&str>,
   input: &[String],
   dry_run: bool,
   timeout: &str,
@@ -115,6 +116,13 @@ pub fn reject_local_only_flags(
       "--output '{path}' is local-only (writes the final workflow output to a local file). \
        In server mode, capture the terminal run row via --format json-envelope or stream \
        events via `yanshi workflow logs <run_id> --follow`."
+    );
+  }
+  if output_dir.is_some() {
+    anyhow::bail!(
+      "--output-dir is local-only for now. In server mode, list a run's artifacts with \
+       GET /v1/runs/{{id}}/artifacts and download each from \
+       GET /v1/runs/{{id}}/artifacts/{{artifact_id}}."
     );
   }
   if watch {
@@ -587,6 +595,7 @@ mod tests {
       run_dir,
       watch,
       output,
+      None,
       input,
       dry_run,
       timeout,

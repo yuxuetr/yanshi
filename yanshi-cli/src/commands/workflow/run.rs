@@ -31,6 +31,7 @@ pub async fn execute(
   execution_mode: String,
   max_concurrency: usize,
   run_dir: Option<String>,
+  output_dir: Option<String>,
 ) -> Result<()> {
   if watch {
     bail!("--watch is not implemented yet; run without --watch or use workflow debug --dry-run");
@@ -137,13 +138,16 @@ pub async fn execute(
   if let Some(run_base_dir) = &execution_config.run_base_dir {
     println!("📁 Run artifacts directory: {}", run_base_dir.display());
   }
+  let artifact_base = execution_config
+    .resolved_run_base_dir()
+    .context("Failed to resolve the run base directory")?;
 
   // 3. Execute the flow
   println!("\n▶️  Running flow...");
   let start_time = std::time::Instant::now();
   let run_future = run_with_retries(
     flow,
-    workflow_id,
+    workflow_id.clone(),
     initial_inputs,
     timeout_duration,
     max_retries,
@@ -202,6 +206,20 @@ pub async fn execute(
       println!("\n📊 Final State Pool:");
       println!("{}", final_state_json);
     }
+  }
+
+  // Y1.4: what the run produced, and optionally a copy of it.
+  let produced = yanshi_core::run_context::collect_file_outputs(&final_state, &artifact_base);
+  super::artifacts::print_table(&produced);
+  if let Some(dir) = output_dir {
+    let dir = PathBuf::from(dir);
+    let copied = super::artifacts::copy_to_output_dir(&produced, &dir, &workflow_id)?;
+    println!(
+      "📤 Copied {} artifact(s) to {} (manifest: {})",
+      copied.len(),
+      dir.display(),
+      super::artifacts::MANIFEST_FILE
+    );
   }
 
   Ok(())

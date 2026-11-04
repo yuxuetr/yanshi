@@ -220,6 +220,21 @@ yanshi workflow run flow.yml --run-dir /var/lib/yanshi/runs
 YANSHI_RUN_DIR=/tmp/yanshi-runs yanshi workflow run flow.yml
 ```
 
+Media nodes (`tts`, `text_to_image`, `text_to_video`, ...) write their
+output under `<run_dir>/<run_id>/artifacts/<node_id>/`, and a run ends
+with a table of those files. To collect them somewhere stable:
+
+```bash
+yanshi workflow run flow.yml --output-dir ./out
+# ./out/<node_id>/<file>   copies of every artifact
+# ./out/artifacts.json     run_id + node_id / output_key / mime_type /
+#                          size_bytes / sha256 / path per artifact
+```
+
+Only `File` outputs under the run base directory count as artifacts.
+`--output-dir` is local-only; against `--server`, list and download
+through `GET /v1/runs/{id}/artifacts`.
+
 Trace files default to:
 
 ```text
