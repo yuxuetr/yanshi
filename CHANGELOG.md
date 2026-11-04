@@ -338,6 +338,19 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **Notebook sources: ingestion and search (Y5.2).** New routes:
+  `POST /v1/notebooks`, `GET /v1/notebooks`, `GET /v1/notebooks/{id}`
+  (with its sources), `POST /v1/notebooks/{id}/sources`, and
+  `GET /v1/notebooks/{id}/search?q=`. A source is a `url` (fetched
+  through the http tool's SSRF filter, since the URL is
+  tenant-supplied), pasted `text`, or a text-like `file`
+  (`.txt` / `.md` / `.html`, base64, up to 10 MiB). Ingestion runs in
+  the background: extract text, chunk by paragraph, store in the new
+  `source_chunks` table (migration `0014`), then mark the source ready
+  or failed with the reason. Each notebook's BM25 index is built from
+  those rows on first search, cached in process, and dropped when a
+  source changes, so a restart costs one rebuild. `recording` sources
+  are refused until transcription is wired in.
 - **Notebooks and sources in the gateway database (Y5.1).** Migration
   `0013_notebooks.sql` adds `notebooks` (tenant, title), `sources`
   (notebook, kind `url` / `file` / `text` / `recording`, ingestion

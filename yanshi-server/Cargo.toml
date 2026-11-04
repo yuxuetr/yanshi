@@ -64,6 +64,10 @@ yanshi-config = { path = "../yanshi-config", version = "0.1", features = ["plugi
 yanshi-skills = { path = "../yanshi-skills", version = "0.1" }
 yanshi-tracing = { path = "../yanshi-tracing", version = "0.1", features = ["otlp-http"] }
 yanshi-tools = { path = "../yanshi-tools", version = "0.1" }
+# Y5.2: notebook source ingestion (HTML text extraction, chunking) and the
+# per-notebook BM25 index. No vector store: the qdrant default is off.
+yanshi-rag = { path = "../yanshi-rag", version = "0.3.0-alpha", default-features = false, features = ["html"] }
+base64 = "0.21"
 yanshi-harness = { path = "../yanshi-harness", version = "0.1" }
 yanshi-agents = { path = "../yanshi-agents", version = "0.2" }
 yanshi-agent-spi = { path = "../yanshi-agent-spi", version = "0.1" }

@@ -38,6 +38,7 @@ pub mod harness_approval;
 pub mod harness_live;
 pub mod live_state_registry;
 pub mod metrics;
+pub mod notebooks;
 pub mod preferences;
 pub mod runs;
 pub mod scheduler;
@@ -191,6 +192,8 @@ pub struct AppState {
   pub gateway_policy: gateway_policy::GatewayPolicy,
   /// Process-local harness session cancellation tokens (eval 2026-10-07 P1).
   pub harness_cancellations: harness::HarnessCancellationRegistry,
+  /// Y5.2: per-notebook BM25 indexes, rebuilt from `source_chunks`.
+  pub notebook_indexes: notebooks::NotebookIndexCache,
 }
 
 impl std::fmt::Debug for AppState {
@@ -235,6 +238,7 @@ impl AppState {
       worker_control_plane: None,
       gateway_policy: gateway_policy::GatewayPolicy::default(),
       harness_cancellations: harness::HarnessCancellationRegistry::default(),
+      notebook_indexes: notebooks::NotebookIndexCache::default(),
     }
   }
 
@@ -648,6 +652,17 @@ pub fn create_router(state: AppState) -> Router {
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))
     .route("/v1/runs/:id/approvals", get(list_run_approvals))
+    // Y5.2: notebooks, their sources and search.
+    .route(
+      "/v1/notebooks",
+      get(notebooks::list_notebooks).post(notebooks::create_notebook),
+    )
+    .route("/v1/notebooks/:id", get(notebooks::get_notebook))
+    .route(
+      "/v1/notebooks/:id/sources",
+      post(notebooks::add_source).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+    )
+    .route("/v1/notebooks/:id/search", get(notebooks::search_notebook))
     // Y1.3: what a run produced, and the bytes themselves.
     .route("/v1/runs/:id/artifacts", get(artifacts::list_run_artifacts))
     .route(

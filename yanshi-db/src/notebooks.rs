@@ -1,5 +1,6 @@
-//! Notebooks, their sources and their generated artifacts (Y5.1,
-//! `docs/RFC_CONTENT_STUDIO.md` §6; migration `0013_notebooks.sql`).
+//! Notebooks, their sources, the sources' chunks and the notebooks'
+//! generated artifacts (Y5.1 / Y5.2, `docs/RFC_CONTENT_STUDIO.md` §6;
+//! migrations `0013_notebooks.sql`, `0014_source_chunks.sql`).
 //!
 //! Every read takes the caller's tenant and filters on it, so an id from
 //! another tenant is indistinguishable from a missing one.
@@ -357,5 +358,114 @@ impl SourceRepo for PgSourceRepo {
       });
     }
     Ok(())
+  }
+}
+
+/// One stored chunk of an ingested source (Y5.2).
+#[derive(Debug, Clone, PartialEq, FromRow, Serialize, Deserialize)]
+pub struct SourceChunk {
+  /// `<source_id>:<ordinal>`; what citations refer to.
+  pub chunk_id: String,
+  pub source_id: Uuid,
+  pub notebook_id: Uuid,
+  pub tenant_id: String,
+  pub ordinal: i32,
+  pub content: String,
+  pub metadata: serde_json::Value,
+}
+
+#[async_trait]
+pub trait SourceChunkRepo: Send + Sync {
+  /// Replace every chunk of `source` with `chunks` (content, metadata),
+  /// numbered from 0, in one transaction.
+  async fn replace_for_source(
+    &self,
+    source: &Source,
+    chunks: Vec<(String, serde_json::Value)>,
+  ) -> Result<usize, DbError>;
+  /// Chunks of the notebook's `ready` sources, in source then chunk order.
+  async fn list_ready_for_notebook(
+    &self,
+    tenant_id: &str,
+    notebook_id: Uuid,
+  ) -> Result<Vec<SourceChunk>, DbError>;
+  /// One chunk, if it is this tenant's (citation lookup, Y5.3).
+  async fn get(&self, tenant_id: &str, chunk_id: &str) -> Result<Option<SourceChunk>, DbError>;
+}
+
+#[derive(Clone, Debug)]
+pub struct PgSourceChunkRepo {
+  pub(crate) pool: PgPool,
+  pub(crate) read_pool: PgPool,
+}
+
+const CHUNK_COLUMNS: &str =
+  "chunk_id, source_id, notebook_id, tenant_id, ordinal, content, metadata";
+
+#[async_trait]
+impl SourceChunkRepo for PgSourceChunkRepo {
+  async fn replace_for_source(
+    &self,
+    source: &Source,
+    chunks: Vec<(String, serde_json::Value)>,
+  ) -> Result<usize, DbError> {
+    let mut tx = self.pool.begin().await?;
+    sqlx::query("DELETE FROM source_chunks WHERE source_id = $1")
+      .bind(source.id)
+      .execute(&mut *tx)
+      .await?;
+    let count = chunks.len();
+    for (ordinal, (content, metadata)) in chunks.into_iter().enumerate() {
+      let ordinal = i32::try_from(ordinal).map_err(|_| DbError::NotFound {
+        entity_type: "chunk ordinal",
+        id: ordinal.to_string(),
+      })?;
+      sqlx::query(
+        r#"INSERT INTO source_chunks (chunk_id, source_id, notebook_id, tenant_id, ordinal, content, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+      )
+      .bind(format!("{}:{ordinal}", source.id))
+      .bind(source.id)
+      .bind(source.notebook_id)
+      .bind(&source.tenant_id)
+      .bind(ordinal)
+      .bind(content)
+      .bind(metadata)
+      .execute(&mut *tx)
+      .await?;
+    }
+    tx.commit().await?;
+    Ok(count)
+  }
+
+  async fn list_ready_for_notebook(
+    &self,
+    tenant_id: &str,
+    notebook_id: Uuid,
+  ) -> Result<Vec<SourceChunk>, DbError> {
+    Ok(
+      sqlx::query_as::<_, SourceChunk>(
+        r#"SELECT c.chunk_id, c.source_id, c.notebook_id, c.tenant_id, c.ordinal, c.content, c.metadata
+           FROM source_chunks c JOIN sources s ON s.id = c.source_id
+           WHERE c.notebook_id = $1 AND c.tenant_id = $2 AND s.status = 'ready'
+           ORDER BY s.created_at ASC, c.ordinal ASC"#,
+      )
+      .bind(notebook_id)
+      .bind(tenant_id)
+      .fetch_all(&self.read_pool)
+      .await?,
+    )
+  }
+
+  async fn get(&self, tenant_id: &str, chunk_id: &str) -> Result<Option<SourceChunk>, DbError> {
+    Ok(
+      sqlx::query_as::<_, SourceChunk>(&format!(
+        "SELECT {CHUNK_COLUMNS} FROM source_chunks WHERE chunk_id = $1 AND tenant_id = $2"
+      ))
+      .bind(chunk_id)
+      .bind(tenant_id)
+      .fetch_optional(&self.read_pool)
+      .await?,
+    )
   }
 }
