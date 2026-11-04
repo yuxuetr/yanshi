@@ -1,4 +1,4 @@
-use super::line_buffer::LineBuffer;
+use super::line_buffer::{LineBuffer, is_sse_done};
 use crate::{
   LLMError, ResponseFormat, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage, ToolCallDelta},
@@ -72,6 +72,13 @@ impl OpenAIProvider {
       "messages": request.messages,
       "stream": request.stream
     });
+    // Y2.1 (COR-1): without this an OpenAI-compatible stream carries no
+    // usage at all, so every streamed call (all ReAct turns) reported
+    // `total_tokens: None` and token / cost budgets never accrued.
+    // Before `parameters` so a caller can still override it.
+    if request.stream && accepts_stream_options(&request.model) {
+      body["stream_options"] = json!({ "include_usage": true });
+    }
 
     // Add additional parameters
     for (key, value) in &request.parameters {
@@ -106,6 +113,17 @@ impl OpenAIProvider {
 
     body
   }
+}
+
+/// Whether a model served through this provider takes
+/// `stream_options.include_usage`. OpenAI, DeepSeek and DashScope
+/// document it. MiniMax (`api.minimaxi.com`) has been reported to reject
+/// it as an invalid chat setting (error 2013), and GLM documents no such
+/// field, so both are skipped by model name; the stream parser still
+/// picks up whatever usage they send on their own final chunk.
+pub(crate) fn accepts_stream_options(model: &str) -> bool {
+  let model = model.to_ascii_lowercase();
+  !(model.starts_with("glm-") || model.starts_with("minimax-"))
 }
 
 /// Encode a [`ResponseFormat`] as OpenAI's `response_format` request field.
@@ -492,9 +510,14 @@ struct OpenAIUsage {
 // Streaming response structures
 #[derive(Debug, Deserialize, Serialize)]
 struct OpenAIStreamingChunk {
+  // Defaulted: some compatible vendors omit these on the usage-only frame.
+  #[serde(default)]
   id: String,
+  #[serde(default)]
   object: String,
+  #[serde(default)]
   created: u64,
+  #[serde(default)]
   model: String,
   choices: Vec<OpenAIStreamingChoice>,
   usage: Option<OpenAIUsage>,
@@ -611,9 +634,28 @@ impl OpenAIStreamingResponse {
       });
     }
 
-    if let Ok(chunk) = serde_json::from_str::<OpenAIStreamingChunk>(data)
-      && let Some(choice) = chunk.choices.first()
-    {
+    let Ok(chunk) = serde_json::from_str::<OpenAIStreamingChunk>(data) else {
+      return None;
+    };
+    // Y2.1: the `include_usage` frame has `choices: []` and only `usage`.
+    // It used to fail the `choices.first()` check and vanish. Its
+    // metadata is left out so the collector keeps the last content
+    // frame's raw metadata.
+    if chunk.choices.is_empty() {
+      return chunk.usage.map(|u| StreamChunk {
+        content: String::new(),
+        is_final: false,
+        metadata: None,
+        usage: Some(TokenUsage {
+          prompt_tokens: Some(u.prompt_tokens),
+          completion_tokens: Some(u.completion_tokens),
+          total_tokens: Some(u.total_tokens),
+        }),
+        content_type: Some("text".to_string()),
+        tool_call_deltas: Vec::new(),
+      });
+    }
+    if let Some(choice) = chunk.choices.first() {
       let content_text = match &choice.delta.content {
         Some(serde_json::Value::String(text)) => text.clone(),
         Some(other) => other.to_string(),
@@ -673,12 +715,12 @@ impl StreamingResponse for OpenAIStreamingResponse {
       // `StepFunStreamingResponse::next_chunk` for the reference fix.
       {
         while let Some(line) = self.buffer.next_line() {
+          if is_sse_done(&line) {
+            self.finished = true;
+          }
           if !line.is_empty()
             && let Some(chunk) = Self::parse_sse_chunk(&line)
           {
-            if chunk.is_final {
-              self.finished = true;
-            }
             return Ok(Some(chunk));
           }
         }
@@ -973,6 +1015,63 @@ mod tests {
     let chunk = OpenAIStreamingResponse::parse_sse_chunk("data: [DONE]").unwrap();
     assert!(chunk.is_final);
     assert!(chunk.tool_call_deltas.is_empty());
+  }
+
+  fn stream_request(model: &str, stream: bool) -> ProviderRequest {
+    ProviderRequest {
+      model: model.to_string(),
+      messages: vec![json!({"role": "user", "content": "test"})],
+      stream,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    }
+  }
+
+  /// Y2.1: streamed requests ask for usage; non-streamed ones (usage is
+  /// always in the body) and vendors that reject the field do not.
+  #[test]
+  fn build_request_body_requests_stream_usage_where_supported() {
+    let provider = OpenAIProvider::new("test-key", None).unwrap();
+    for model in ["gpt-4o", "deepseek-v4-chat", "qwen-plus"] {
+      let body = provider.build_request_body(&stream_request(model, true));
+      assert_eq!(
+        body["stream_options"],
+        json!({ "include_usage": true }),
+        "{model}"
+      );
+    }
+    let body = provider.build_request_body(&stream_request("gpt-4o", false));
+    assert!(body.get("stream_options").is_none());
+    for model in ["glm-5.1", "MiniMax-M2.7"] {
+      let body = provider.build_request_body(&stream_request(model, true));
+      assert!(body.get("stream_options").is_none(), "{model}");
+    }
+  }
+
+  #[test]
+  fn build_request_body_lets_parameters_override_stream_options() {
+    let provider = OpenAIProvider::new("test-key", None).unwrap();
+    let mut request = stream_request("gpt-4o", true);
+    request.parameters.insert(
+      "stream_options".to_string(),
+      json!({ "include_usage": false }),
+    );
+    let body = provider.build_request_body(&request);
+    assert_eq!(body["stream_options"]["include_usage"], false);
+  }
+
+  #[test]
+  fn usage_only_frame_parses_to_a_usage_chunk() {
+    let chunk = OpenAIStreamingResponse::parse_sse_chunk(
+      "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}",
+    )
+    .expect("usage frame must not be dropped");
+    assert!(!chunk.is_final);
+    assert!(chunk.metadata.is_none());
+    assert_eq!(chunk.usage.expect("usage").total_tokens, Some(3));
   }
 
   #[test]

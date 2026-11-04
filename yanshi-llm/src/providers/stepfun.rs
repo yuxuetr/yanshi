@@ -1,4 +1,4 @@
-use super::line_buffer::LineBuffer;
+use super::line_buffer::{LineBuffer, is_sse_done};
 use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
@@ -550,12 +550,12 @@ impl StreamingResponse for StepFunStreamingResponse {
       // inspected the buffer immediately after a fresh `stream.next()`.
       {
         while let Some(line) = self.buffer.next_line() {
+          if is_sse_done(&line) {
+            self.finished = true;
+          }
           if !line.is_empty()
             && let Some(chunk) = Self::parse_sse_chunk(&line)
           {
-            if chunk.is_final {
-              self.finished = true;
-            }
             return Ok(Some(chunk));
           }
         }

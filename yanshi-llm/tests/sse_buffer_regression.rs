@@ -205,3 +205,54 @@ async fn moonshot_single_read_trailing_content_and_done_are_not_dropped() {
   );
   assert!(saw_final, "the [DONE]-driven final chunk must be observed");
 }
+
+/// Y2.1 (COR-1): with `stream_options.include_usage` an OpenAI-compatible
+/// stream ends `finish_reason` chunk → usage-only frame (`choices: []`)
+/// → `[DONE]`. The reader used to stop at `finish_reason` and the parser
+/// dropped any frame without a choice, so every streamed call — all
+/// ReAct turns, which always stream — collected `usage: None`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_usage_only_last_frame_reaches_the_collected_response() {
+  const BODY: &str = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}],\"usage\":null}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o-mini\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":2,\"total_tokens\":13}}\n\ndata: [DONE]\n\n";
+  let base_url = spawn_sse_server(BODY).await;
+  let provider =
+    OpenAIProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+
+  let response = provider
+    .execute_streaming(&streaming_request("gpt-4o-mini"))
+    .await
+    .expect("stream");
+  let collected = yanshi_llm::client::streaming::collect_streaming_response(response, |_| async {})
+    .await
+    .expect("collect");
+
+  assert_eq!(collected.content, "hi");
+  let usage = collected.usage.expect("usage from the trailing frame");
+  assert_eq!(usage.total_tokens, Some(13));
+  assert_eq!(usage.prompt_tokens, Some(11));
+  assert_eq!(usage.completion_tokens, Some(2));
+}
+
+/// Y2.1: Kimi reports streaming usage on the finish chunk's *choice*,
+/// not at the top level.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moonshot_choice_level_usage_reaches_the_collected_response() {
+  const BODY: &str = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"kimi-k2\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"kimi-k2\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":1,\"total_tokens\":6}}]}\n\ndata: [DONE]\n\n";
+  let base_url = spawn_sse_server(BODY).await;
+  let provider =
+    MoonshotProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
+
+  let response = provider
+    .execute_streaming(&streaming_request("kimi-k2"))
+    .await
+    .expect("stream");
+  let collected = yanshi_llm::client::streaming::collect_streaming_response(response, |_| async {})
+    .await
+    .expect("collect");
+
+  assert_eq!(collected.content, "hi");
+  assert_eq!(
+    collected.usage.expect("choice-level usage").total_tokens,
+    Some(6)
+  );
+}

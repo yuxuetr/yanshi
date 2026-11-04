@@ -99,6 +99,21 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **Streamed LLM calls now report token usage (Y2.1, COR-1).** Every
+  ReAct turn streams, and the OpenAI-compatible stream carried no usage:
+  the request never set `stream_options.include_usage`, the parser
+  dropped the usage-only frame (`choices: []`), and the reader stopped
+  at `finish_reason` before that frame arrived. So `LlmCallCompleted`
+  had `total_tokens: None` and token / cost budgets never accrued. Now
+  OpenAI, DeepSeek and DashScope requests ask for usage. GLM and
+  MiniMax are skipped by model name: MiniMax was reported to reject the
+  field, and GLM documents none. The OpenAI, Moonshot and StepFun
+  readers continue to `[DONE]`, and Moonshot's choice-level usage is
+  read. Regression fixtures are in `yanshi-llm/tests/sse_buffer_regression.rs`.
+- **`/metrics` recorder init is serialized.** A caller that lost the
+  install race could scrape before the handle was stored and get an
+  empty body, which made the `metrics_endpoint` tests flaky.
+
 - **Helm chart no longer refuses `replicaCount > 1`.** The W4.2a guard
   (fail unless `allowMultiReplica=true`) and its "process-local, not yet
   fixed" warning outlived W4.2, which moved SSE fan-out, run admission

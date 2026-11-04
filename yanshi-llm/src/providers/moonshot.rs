@@ -1,4 +1,4 @@
-use super::line_buffer::LineBuffer;
+use super::line_buffer::{LineBuffer, is_sse_done};
 use crate::{
   LLMError, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage},
@@ -274,6 +274,10 @@ struct MoonshotStreamingChoice {
   index: u32,
   delta: MoonshotStreamingDelta,
   finish_reason: Option<String>,
+  /// Y2.1: Kimi puts the stream's usage on the finish chunk's choice,
+  /// not at the top level where the OpenAI shape has it.
+  #[serde(default)]
+  usage: Option<MoonshotUsage>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -346,7 +350,8 @@ impl MoonshotStreamingResponse {
       let has_signal = !content_text.is_empty()
         || !tool_call_deltas.is_empty()
         || choice.finish_reason.is_some()
-        || chunk.usage.is_some();
+        || chunk.usage.is_some()
+        || choice.usage.is_some();
       if !has_signal {
         return None;
       }
@@ -355,11 +360,15 @@ impl MoonshotStreamingResponse {
         content: content_text,
         is_final: choice.finish_reason.is_some(),
         metadata: Some(serde_json::to_value(&chunk).ok()?),
-        usage: chunk.usage.map(|u| TokenUsage {
-          prompt_tokens: Some(u.prompt_tokens),
-          completion_tokens: Some(u.completion_tokens),
-          total_tokens: Some(u.total_tokens),
-        }),
+        usage: chunk
+          .usage
+          .as_ref()
+          .or(choice.usage.as_ref())
+          .map(|u| TokenUsage {
+            prompt_tokens: Some(u.prompt_tokens),
+            completion_tokens: Some(u.completion_tokens),
+            total_tokens: Some(u.total_tokens),
+          }),
         content_type: Some("text".to_string()),
         tool_call_deltas,
       });
@@ -389,12 +398,12 @@ impl StreamingResponse for MoonshotStreamingResponse {
       // observed from a real sentinel.
       {
         while let Some(line) = self.buffer.next_line() {
+          if is_sse_done(&line) {
+            self.finished = true;
+          }
           if !line.is_empty()
             && let Some(chunk) = Self::parse_sse_chunk(&line)
           {
-            if chunk.is_final {
-              self.finished = true;
-            }
             return Ok(Some(chunk));
           }
         }
