@@ -338,6 +338,20 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **Citations point at notebook chunks (Y5.3).** The three generators
+  take an optional `chunks` input
+  (`[{chunk_id, source_id, content}]`, what a notebook provides).
+  Passages are labelled `[chunk_id]` in the prompt and the models return
+  that id:
+  - report quotes become `{chunk_id, quote}`, and footnotes name the
+    passage;
+  - mind-map branches carry `chunk_id`;
+  - audio lines carry `chunk_id`.
+  The Deliverable's citations then hold the real `chunk_id` and its
+  `source_id` (mind map and audio quote the passage itself). The `rag`
+  node gains a `citations` output in the same
+  `{source_id, chunk_id, span?, quote}` shape. Breaking: a report
+  section's `quotes` are now objects, not strings.
 - **Notebook sources: ingestion and search (Y5.2).** New routes:
   `POST /v1/notebooks`, `GET /v1/notebooks`, `GET /v1/notebooks/{id}`
   (with its sources), `POST /v1/notebooks/{id}/sources`, and

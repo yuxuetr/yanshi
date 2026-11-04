@@ -28,6 +28,9 @@ inputs:
   pdf:
     description: "Also render a PDF (needs pandoc + typst; see `yanshi doctor`)"
     default: true
+  chunks:
+    description: "Notebook passages to work from instead of url / text: [{chunk_id, source_id, content}]. Citations then point at these ids."
+    default: []
 
 nodes:
   # run_if can read node outputs only, so the switches go through a node.
@@ -50,7 +53,9 @@ nodes:
     input_mapping:
       page: "{{ nodes.fetch.outputs.body }}"
     parameters:
-      template: "{% if page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
+      # With notebook `chunks`, every passage is labelled with its id so
+      # the model can say where each quote comes from.
+      template: "{% if chunks | length > 0 %}{% for c in chunks %}[{{ c.chunk_id }}] {{ c.content }}\n\n{% endfor %}{% elif page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
 
   - id: outline_prompt
     type: template
@@ -115,7 +120,8 @@ nodes:
               Write the report section "{{ item.heading }}" ({{ item.brief }}).
               Two to four paragraphs of Markdown, no heading. Base every
               claim on the source, and list the exact sentences you relied
-              on as quotes.
+              on as quotes, each with the id in square brackets of the
+              passage it comes from ("" when passages have no ids).
 
               SOURCE:
               {{ item.source }}
@@ -131,7 +137,14 @@ nodes:
               required: [markdown, quotes]
               properties:
                 markdown: { type: string }
-                quotes: { type: array, items: { type: string } }
+                quotes:
+                  type: array
+                  items:
+                    type: object
+                    required: [chunk_id, quote]
+                    properties:
+                      chunk_id: { type: string }
+                      quote: { type: string }
 
   # Sections in outline order, each followed by its footnoted quotes.
   - id: assemble
@@ -149,7 +162,7 @@ nodes:
         {{ r.write.Ok.output.value.markdown }}{% for q in r.write.Ok.output.value.quotes %}{% set_global n = n + 1 %}[^{{ n }}]{% endfor %}
         {% endfor %}
         {% set_global n = 0 %}{% for r in written %}{% for q in r.write.Ok.output.value.quotes %}{% set_global n = n + 1 %}
-        [^{{ n }}]: "{{ q }}"{% if url %} — <{{ url }}>{% endif %}{% endfor %}{% endfor %}
+        [^{{ n }}]: "{{ q.quote }}"{% if q.chunk_id %} [{{ q.chunk_id }}]{% endif %}{% if url %} — <{{ url }}>{% endif %}{% endfor %}{% endfor %}
 
   - id: report_md
     type: render_markdown
@@ -191,7 +204,7 @@ nodes:
           "kind": "report",
           "title": {{ plan.title | json_encode() }},
           "content": {"sections": [{% for r in written %}{"heading": {{ plan.sections[loop.index0].heading | json_encode() }}, "markdown": {{ r.write.Ok.output.value.markdown | json_encode() }}}{% if not loop.last %},{% endif %}{% endfor %}]},
-          "citations": [{% set_global first = true %}{% for r in written %}{% for q in r.write.Ok.output.value.quotes %}{% if not first %},{% endif %}{% set_global first = false %}{"source_id": {% if url %}{{ url | json_encode() }}{% else %}"text"{% endif %}, "chunk_id": "", "quote": {{ q | json_encode() }}}{% endfor %}{% endfor %}],
+          "citations": [{% set_global first = true %}{% for r in written %}{% for q in r.write.Ok.output.value.quotes %}{% if not first %},{% endif %}{% set_global first = false %}{% set_global sid = "" %}{% set_global passage = "" %}{% for c in chunks %}{% if c.chunk_id == q.chunk_id %}{% set_global sid = c.source_id %}{% set_global passage = c.content %}{% endif %}{% endfor %}{"source_id": {% if sid %}{{ sid | json_encode() }}{% elif url %}{{ url | json_encode() }}{% else %}"text"{% endif %}, "chunk_id": {{ q.chunk_id | default(value="") | json_encode() }}, "quote": {{ q.quote | json_encode() }}}{% endfor %}{% endfor %}],
           "files": [
             {"node_id": "report_md", "name": {{ md | split(pat="/") | last | json_encode() }}, "mime_type": "text/markdown", "role": "primary"},
             {"node_id": "report_html", "name": {{ html | split(pat="/") | last | json_encode() }}, "mime_type": "text/html", "role": "preview"}{% if pdf_file %},

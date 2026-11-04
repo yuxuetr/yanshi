@@ -22,6 +22,9 @@ inputs:
   depth:
     description: "Levels below the root (2-4 reads best)"
     default: 3
+  chunks:
+    description: "Notebook passages to work from instead of url / text: [{chunk_id, source_id, content}]. Citations then point at these ids."
+    default: []
 
 nodes:
   - id: options
@@ -41,7 +44,9 @@ nodes:
     input_mapping:
       page: "{{ nodes.fetch.outputs.body }}"
     parameters:
-      template: "{% if page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
+      # With notebook `chunks`, every passage is labelled with its id so
+      # the model can say where each quote comes from.
+      template: "{% if chunks | length > 0 %}{% for c in chunks %}[{{ c.chunk_id }}] {{ c.content }}\n\n{% endfor %}{% elif page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
 
   - id: tree_prompt
     type: template
@@ -53,7 +58,9 @@ nodes:
         Build a mind map of the source below, organising {{ focus }}.
         The root is the subject in a few words; go at most {{ depth }}
         levels below it, 3-6 children per node, labels of at most six
-        words. Use only what the source supports.
+        words. Use only what the source supports. When the source's
+        passages carry [ids], give every first- and second-level node the
+        chunk_id of the passage it summarises.
 
         SOURCE:
         {{ source_text }}
@@ -72,6 +79,7 @@ nodes:
             required: [label]
             properties:
               label: { type: string }
+              chunk_id: { type: string }
               children: { type: array, items: { $ref: "#/$defs/node" } }
         $ref: "#/$defs/node"
 
@@ -112,7 +120,7 @@ nodes:
           "kind": "mindmap",
           "title": {{ map.label | json_encode() }},
           "content": {"tree": {{ map | json_encode() }}},
-          "citations": [],
+          "citations": [{% set_global first = true %}{% for b in map.children | default(value=[]) %}{% for n in [b] | concat(with=b.children | default(value=[])) %}{% if n.chunk_id %}{% set_global sid = "" %}{% set_global passage = "" %}{% for c in chunks %}{% if c.chunk_id == n.chunk_id %}{% set_global sid = c.source_id %}{% set_global passage = c.content %}{% endif %}{% endfor %}{% if passage %}{% if not first %},{% endif %}{% set_global first = false %}{"source_id": {{ sid | json_encode() }}, "chunk_id": {{ n.chunk_id | json_encode() }}, "quote": {{ passage | truncate(length=300) | json_encode() }}}{% endif %}{% endif %}{% endfor %}{% endfor %}],
           "files": [
             {"node_id": "map_svg", "name": {{ svg | split(pat="/") | last | json_encode() }}, "mime_type": "image/svg+xml", "role": "primary"},
             {"node_id": "map_png", "name": {{ png | split(pat="/") | last | json_encode() }}, "mime_type": "image/png", "role": "preview"},

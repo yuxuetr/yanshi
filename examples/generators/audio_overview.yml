@@ -41,6 +41,9 @@ inputs:
   target_lufs:
     description: "Loudness target (podcast platforms: -16, broadcast: -23)"
     default: -16
+  chunks:
+    description: "Notebook passages to work from instead of url / text: [{chunk_id, source_id, content}]. Citations then point at these ids."
+    default: []
 
 nodes:
   - id: options
@@ -60,7 +63,9 @@ nodes:
     input_mapping:
       page: "{{ nodes.fetch.outputs.body }}"
     parameters:
-      template: "{% if page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
+      # With notebook `chunks`, every passage is labelled with its id so
+      # the model can say where each quote comes from.
+      template: "{% if chunks | length > 0 %}{% for c in chunks %}[{{ c.chunk_id }}] {{ c.content }}\n\n{% endfor %}{% elif page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
 
   - id: script_prompt
     type: template
@@ -73,7 +78,9 @@ nodes:
         curious host and a knowledgeable guest about the source below,
         covering {{ focus }}. Natural spoken turns of one to three
         sentences, no stage directions, no sound effects. The host opens
-        and closes. Every fact must come from the source.
+        and closes. Every fact must come from the source; when its
+        passages carry [ids], give each line that states a fact the
+        chunk_id of its passage.
 
         SOURCE:
         {{ source_text }}
@@ -98,6 +105,7 @@ nodes:
               properties:
                 speaker: { type: string, enum: [host, guest] }
                 text: { type: string }
+                chunk_id: { type: string }
 
   # One item per line, carrying what the tts node inside the Map needs
   # (a Map body sees only `item`, not the workflow inputs).
@@ -160,7 +168,7 @@ nodes:
           "kind": "audio_overview",
           "title": {{ plan.title | json_encode() }},
           "content": {"script": {{ plan.lines | json_encode() }}, "loudness_lufs": {{ lufs | json_encode() }}},
-          "citations": [],
+          "citations": [{% set_global first = true %}{% for l in plan.lines %}{% if l.chunk_id %}{% set_global sid = "" %}{% set_global passage = "" %}{% for c in chunks %}{% if c.chunk_id == l.chunk_id %}{% set_global sid = c.source_id %}{% set_global passage = c.content %}{% endif %}{% endfor %}{% if passage %}{% if not first %},{% endif %}{% set_global first = false %}{"source_id": {{ sid | json_encode() }}, "chunk_id": {{ l.chunk_id | json_encode() }}, "quote": {{ passage | truncate(length=300) | json_encode() }}}{% endif %}{% endif %}{% endfor %}],
           "files": [
             {"node_id": "episode", "name": {{ mp3 | split(pat="/") | last | json_encode() }}, "mime_type": "audio/mpeg", "role": "primary"}
           ]

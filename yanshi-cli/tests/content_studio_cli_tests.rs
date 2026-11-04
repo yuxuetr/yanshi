@@ -28,7 +28,7 @@ fn outline() -> String {
 }
 
 fn section(text: &str, quote: &str) -> String {
-  json!({"markdown": text, "quotes": [quote]}).to_string()
+  json!({"markdown": text, "quotes": [{"chunk_id": "", "quote": quote}]}).to_string()
 }
 
 fn tree() -> String {

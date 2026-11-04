@@ -51,9 +51,9 @@ async fn report_template_produces_markdown_html_and_a_valid_deliverable() {
       {"heading": "Rhythm", "brief": "how often"}
     ]})
     .to_string(),
-    json!({"markdown": "The moon pulls the oceans.", "quotes": ["Tides are caused by the moon."]})
+    json!({"markdown": "The moon pulls the oceans.", "quotes": [{"chunk_id": "", "quote": "Tides are caused by the moon."}]})
       .to_string(),
-    json!({"markdown": "Two highs a day.", "quotes": ["High tide comes twice daily."]}).to_string(),
+    json!({"markdown": "Two highs a day.", "quotes": [{"chunk_id": "", "quote": "High tide comes twice daily."}]}).to_string(),
   ])
   .await;
 

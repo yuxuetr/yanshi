@@ -252,6 +252,12 @@ impl RAGNode {
     let mut outputs = HashMap::new();
     outputs.insert("results".to_string(), FlowValue::Json(results_json.clone()));
     outputs.insert("count".to_string(), FlowValue::Json(json!(results.len())));
+    // Y5.3: the same hits in the unified citation shape
+    // (`yanshi_config::content::Citation`), so a generator can cite them.
+    outputs.insert(
+      "citations".to_string(),
+      FlowValue::Json(Value::Array(results.iter().map(citation_of).collect())),
+    );
 
     // Also provide first result content as a convenience
     if !results.is_empty() {
@@ -556,9 +562,60 @@ fn get_json_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a Valu
     })
 }
 
+/// One search hit as `{source_id, chunk_id, span?, quote}`: the hit's id
+/// is the chunk id; the source and character span come from metadata
+/// (`source_id` or `source`; `start` / `end` or `start_line` / `end_line`)
+/// when the indexer recorded them.
+fn citation_of(hit: &yanshi_rag::types::SearchResult) -> Value {
+  use yanshi_rag::types::MetadataValue;
+  let text = |key: &str| match hit.metadata.get(key) {
+    Some(MetadataValue::String(s)) => Some(s.clone()),
+    Some(MetadataValue::Integer(i)) => Some(i.to_string()),
+    _ => None,
+  };
+  let int = |key: &str| match hit.metadata.get(key) {
+    Some(MetadataValue::Integer(i)) => Some(*i),
+    _ => None,
+  };
+  let mut citation = json!({
+    "source_id": text("source_id").or_else(|| text("source")).unwrap_or_default(),
+    "chunk_id": hit.id,
+    "quote": hit.content,
+  });
+  if let (Some(start), Some(end)) = (
+    int("start").or_else(|| int("start_line")),
+    int("end").or_else(|| int("end_line")),
+  ) {
+    citation["span"] = json!({ "start": start, "end": end });
+  }
+  citation
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn search_hits_become_unified_citations() {
+    use yanshi_rag::types::{MetadataValue, SearchResult};
+    let hit = SearchResult {
+      id: "src-1:3".to_string(),
+      content: "Tides follow the moon.".to_string(),
+      score: 0.9,
+      metadata: HashMap::from([
+        (
+          "source".to_string(),
+          MetadataValue::String("src-1".to_string()),
+        ),
+        ("start_line".to_string(), MetadataValue::Integer(4)),
+        ("end_line".to_string(), MetadataValue::Integer(6)),
+      ]),
+    };
+    assert_eq!(
+      citation_of(&hit),
+      json!({"source_id": "src-1", "chunk_id": "src-1:3", "quote": "Tides follow the moon.", "span": {"start": 4, "end": 6}})
+    );
+  }
   use serde_json::json;
 
   #[test]
