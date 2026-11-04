@@ -56,6 +56,14 @@ static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
 /// recorder install fails for a reason other than "already
 /// installed" (typically an internal builder error).
 pub fn init_recorder() -> Result<(), String> {
+  // Serialize installs: without this, a second caller could lose the
+  // `set_global_recorder` race and return `Ok` before the winner has
+  // stored its handle in `RECORDER`, so its first scrape rendered an
+  // empty body (seen as a flaky `/metrics` test).
+  static INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+  let _init = INIT
+    .lock()
+    .unwrap_or_else(std::sync::PoisonError::into_inner);
   if RECORDER.get().is_some() {
     return Ok(());
   }
