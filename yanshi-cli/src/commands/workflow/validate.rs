@@ -212,9 +212,7 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
   let mut notes: Vec<String> = Vec::new();
   let (category, capabilities) = match node.node_type.as_str() {
     "template" | "markmap" | "batch" | "conditional" | "while" | "render_table" | "render_svg"
-    | "render_markdown" => {
-      (PermissionCategory::Pure, vec![])
-    }
+    | "render_markdown" => (PermissionCategory::Pure, vec![]),
     // Y3.3: runs pandoc (and typst) under the OS sandbox, writing only
     // to its artifact directory.
     "render_document" => (

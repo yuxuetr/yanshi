@@ -68,10 +68,54 @@ fn error_text(result: &CallToolResult) -> String {
 async fn media_tools_finish_audio_and_video_inside_the_root() {
   let root = tempfile::TempDir::new().expect("tempdir");
   let dir = root.path();
-  ffmpeg(dir, &["-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-ar", "48000", "a.wav"]);
-  ffmpeg(dir, &["-f", "lavfi", "-i", "sine=frequency=660:duration=1", "-ar", "48000", "b.wav"]);
-  ffmpeg(dir, &["-f", "lavfi", "-i", "color=c=red:s=320x240", "-frames:v", "1", "red.png"]);
-  ffmpeg(dir, &["-f", "lavfi", "-i", "color=c=blue:s=200x300", "-frames:v", "1", "blue.png"]);
+  ffmpeg(
+    dir,
+    &[
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:duration=2",
+      "-ar",
+      "48000",
+      "a.wav",
+    ],
+  );
+  ffmpeg(
+    dir,
+    &[
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=660:duration=1",
+      "-ar",
+      "48000",
+      "b.wav",
+    ],
+  );
+  ffmpeg(
+    dir,
+    &[
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=red:s=320x240",
+      "-frames:v",
+      "1",
+      "red.png",
+    ],
+  );
+  ffmpeg(
+    dir,
+    &[
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=blue:s=200x300",
+      "-frames:v",
+      "1",
+      "blue.png",
+    ],
+  );
   std::fs::write(
     dir.join("subs.srt"),
     "1\n00:00:00,000 --> 00:00:02,000\nHello tides\n",
@@ -93,12 +137,18 @@ async fn media_tools_finish_audio_and_video_inside_the_root() {
     "burn_subtitles",
     "images_to_slideshow",
   ] {
-    assert!(names.contains(&expected.to_string()), "{expected} in {names:?}");
+    assert!(
+      names.contains(&expected.to_string()),
+      "{expected} in {names:?}"
+    );
   }
 
   let joined = payload(
     &client
-      .call_tool("audio_concat", json!({"inputs": ["a.wav", "b.wav"], "output": "joined.wav"}))
+      .call_tool(
+        "audio_concat",
+        json!({"inputs": ["a.wav", "b.wav"], "output": "joined.wav"}),
+      )
       .await
       .expect("call"),
   );
@@ -147,7 +197,12 @@ async fn media_tools_finish_audio_and_video_inside_the_root() {
       .await
       .expect("call"),
   );
-  assert!(std::fs::metadata(dir.join("episode.mp4")).expect("mp4").len() > 0);
+  assert!(
+    std::fs::metadata(dir.join("episode.mp4"))
+      .expect("mp4")
+      .len()
+      > 0
+  );
 
   let subtitled = client
     .call_tool(
@@ -159,19 +214,28 @@ async fn media_tools_finish_audio_and_video_inside_the_root() {
   if subtitled.is_error() {
     // Only acceptable reason: this ffmpeg build lacks libass.
     let text = error_text(&subtitled);
-    assert!(text.contains("subtitles") || text.contains("No such filter"), "{text}");
+    assert!(
+      text.contains("subtitles") || text.contains("No such filter"),
+      "{text}"
+    );
   } else {
     assert!(dir.join("subbed.mp4").exists());
   }
 
   // Confinement: neither reads nor writes may leave the root.
   let escape = client
-    .call_tool("audio_concat", json!({"inputs": ["a.wav", "../../etc/hosts"], "output": "x.wav"}))
+    .call_tool(
+      "audio_concat",
+      json!({"inputs": ["a.wav", "../../etc/hosts"], "output": "x.wav"}),
+    )
     .await
     .expect("call");
   assert!(error_text(&escape).contains("outside the allowed root"));
   let escape = client
-    .call_tool("loudness_normalize", json!({"input": "a.wav", "output": "../escaped.wav"}))
+    .call_tool(
+      "loudness_normalize",
+      json!({"input": "a.wav", "output": "../escaped.wav"}),
+    )
     .await
     .expect("call");
   assert!(error_text(&escape).contains("outside the allowed root"));

@@ -244,6 +244,9 @@ nodes:
     "name,year\nAda,1843\n"
   );
   let html = std::fs::read_to_string(file("page")).expect("html");
-  assert!(html.contains("<h1>Notes</h1>") && html.contains("Born 1815."), "{html}");
+  assert!(
+    html.contains("<h1>Notes</h1>") && html.contains("Born 1815."),
+    "{html}"
+  );
   assert_eq!(&std::fs::read(file("chart")).expect("png")[1..4], b"PNG");
 }

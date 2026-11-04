@@ -5642,14 +5642,13 @@ mod tests {
       assert!(!state.contains_key("n10") || state["n10"].is_err());
     }
 
-    let checkpoint = CheckpointManager::new(
-      CheckpointConfig::default().with_checkpoint_dir(checkpoints.path()),
-    )
-    .unwrap()
-    .load_latest_checkpoint("run-y24")
-    .await
-    .unwrap()
-    .expect("a checkpoint was written");
+    let checkpoint =
+      CheckpointManager::new(CheckpointConfig::default().with_checkpoint_dir(checkpoints.path()))
+        .unwrap()
+        .load_latest_checkpoint("run-y24")
+        .await
+        .unwrap()
+        .expect("a checkpoint was written");
     assert!((checkpoint.recorded_cost_usd() - 0.08).abs() < 1e-9);
     let recorded = checkpoint.recorded_execution_config();
     assert_eq!(recorded.mode, FlowExecutionMode::Concurrent);

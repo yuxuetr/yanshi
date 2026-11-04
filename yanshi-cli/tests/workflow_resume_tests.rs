@@ -108,12 +108,11 @@ fn resume_finishes_a_failed_run_without_rerunning_finished_nodes() {
     .failure();
   let stdout = String::from_utf8_lossy(&first.get_output().stdout).to_string();
   let run_id = run_id_from(&stdout);
-  let speak_dir = fixture
-    .runs()
-    .join(&run_id)
-    .join("artifacts")
-    .join("speak");
-  assert!(speak_dir.join("1.wav").exists(), "speak ran before the failure");
+  let speak_dir = fixture.runs().join(&run_id).join("artifacts").join("speak");
+  assert!(
+    speak_dir.join("1.wav").exists(),
+    "speak ran before the failure"
+  );
 
   fs::write(Fixture::note_path(fixture.work.path()), "now it exists").expect("note");
 
@@ -149,7 +148,9 @@ fn resume_without_a_checkpoint_says_so() {
     .arg(fixture.runs())
     .assert()
     .failure()
-    .stderr(predicate::str::contains("no checkpoint for run 'no-such-run'"));
+    .stderr(predicate::str::contains(
+      "no checkpoint for run 'no-such-run'",
+    ));
 }
 
 #[test]
