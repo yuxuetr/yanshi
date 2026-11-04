@@ -338,6 +338,18 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **Content Studio: a planner skill over the generators (Y4.4).**
+  `examples/applications/content-studio` is a ReAct skill whose tools
+  are the three generator templates, declared in a new `[[workflows]]`
+  manifest section. Each becomes a `WorkflowTool` with a JSON Schema
+  derived from the template's `inputs` (`inputs_json_schema`). It
+  returns only the generator's `deliverable`
+  (`WorkflowTool::with_result_output`), not the whole state. `yanshi
+  skill run` gains `--input KEY=VALUE` (facts appended to the request;
+  `--message` becomes optional), `--output-dir` (each tool's files go to
+  `<dir>/<tool>/<node_id>/<file>` with a manifest) and `--run-dir`.
+  These flags are local-only, and `[[workflows]]` is not built
+  server-side yet.
 - **`audio_overview` generator and `render_audio` (Y4.3).**
   `examples/generators/audio_overview.yml` turns a source into a
   host/guest script (`llm` with `json_schema`, one turn per line). Each

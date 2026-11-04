@@ -28,16 +28,57 @@ impl OutputFormat {
   }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn execute(
-  skill_dir: String,
-  message: String,
-  model_override: Option<String>,
-  memory_override: Option<String>,
-  session_id: Option<String>,
-  trace: bool,
-  output: String,
-) -> Result<()> {
+/// `yanshi skill run` arguments (local mode).
+pub struct RunArgs {
+  pub skill_dir: String,
+  pub message: Option<String>,
+  /// Y4.4: `KEY=VALUE` facts appended to the message.
+  pub inputs: Vec<String>,
+  /// Y4.4: where to copy the `[[workflows]]` tools' files.
+  pub output_dir: Option<String>,
+  pub run_dir: Option<String>,
+  pub model_override: Option<String>,
+  pub memory_override: Option<String>,
+  pub session_id: Option<String>,
+  pub trace: bool,
+  pub output: String,
+}
+
+/// The request text: `--message`, then `--input` facts as a list.
+fn compose_message(message: Option<String>, inputs: &[String]) -> Result<String> {
+  let mut facts = Vec::with_capacity(inputs.len());
+  for input in inputs {
+    let (key, value) = input
+      .split_once('=')
+      .filter(|(key, _)| !key.trim().is_empty())
+      .with_context(|| format!("--input '{input}' must be KEY=VALUE"))?;
+    facts.push(format!("- {}: {}", key.trim(), value.trim()));
+  }
+  match (message, facts.is_empty()) {
+    (Some(message), true) => Ok(message),
+    (Some(message), false) => Ok(format!("{message}\n\nInputs:\n{}", facts.join("\n"))),
+    (None, false) => Ok(format!(
+      "Produce what these inputs ask for.\n\nInputs:\n{}",
+      facts.join("\n")
+    )),
+    (None, true) => anyhow::bail!("give --message, or at least one --input KEY=VALUE"),
+  }
+}
+
+pub async fn execute(args: RunArgs) -> Result<()> {
+  let RunArgs {
+    skill_dir,
+    message,
+    inputs,
+    output_dir,
+    run_dir,
+    model_override,
+    memory_override,
+    session_id,
+    trace,
+    output,
+  } = args;
+  let message = compose_message(message, &inputs)?;
   let output = OutputFormat::parse(&output)?;
   let dir = Path::new(&skill_dir);
 
@@ -72,8 +113,32 @@ pub async fn execute(
     .await
     .context("Failed to initialise Yanshi — is your API key configured?")?;
 
+  // Y4.4: the skill's `[[workflows]]` become tools the agent can call.
+  let run_base_dir = match run_dir.or_else(|| std::env::var("YANSHI_RUN_DIR").ok()) {
+    Some(dir) => std::path::PathBuf::from(dir),
+    None => yanshi_core::FlowExecutionConfig::serial()
+      .resolved_run_base_dir()
+      .context("Failed to resolve the run base directory")?,
+  };
+  let resolved_model = manifest.model.resolved_model();
+  let super::workflow_tools::WorkflowTools {
+    tools: workflow_tools,
+    runs: workflow_runs,
+  } = super::workflow_tools::build(&manifest, dir, Some(resolved_model), &run_base_dir)?;
+  if !workflow_tools.is_empty() && matches!(output, OutputFormat::Text) {
+    println!(
+      "🧰 Workflow tools: {}",
+      manifest
+        .workflows
+        .iter()
+        .map(|w| w.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+    );
+  }
+
   // Build the agent from the skill manifest
-  let mut agent = SkillBuilder::build(&manifest, dir)
+  let mut agent = SkillBuilder::build_with_extra_tools(&manifest, dir, workflow_tools)
     .await
     .with_context(|| mcp_context("Failed to build agent from skill manifest", &manifest))?;
 
@@ -100,6 +165,16 @@ pub async fn execute(
     );
   }
   let answer = result.answer.clone().unwrap_or_default();
+
+  // Y4.4: the workflow tools' files.
+  let runs = workflow_runs.take();
+  if let Some(out) = output_dir {
+    let out = std::path::PathBuf::from(out);
+    let copied = super::workflow_tools::export(runs, &run_base_dir, &out)?;
+    if matches!(output, OutputFormat::Text) {
+      println!("📤 Copied {copied} file(s) to {}", out.display());
+    }
+  }
 
   match output {
     OutputFormat::Text => {
@@ -136,4 +211,28 @@ pub async fn execute(
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod compose_tests {
+  use super::compose_message;
+
+  #[test]
+  fn inputs_become_a_list_after_the_message() {
+    assert_eq!(
+      compose_message(
+        Some("Go".into()),
+        &["url=https://x".into(), "want=report".into()]
+      )
+      .unwrap(),
+      "Go\n\nInputs:\n- url: https://x\n- want: report"
+    );
+    assert!(
+      compose_message(None, &["want=report".into()])
+        .unwrap()
+        .contains("- want: report")
+    );
+    assert!(compose_message(None, &[]).is_err());
+    assert!(compose_message(None, &["no-equals".into()]).is_err());
+  }
 }

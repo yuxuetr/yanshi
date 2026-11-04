@@ -32,7 +32,7 @@ status table.
 | A5 | Scheduled weekly digest email | TODO | [`weekly-digest/`](weekly-digest/) |
 | A6 | Markdown folder multi-language translator | WIP — four workflow iterations shipped | [`doc-translator/`](doc-translator/) |
 | A7 | Git log → conventional CHANGELOG (yanshi eats its own dogfood) | WIP — live ✅ as a binary; skill form rejected (2026-05-18) | [`changelog-writer/`](changelog-writer/) |
-| A8 | **Content Studio** — one URL or idea → report + mind map + audio overview via a planner agent (track Y, `TODOs.md` Y4.4) | TODO | `content-studio/` (not created yet) |
+| A8 | **Content Studio** — one URL or idea → report + mind map + audio overview via a planner agent (track Y, `TODOs.md` Y4.4) | DONE — mock smoke in CI; the live run needs model keys (2026-11-05) | [`content-studio/`](content-studio/) |
 
 ## Conventions for new applications
 

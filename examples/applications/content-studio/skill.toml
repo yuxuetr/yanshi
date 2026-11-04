@@ -1,0 +1,65 @@
+# content-studio — the planner over the generator catalogue (Y4.4,
+# docs/RFC_CONTENT_STUDIO.md §3). The three generators are workflow
+# tools; the model decides which deliverables to make and with which
+# parameters, never how the pipelines are wired.
+#
+#   yanshi skill run examples/applications/content-studio \
+#     --input url=https://example.org/article \
+#     --input want=report,mindmap,audio_overview \
+#     --output-dir out
+#
+# Needs a chat model (default below), plus pandoc + typst for the
+# report's PDF and ffmpeg + a TTS model for the audio overview
+# (`yanshi doctor` lists the binaries).
+
+[skill]
+name        = "content-studio"
+version     = "0.1.0"
+description = "Turn a source into the deliverables you ask for: report, mind map, audio overview"
+
+[persona]
+language = "en"
+role = """
+You are the producer of a content studio. The user gives you a source (a
+`url`, or `text` they pasted) and a list of deliverables they `want`.
+
+Tools, one per deliverable kind:
+- `report`: a sourced written report (.md, .html, .pdf)
+- `mindmap`: a mind map (.svg, .png, interactive .html)
+- `audio_overview`: a two-voice audio discussion (.mp3)
+
+Rules:
+1. Call each wanted tool exactly once, all in your first turn. Pass the
+   source as `url` (or as `text` when no URL was given).
+2. Choose the parameters from the request: `focus` (what to concentrate
+   on), and `sections` (3-6) for a report, `depth` (2-4) for a mind map,
+   `minutes` (2-5) and `language` for audio. Keep defaults otherwise.
+3. Never write the content yourself. The tools do that.
+4. When the tools have returned, answer with one line per deliverable:
+   its kind, its title, and the file names it produced. If a tool
+   returned an error, quote the error instead. Do not retry.
+"""
+
+[model]
+name           = "kimi-k2.6"
+max_iterations = 4
+budget_tokens  = 60000
+
+[[workflows]]
+name        = "report"
+path        = "../../generators/report.yml"
+description = "Write a sourced report on the source: outline, sections with footnoted quotes; .md, .html and .pdf"
+
+[[workflows]]
+name        = "mindmap"
+path        = "../../generators/mindmap.yml"
+description = "Map the source's ideas as a mind map: .svg, .png and an interactive .html"
+
+[[workflows]]
+name        = "audio_overview"
+path        = "../../generators/audio_overview.yml"
+description = "Produce a two-voice audio discussion of the source as one loudness-normalised .mp3"
+
+[memory]
+type          = "session"
+window_tokens = 16000

@@ -99,9 +99,22 @@ enum SkillCommands {
     /// Local mode: path to the skill directory. Server mode (with
     /// `--server`): skill name resolved via the server's catalog.
     skill_dir: String,
-    /// The message to send to the agent
+    /// The message to send to the agent. Optional when `--input` is
+    /// given (the inputs are then the request).
     #[arg(short, long)]
-    message: String,
+    message: Option<String>,
+    /// `KEY=VALUE` facts for the agent (e.g. `url=...`, `want=report`),
+    /// appended to the message. **Local-only.**
+    #[arg(long = "input", value_name = "KEY=VALUE")]
+    inputs: Vec<String>,
+    /// Copy the files produced by the skill's `[[workflows]]` tools to
+    /// `<DIR>/<tool>/<node_id>/<file>`. **Local-only.**
+    #[arg(long, value_name = "DIR")]
+    output_dir: Option<String>,
+    /// Run base directory for the skill's `[[workflows]]` tools (default:
+    /// YANSHI_RUN_DIR or ~/.yanshi/runs). **Local-only.**
+    #[arg(long, value_name = "DIR")]
+    run_dir: Option<String>,
     /// Override the model declared by the skill manifest.
     /// **Local-only** — incompatible with `--server`.
     #[arg(long)]
@@ -303,6 +316,9 @@ pub async fn dispatch(args: SkillArgs) -> anyhow::Result<()> {
     SkillCommands::Run {
       skill_dir,
       message,
+      inputs,
+      output_dir,
+      run_dir,
       model,
       memory,
       session,
@@ -322,8 +338,18 @@ pub async fn dispatch(args: SkillArgs) -> anyhow::Result<()> {
           trace,
           &output,
         );
+        let validation = validation.and_then(|()| {
+          if !inputs.is_empty() || output_dir.is_some() || run_dir.is_some() {
+            anyhow::bail!(
+              "--input / --output-dir / --run-dir are local-only; drop them with --server"
+            )
+          }
+          message
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("--message is required with --server"))
+        });
         match validation {
-          Ok(()) => {
+          Ok(message) => {
             server_ops::run_via_server(
               &server_url,
               auth_token.as_deref(),
@@ -347,7 +373,19 @@ pub async fn dispatch(args: SkillArgs) -> anyhow::Result<()> {
             "⚠  --auth-token / --tenant ignored: --server (or YANSHI_SERVER_URL) is not set"
           );
         }
-        run::execute(skill_dir, message, model, memory, session, trace, output).await
+        run::execute(run::RunArgs {
+          skill_dir,
+          message,
+          inputs,
+          output_dir,
+          run_dir,
+          model_override: model,
+          memory_override: memory,
+          session_id: session,
+          trace,
+          output,
+        })
+        .await
       }
     },
     SkillCommands::Chat {
