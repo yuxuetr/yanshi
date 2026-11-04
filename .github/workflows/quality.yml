@@ -636,6 +636,20 @@ jobs:
           cargo test -p yanshi-cli --features plugin --test workflow_tests plugin_node_tests
           cargo test -p yanshi-cli --features plugin --test marketplace_cli_tests marketplace_install_plugin_package_from_verified_cache
 
+  media-tools:
+    # Y3.2: the ffmpeg-backed media-tools MCP server, driven end to end
+    # through yanshi-mcp's stdio client. The test is #[ignore]d so a dev
+    # box without ffmpeg stays green; this job installs ffmpeg and runs it.
+    name: media-tools MCP (ffmpeg)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Run the media-tools end-to-end test
+        run: cargo test -p yanshi-mcp --test media_tools_e2e -- --ignored
+
   release-gate:
     name: release gate
     runs-on: ubuntu-latest
@@ -660,6 +674,7 @@ jobs:
       - examples
       - rag-eval-smoke
       - agent-eval-smoke
+      - media-tools
     if: ${{ always() }}
     steps:
       - name: Summarize required gates
@@ -684,6 +699,7 @@ jobs:
           echo "examples: ${{ needs.examples.result }}"
           echo "rag-eval-smoke: ${{ needs.rag-eval-smoke.result }}"
           echo "agent-eval-smoke: ${{ needs.agent-eval-smoke.result }}"
+          echo "media-tools: ${{ needs.media-tools.result }}"
           test "${{ needs.fmt.result }}" = "success"
           test "${{ needs.verify-edition.result }}" = "success"
           test "${{ needs.check-agent-sdk-doc.result }}" = "success"
@@ -704,3 +720,4 @@ jobs:
           test "${{ needs.examples.result }}" = "success"
           test "${{ needs.rag-eval-smoke.result }}" = "success"
           test "${{ needs.agent-eval-smoke.result }}" = "success"
+          test "${{ needs.media-tools.result }}" = "success"

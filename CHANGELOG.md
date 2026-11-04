@@ -338,6 +338,17 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`media-tools` MCP server: ffmpeg as agent / workflow tools (Y3.2).**
+  `examples/ecosystem/mcp/media-tools/server.py` is a standard-library
+  Python stdio MCP server with `audio_concat`, `loudness_normalize`
+  (two-pass EBU R128, reports measured input / output LUFS),
+  `mux_video_audio`, `burn_subtitles` and `images_to_slideshow`. Every
+  path must resolve inside `--root`, and ffmpeg runs from an argument
+  vector with a timeout. `yanshi doctor` gains an **External tools**
+  section (`ffmpeg`, `ffprobe`). The `#[ignore]`d end-to-end test
+  `yanshi-mcp/tests/media_tools_e2e.rs` runs in the new `media-tools`
+  CI job, which is part of the release gate. `podcast-mastering` now
+  uses this server instead of the out-of-tree `phonon-mcp` binary.
 - **In-process render nodes (Y3.1).** Three new workflow node types,
   each writing a `FlowValue::File` artifact:
   - `render_table` turns `rows` (JSON array of objects or arrays, or a

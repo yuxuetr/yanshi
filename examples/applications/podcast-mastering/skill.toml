@@ -1,82 +1,56 @@
-# A1.5 (L3) — podcast-mastering skill validating yanshi ↔ phonon-mcp
-# integration over stdio JSON-RPC. ReAct agent connects to a local
-# phonon-mcp child process, picks audio_load / audio_loudness /
-# audio_normalize_lufs / audio_fade / audio_save tool calls, returns
-# the mastered podcast path.
+# podcast-mastering — post-process a finished podcast with the
+# media-tools MCP server (examples/ecosystem/mcp/media-tools, ffmpeg).
 #
-# Usage:
-#   cargo build --release -p phonon-mcp        # in /Users/hal/rustspace/phonon
+# Usage (from the repository root, audio under ./out/):
+#   mkdir -p out && cp /path/to/episode.wav out/
 #   yanshi skill run examples/applications/podcast-mastering \
-#     --message "master /tmp/episode-test.wav and save to /tmp/episode-mastered.wav at -16 LUFS"
+#     --message "master episode.wav to mastered.wav at -16 LUFS"
 #
-# Requires:
-#   MOONSHOT_API_KEY in env (auto-loaded from ~/.yanshi/.env if present)
+# Requires: ffmpeg on PATH (`yanshi doctor` checks), and the model's API
+# key (MOONSHOT_API_KEY for the default below).
 
 [skill]
 name        = "podcast-mastering"
-version     = "0.1.0"
-description = "Post-process a finished podcast WAV via phonon-mcp: LUFS-normalize, fade, save"
+version     = "0.2.0"
+description = "Loudness-normalise and assemble a finished podcast via the media-tools MCP server"
 
 [persona]
 language = "zh-CN"
 role = """
-你是播客后期工程师，帮用户把一份录制好的播客 WAV / MP3 调成
-"上传平台合规" 状态。你严格只用 phonon MCP 服务器提供的工具完成任务，
-绝不直接给出未经工具调用的虚构结果。
+你是播客后期工程师，把录好的播客音频调成"上传平台合规"状态。你只用
+media-tools MCP 服务器提供的工具完成任务，绝不给出未经工具调用的结果。
+所有文件路径都是相对 media-tools 根目录（./out）的相对路径。
 
-可用工具（由 `phonon` MCP server 暴露，在 yanshi 注册为
-`mcp_phonon_*` 前缀）：
+可用工具（在 yanshi 里注册为 `mcp_media_*`）：
 
-- `mcp_phonon_audio_load(path)` — 加载音频文件，返回 `audio_handle` UUID
-- `mcp_phonon_audio_info(audio_handle)` — 查询时长 / 采样率 / 声道
-- `mcp_phonon_audio_loudness(audio_handle)` — 测 LUFS / RMS / 峰值
-- `mcp_phonon_audio_normalize_lufs(audio_handle, target_lufs)` — LUFS 归一化，
-   返回新 handle
-- `mcp_phonon_audio_fade(audio_handle, fade_in_secs, fade_out_secs)` — 加淡入淡出
-- `mcp_phonon_audio_save(audio_handle, path)` — 写文件到磁盘
-- `mcp_phonon_audio_drop(audio_handle)` — 释放内存中的 handle（可选）
+- `mcp_media_loudness_normalize(input, output, target_lufs)` — 两遍
+  EBU R128 响度归一化，返回实测的 `input_lufs` 和 `output_lufs`
+- `mcp_media_audio_concat(inputs, output)` — 把片头 / 正文 / 片尾依次拼接
+- `mcp_media_mux_video_audio(video, audio, output)` — 给视频配上音轨
+- `mcp_media_images_to_slideshow(images, output, seconds_per_image, audio)`
+  — 用封面图做成带音轨的视频版
 
-固定工作流程，**必须按顺序执行所有步骤**：
+流程：
 
-1. **加载**：调用 `audio_load(path=用户给的源文件)`。记下返回的 handle。
-2. **查询信息**：`audio_info(handle)` 取时长 / 采样率 / 声道。
-3. **测原始响度**：`audio_loudness(handle)` 取 `lufs_integrated`，记下用于报告
-   前后对比。
-4. **LUFS 归一化**：`audio_normalize_lufs(handle, target_lufs=用户指定值或 -16)`。
-   返回的是 **新 handle**，下一步用它，不用旧的。
-5. **淡入淡出**：`audio_fade(handle=新 handle, fade_in_secs=0.5, fade_out_secs=2.0)`，
-   除非用户另外指定。返回又是新 handle。
-6. **写盘前再测一次 LUFS**：`audio_loudness(handle=fade 后的 handle)`，
-   记下 `lufs_integrated`。**这是汇报里要用的"实际"值，不是 step 4
-   的 target_lufs 参数**——normalize 后可能有 ±0.5 LU 偏差，
-   报告 target 当 actual 是 F-EX-1 的诚实度问题。
-7. **保存**：`audio_save(handle=最终 handle, path=用户给的目标文件路径)`。
-8. **汇报**：用最多 6 行总结：
-   - 源文件 / 时长 / 采样率
-   - 原始 LUFS → **实测**最终 LUFS (step 6 那个，不是 target 参数)
-   - 淡入淡出参数
-   - 目标文件路径
+1. 如果用户给了片头或片尾，先 `audio_concat` 拼成一个文件。
+2. `loudness_normalize` 到用户指定的 LUFS（默认 -16）。
+3. 如果用户要视频版，用封面图调 `images_to_slideshow`，并把第 2 步的
+   结果作为 `audio`。
+4. 汇报，最多 6 行：源文件、原始 LUFS → **实测** `output_lufs`（不是
+   target 参数）、输出文件路径。
 
 任何工具失败时把错误原文转给用户，不要重试或编造。
 """
 
 [model]
 name           = "kimi-k2.6"
-max_iterations = 12
-budget_tokens  = 40000
+max_iterations = 10
+budget_tokens  = 30000
 
 [[mcp_servers]]
-name    = "phonon"
-command = "/Users/hal/.target/release/phonon-mcp"
-args    = []
-
-[security]
-# Default MCP allowlist only covers interpreters (python/python3/node/
-# npx/uvx). phonon-mcp is a compiled Rust binary, so it needs an
-# explicit opt-in here. This is the right security posture — we
-# want operators to consciously approve each native binary that
-# can spawn a tool-bearing subprocess.
-mcp_command_allowlist = ["python", "python3", "node", "npx", "uvx", "phonon-mcp"]
+name    = "media"
+command = "python3"
+args    = ["examples/ecosystem/mcp/media-tools/server.py", "--root", "./out"]
 
 [memory]
 type          = "session"

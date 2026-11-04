@@ -47,6 +47,9 @@ pub struct DoctorReport {
   code_exec: CodeExecReport,
   /// Y2.3: the pricing table cost limits are enforced against.
   pricing: PricingReport,
+  /// Y3.2: external binaries the renderers shell out to (ffmpeg for the
+  /// media-tools MCP server). Missing ones only disable what needs them.
+  external_tools: Vec<ExternalToolReport>,
   environment: EnvironmentReport,
   disk: DiskReport,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -617,6 +620,7 @@ pub async fn build_report(
     sandbox,
     code_exec,
     pricing,
+    external_tools: external_tools_report(),
     environment: EnvironmentReport {
       yanshi_run_dir: std::env::var("YANSHI_RUN_DIR").ok(),
       yanshi_trace_dir: std::env::var("YANSHI_TRACE_DIR").ok(),
@@ -629,6 +633,51 @@ pub async fn build_report(
     installations: installations_report,
     status,
   }
+}
+
+/// Y3.2: one external binary a renderer needs, and where PATH finds it.
+#[derive(Debug, Serialize)]
+pub struct ExternalToolReport {
+  name: &'static str,
+  used_by: &'static str,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  path: Option<String>,
+}
+
+/// The binaries renderers shell out to, looked up on PATH.
+const EXTERNAL_TOOLS: &[(&str, &str)] = &[
+  ("ffmpeg", "media-tools MCP server: audio / video finishing"),
+  ("ffprobe", "media-tools MCP server: media inspection"),
+];
+
+fn external_tools_report() -> Vec<ExternalToolReport> {
+  EXTERNAL_TOOLS
+    .iter()
+    .map(|(name, used_by)| ExternalToolReport {
+      name,
+      used_by,
+      path: find_on_path(name).map(|p| p.display().to_string()),
+    })
+    .collect()
+}
+
+/// First executable named `name` on PATH.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+  let path = std::env::var_os("PATH")?;
+  std::env::split_paths(&path)
+    .map(|dir| dir.join(name))
+    .find(|candidate| is_executable(candidate))
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+  use std::os::unix::fs::PermissionsExt;
+  std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+  path.is_file() || path.with_extension("exe").is_file()
 }
 
 /// Y2.3: where the pricing table comes from and whether it loads.
@@ -1260,6 +1309,17 @@ pub fn print_text_report(report: &DoctorReport) {
     println!("  error: {error}");
   } else if report.pricing.models == 0 && !report.pricing.has_default {
     println!("  note: every model costs $0, so cost limits never trip");
+  }
+  println!();
+
+  println!("External tools:");
+  for tool in &report.external_tools {
+    println!(
+      "  {}: {} ({})",
+      tool.name,
+      tool.path.as_deref().unwrap_or("not found"),
+      tool.used_by
+    );
   }
   println!();
 
