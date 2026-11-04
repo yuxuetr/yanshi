@@ -99,6 +99,21 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **Billed media nodes retry only what a retry can fix (Y2.5).** The
+  modality nodes flattened every vendor error into an
+  `AsyncExecutionError` string, which node retry (`max_retries`,
+  `node_retry_policy`) classifies by words in the message: a 5xx was
+  never retried, and a 4xx content rejection whose text mentioned
+  "connection" or "timeout" was retried and billed again. Vendor errors
+  now map by status: 5xx and network errors become `NetworkError`, 429
+  becomes a rate-limit error and timeouts `TimeoutExceeded` (all
+  retryable), while other 4xx, auth and parse errors become
+  `NodeExecutionFailed`, which the default policy does not retry.
+  `text_to_image` / `text_to_video` no longer re-wrap that error.
+- **YAML `prompt` reaches text-to-image and text-to-video vendors.** The
+  factory dropped it (and `negative_prompt` / `size`, `aspect_ratio` /
+  `resolution` / `duration_seconds`), so YAML calls sent an empty
+  prompt.
 - **Streamed LLM calls now report token usage (Y2.1, COR-1).** Every
   ReAct turn streams, and the OpenAI-compatible stream carried no usage:
   the request never set `stream_options.include_usage`, the parser

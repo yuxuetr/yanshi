@@ -10,6 +10,7 @@
 pub mod artifacts;
 mod cost;
 pub mod nodes;
+mod vendor_error;
 
 pub use artifacts::ArtifactOutputFormat;
 

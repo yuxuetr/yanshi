@@ -314,13 +314,10 @@ impl TextToImageNode {
       cfg_scale: self.cfg_scale,
     };
 
-    let image_response =
-      provider
-        .generate(request)
-        .await
-        .map_err(|e| YanshiError::AsyncExecutionError {
-          message: format!("Text-to-image generation failed: {}", e),
-        })?;
+    let image_response = provider
+      .generate(request)
+      .await
+      .map_err(|e| crate::vendor_error::vendor_error("Text-to-image generation failed", e))?;
     crate::cost::record(&model, |p| p.cost_for_images(image_response.images.len()))?;
 
     let first_image =
@@ -389,14 +386,9 @@ impl AsyncNode for TextToImageNode {
       let timeout_duration = std::time::Duration::from_millis(timeout_ms);
       match tokio::time::timeout(timeout_duration, real_call).await {
         Ok(Ok(result)) => result,
-        Ok(Err(err)) => {
-          return Err(YanshiError::AsyncExecutionError {
-            message: format!(
-              "TextToImage node '{}': image generation failed: {err}",
-              self.name
-            ),
-          });
-        }
+        // Y2.5: passed through unchanged; the variant tells retry
+        // whether repeating the billed call can help.
+        Ok(Err(err)) => return Err(err),
         Err(_) => {
           return Err(YanshiError::TimeoutExceeded {
             duration_ms: timeout_ms,
@@ -404,14 +396,7 @@ impl AsyncNode for TextToImageNode {
         }
       }
     } else {
-      real_call
-        .await
-        .map_err(|err| YanshiError::AsyncExecutionError {
-          message: format!(
-            "TextToImage node '{}': image generation failed: {err}",
-            self.name
-          ),
-        })?
+      real_call.await?
     };
 
     let mut outputs = HashMap::new();

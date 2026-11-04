@@ -98,13 +98,10 @@ impl AsyncNode for ImageToImageNode {
     };
 
     tracing::debug!(provider = %provider.name(), "transforming via provider");
-    let response =
-      provider
-        .transform(request)
-        .await
-        .map_err(|e| YanshiError::AsyncExecutionError {
-          message: format!("Image-to-image transform failed: {}", e),
-        })?;
+    let response = provider
+      .transform(request)
+      .await
+      .map_err(|e| crate::vendor_error::vendor_error("Image-to-image transform failed", e))?;
     crate::cost::record(&self.model, |p| p.cost_for_images(response.images.len()))?;
 
     let first_image = response

@@ -176,9 +176,7 @@ impl TextToVideoNode {
     let video_response = provider
       .generate_and_wait(request, DEFAULT_POLL_INTERVAL, max_wait)
       .await
-      .map_err(|e| YanshiError::AsyncExecutionError {
-        message: format!("Text-to-video generation failed: {}", e),
-      })?;
+      .map_err(|e| crate::vendor_error::vendor_error("Text-to-video generation failed", e))?;
 
     let first_video =
       video_response
@@ -202,9 +200,7 @@ impl TextToVideoNode {
         let bytes = provider
           .fetch_video_bytes(first_video, self.max_download_bytes)
           .await
-          .map_err(|e| YanshiError::AsyncExecutionError {
-            message: format!("Failed to fetch generated video: {}", e),
-          })?;
+          .map_err(|e| crate::vendor_error::vendor_error("Failed to fetch generated video", e))?;
         artifacts::write_artifact(&self.name, &bytes, "video/mp4").await?
       }
       ArtifactOutputFormat::DataUri => match (&first_video.b64_data, &first_video.url) {
@@ -252,15 +248,9 @@ impl AsyncNode for TextToVideoNode {
 
     // Upstream failure surfaces as a real error — no mock/placeholder
     // fallback, matching `TextToImageNode`'s Q1.3.3 precedent.
-    let response = self
-      .execute_real_video_generation(&enriched_prompt)
-      .await
-      .map_err(|err| YanshiError::AsyncExecutionError {
-        message: format!(
-          "TextToVideo node '{}': video generation failed: {err}",
-          self.name
-        ),
-      })?;
+    // Y2.5: passed through unchanged; the variant tells retry whether
+    // repeating the billed call can help.
+    let response = self.execute_real_video_generation(&enriched_prompt).await?;
 
     let mut outputs = HashMap::new();
     outputs.insert(self.output_key.clone(), response);

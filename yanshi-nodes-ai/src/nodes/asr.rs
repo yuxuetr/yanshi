@@ -94,13 +94,10 @@ impl AsyncNode for ASRNode {
     };
 
     tracing::debug!(provider = %provider.name(), "transcribing audio via provider");
-    let asr_response =
-      provider
-        .transcribe(request)
-        .await
-        .map_err(|e| YanshiError::AsyncExecutionError {
-          message: format!("ASR transcription failed: {}", e),
-        })?;
+    let asr_response = provider
+      .transcribe(request)
+      .await
+      .map_err(|e| crate::vendor_error::vendor_error("ASR transcription failed", e))?;
     let transcript = asr_response.text;
 
     tracing::debug!("ASRNode execution successful");

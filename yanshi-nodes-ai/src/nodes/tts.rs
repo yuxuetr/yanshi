@@ -129,13 +129,10 @@ impl AsyncNode for TTSNode {
     };
 
     tracing::debug!(provider = %provider.name(), "synthesizing speech via provider");
-    let tts_response =
-      provider
-        .synthesize(request)
-        .await
-        .map_err(|e| YanshiError::AsyncExecutionError {
-          message: format!("TTS synthesis failed: {}", e),
-        })?;
+    let tts_response = provider
+      .synthesize(request)
+      .await
+      .map_err(|e| crate::vendor_error::vendor_error("TTS synthesis failed", e))?;
     let seconds = crate::cost::wav_duration_seconds(&tts_response.audio);
     crate::cost::record(&self.model, |p| p.cost_for_speech(input_chars, seconds))?;
 

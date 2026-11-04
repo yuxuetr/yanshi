@@ -96,9 +96,7 @@ impl AsyncNode for ImageEditNode {
     let response = provider
       .edit(request)
       .await
-      .map_err(|e| YanshiError::AsyncExecutionError {
-        message: format!("Image edit failed: {}", e),
-      })?;
+      .map_err(|e| crate::vendor_error::vendor_error("Image edit failed", e))?;
     crate::cost::record(&self.model, |p| p.cost_for_images(response.images.len()))?;
 
     let first_image = response
