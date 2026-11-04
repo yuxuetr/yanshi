@@ -243,8 +243,10 @@ impl AsyncNode for RenderTableNode {
 
 // ── render_svg ──────────────────────────────────────────────────────────
 
-/// `render_svg`: inputs `svg` (required) and `width` (optional output
-/// width in pixels; height follows the aspect ratio). Produces a PNG.
+/// `render_svg`: inputs `svg` (required), `width` (optional output
+/// width in pixels; height follows the aspect ratio) and `format`
+/// (`png`, the default; or `svg`: the SVG itself, checked to parse, for
+/// a template-built graphic that ships its vector source).
 pub struct RenderSvgNode {
   id: String,
 }
@@ -312,6 +314,22 @@ pub fn svg_to_png(svg: &str, width: Option<u32>) -> Result<Vec<u8>, String> {
 impl AsyncNode for RenderSvgNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     let svg = text_input(&self.id, inputs, "svg").await?;
+    match optional_str(inputs, "format").unwrap_or("png") {
+      "png" => {}
+      "svg" => {
+        check_svg(&svg).map_err(|e| input_error(&self.id, e))?;
+        return Ok(output(
+          &self.id,
+          write_artifact(&self.id, svg.as_bytes(), "image/svg+xml").await?,
+        ));
+      }
+      other => {
+        return Err(input_error(
+          &self.id,
+          format!("unknown format '{other}': expected png or svg"),
+        ));
+      }
+    }
     let width = match inputs.get("width") {
       Some(FlowValue::Json(Value::Number(n))) => n.as_u64().and_then(|w| u32::try_from(w).ok()),
       _ => None,

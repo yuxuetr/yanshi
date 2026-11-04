@@ -1,0 +1,211 @@
+# Y6.3 — `infographic` generator (docs/RFC_CONTENT_STUDIO.md §3).
+#
+# Source (a URL, fetched with the http node's SSRF filter, pasted text,
+# or notebook chunks) → structured facts (llm, json_schema: headline
+# numbers, sections of short points, a takeaway) → a fixed Tera SVG
+# layout (no model-written markup) → SVG + PNG (render_svg) → one
+# `Deliverable`. The look lives in the two templates below; edit them,
+# not code, to restyle.
+#
+#   yanshi workflow run examples/generators/infographic.yml \
+#     --input url https://example.org/article --output-dir out
+name: infographic
+description: "An infographic of a source: headline numbers, key points and a takeaway as SVG and PNG"
+
+inputs:
+  url:
+    description: "Page to summarise (fetched with SSRF protection); leave empty to use `text`"
+    default: ""
+  text:
+    description: "Source text, used when `url` is empty"
+    default: ""
+  focus:
+    description: "What the infographic should show"
+    default: "the key numbers and ideas"
+  chunks:
+    description: "Notebook passages to work from instead of url / text: [{chunk_id, source_id, content}]. Citations then point at these ids."
+    default: []
+
+nodes:
+  - id: options
+    type: template
+    parameters:
+      output_format: json
+      template: '{"has_url": {{ url != "" }}}'
+
+  # `url` (the workflow input) reaches the node directly.
+  - id: fetch
+    type: http
+    dependencies: ["options"]
+    run_if: "{{ nodes.options.outputs.has_url }}"
+
+  - id: source
+    type: template
+    input_mapping:
+      page: "{{ nodes.fetch.outputs.body }}"
+    parameters:
+      template: "{% if chunks | length > 0 %}{% for c in chunks %}[{{ c.chunk_id }}] {{ c.content }}\n\n{% endfor %}{% elif page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
+
+  - id: prompt
+    type: template
+    dependencies: ["source"]
+    input_mapping:
+      source_text: "{{ nodes.source.outputs.output }}"
+    parameters:
+      template: |
+        Turn the source below into an infographic about {{ focus }}.
+        - `title`: at most eight words; `subtitle`: one short sentence.
+        - `stats`: 2-4 headline figures straight from the source; `value`
+          is the figure itself (at most 8 characters, e.g. "71%", "2x",
+          "1.2 bn"), `label` says what it measures in at most six words.
+          Use no stats rather than invent numbers.
+        - `sections`: 2-4, each a `heading` of at most five words and 2-4
+          `points` of at most twelve words.
+        - `takeaway`: the one thing to remember, one sentence.
+        Use only what the source supports. When the source's passages
+        carry [ids], give every stat and section the chunk_id it comes
+        from.
+
+        SOURCE:
+        {{ source_text }}
+
+  - id: draft
+    type: llm
+    dependencies: ["prompt"]
+    input_mapping:
+      prompt: "{{ nodes.prompt.outputs.output }}"
+    parameters:
+      system: "You design clear, factual infographics. Answer with JSON only."
+      json_schema:
+        type: object
+        required: [title, stats, sections, takeaway]
+        properties:
+          title: { type: string }
+          subtitle: { type: string }
+          stats:
+            type: array
+            maxItems: 4
+            items:
+              type: object
+              required: [value, label]
+              properties:
+                value: { type: string }
+                label: { type: string }
+                chunk_id: { type: string }
+          sections:
+            type: array
+            minItems: 1
+            maxItems: 4
+            items:
+              type: object
+              required: [heading, points]
+              properties:
+                heading: { type: string }
+                points: { type: array, minItems: 1, maxItems: 4, items: { type: string } }
+                chunk_id: { type: string }
+          takeaway: { type: string }
+
+  # Break every text into lines that fit its box. SVG has no text
+  # wrapping, so this is where it happens: by words for spaced scripts,
+  # by characters (about half as many per line) for CJK and the like.
+  # Overlong text is cut to `max` lines ending in "…".
+  - id: layout
+    type: template
+    dependencies: ["draft"]
+    input_mapping:
+      d: "{{ nodes.draft.outputs.output }}"
+    parameters:
+      output_format: json
+      template: |
+        {% macro wrap(text, n, max) %}{% set t = text | trim %}{% set words = t | split(pat=" ") %}{% set tl = t | length %}{% set wl = words | length %}{% set_global lines = [] %}{% if wl > 1 and tl / wl < 12 %}{% set_global cur = "" %}{% for w in words %}{% if w != "" %}{% set cl = cur | length %}{% set ww = w | length %}{% if cur == "" %}{% set_global cur = w %}{% elif cl + 1 + ww <= n %}{% set_global cur = cur ~ " " ~ w %}{% else %}{% set_global lines = lines | concat(with=cur) %}{% set_global cur = w %}{% endif %}{% endif %}{% endfor %}{% if cur != "" %}{% set_global lines = lines | concat(with=cur) %}{% endif %}{% elif tl > 0 %}{% set mf = n * 5 / 9 %}{% set m = mf | int %}{% set chars = t | split(pat="") %}{% set last = chars | length %}{% set last = last - 1 %}{% set chars = chars | slice(start=1, end=last) %}{% set cc = chars | length %}{% set count = cc + m - 1 %}{% set count = count / m %}{% set count = count | int %}{% for i in range(end=count) %}{% set a = i * m %}{% set b = a + m %}{% set piece = chars | slice(start=a, end=b) %}{% set piece = piece | join(sep="") %}{% set_global lines = lines | concat(with=piece) %}{% endfor %}{% endif %}{% set ln = lines | length %}{% if ln > max %}{% set k = max - 1 %}{% set tail = lines | nth(n=k) %}{% set tail = tail ~ "…" %}{% set_global lines = lines | slice(end=k) %}{% set_global lines = lines | concat(with=tail) %}{% endif %}{{ lines | json_encode() }}{% endmacro wrap %}
+        {"layout": {
+          "title": {{ self::wrap(text=d.title, n=38, max=2) }},
+          "subtitle": {{ self::wrap(text=d.subtitle | default(value=""), n=84, max=2) }},
+          "stats": [{% for s in d.stats | slice(end=4) %}{% if not loop.first %},{% endif %}{"value": {{ s.value | truncate(length=9) | json_encode() }}, "label": {{ self::wrap(text=s.label, n=24, max=3) }}}{% endfor %}],
+          "sections": [{% for sec in d.sections | slice(end=4) %}{% if not loop.first %},{% endif %}{"heading": {{ self::wrap(text=sec.heading, n=56, max=2) }}, "points": [{% for p in sec.points | slice(end=4) %}{% if not loop.first %},{% endif %}{{ self::wrap(text=p, n=78, max=3) }}{% endfor %}]}{% endfor %}],
+          "takeaway": {{ self::wrap(text=d.takeaway, n=74, max=3) }}
+        }}
+
+  # The fixed design: 1200 px wide, as tall as the content. A first
+  # pass sums the height, the second draws with the same steps.
+  - id: svg_source
+    type: template
+    dependencies: ["layout"]
+    input_mapping:
+      L: "{{ nodes.layout.outputs.layout }}"
+    parameters:
+      template: |
+        {%- set colors = ["#2563eb", "#0d9488", "#d97706", "#7c3aed"] -%}
+        {%- set_global label_max = 1 -%}{%- for s in L.stats -%}{%- if s.label | length > label_max -%}{%- set_global label_max = s.label | length -%}{%- endif -%}{%- endfor -%}
+        {%- set card_h = 132 + label_max * 26 -%}
+        {%- set nt = L.title | length -%}{%- set ns = L.subtitle | length -%}{%- set nk = L.takeaway | length -%}{%- set_global h = 60 + nt * 56 -%}
+        {%- if ns > 0 -%}{%- set_global h = h + 8 + ns * 32 -%}{%- endif -%}
+        {%- if L.stats | length > 0 -%}{%- set_global h = h + 36 + card_h -%}{%- endif -%}
+        {%- for sec in L.sections -%}{%- set nh = sec.heading | length -%}{%- set_global h = h + 48 + nh * 34 -%}{%- for p in sec.points -%}{%- set np = p | length -%}{%- set_global h = h + 10 + np * 30 -%}{%- endfor -%}{%- endfor -%}
+        {%- if nk > 0 -%}{%- set_global h = h + 88 + nk * 32 -%}{%- endif -%}
+        {%- set_global h = h + 80 -%}
+        <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="{{ h }}" viewBox="0 0 1200 {{ h }}" font-family="Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+        <rect width="1200" height="{{ h }}" fill="#f8fafc"/>
+        <rect width="1200" height="10" fill="#2563eb"/>
+        {%- set_global y = 60 %}
+        {% for line in L.title %}<text x="60" y="{{ y + 46 }}" font-size="46" font-weight="700" fill="#0f172a">{{ line | escape }}</text>
+        {% set_global y = y + 56 %}{% endfor %}
+        {%- if ns > 0 %}{% set_global y = y + 8 %}{% for line in L.subtitle %}<text x="60" y="{{ y + 24 }}" font-size="22" fill="#475569">{{ line | escape }}</text>
+        {% set_global y = y + 32 %}{% endfor %}{% endif %}
+        {%- if L.stats | length > 0 %}{% set_global y = y + 36 %}{% set k = L.stats | length %}{% set cw = (1080 - (k - 1) * 24) / k %}
+        {%- for s in L.stats %}{% set x = 60 + loop.index0 * (cw + 24) %}{% set c = colors | nth(n=loop.index0 % 4) %}
+        <rect x="{{ x }}" y="{{ y }}" width="{{ cw }}" height="{{ card_h }}" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+        <text x="{{ x + 24 }}" y="{{ y + 84 }}" font-size="52" font-weight="800" fill="{{ c }}">{{ s.value | escape }}</text>
+        {% for line in s.label %}<text x="{{ x + 24 }}" y="{{ y + 124 + loop.index0 * 26 }}" font-size="19" fill="#475569">{{ line | escape }}</text>
+        {% endfor %}{% endfor %}{% set_global y = y + card_h %}{% endif %}
+        {%- for sec in L.sections %}{% set c = colors | nth(n=loop.index0 % 4) %}{% set_global y = y + 40 %}
+        {% set nh = sec.heading | length %}<rect x="60" y="{{ y }}" width="8" height="{{ nh * 34 }}" rx="4" fill="{{ c }}"/>
+        {% for line in sec.heading %}<text x="84" y="{{ y + 27 }}" font-size="28" font-weight="700" fill="#0f172a">{{ line | escape }}</text>
+        {% set_global y = y + 34 %}{% endfor %}{% set_global y = y + 8 %}
+        {%- for p in sec.points %}
+        <circle cx="94" cy="{{ y + 15 }}" r="5" fill="{{ c }}"/>
+        {% for line in p %}<text x="112" y="{{ y + 22 }}" font-size="22" fill="#334155">{{ line | escape }}</text>
+        {% set_global y = y + 30 %}{% endfor %}{% set_global y = y + 10 %}{% endfor %}{% endfor %}
+        {%- if nk > 0 %}{% set_global y = y + 40 %}{% set th = 48 + nk * 32 %}
+        <rect x="60" y="{{ y }}" width="1080" height="{{ th }}" rx="16" fill="#0f172a"/>
+        {% for line in L.takeaway %}<text x="92" y="{{ y + 50 + loop.index0 * 32 }}" font-size="24" font-weight="600" fill="#f8fafc">{{ line | escape }}</text>
+        {% endfor %}{% set_global y = y + th %}{% endif %}
+        <text x="60" y="{{ h - 32 }}" font-size="16" fill="#94a3b8">{% if url %}Source: {{ url | truncate(length=110) | escape }}{% endif %}</text>
+        </svg>
+
+  - id: graphic_svg
+    type: render_svg
+    dependencies: ["svg_source"]
+    input_mapping:
+      svg: "{{ nodes.svg_source.outputs.output }}"
+    parameters:
+      format: svg
+
+  - id: graphic_png
+    type: render_svg
+    dependencies: ["svg_source"]
+    input_mapping:
+      svg: "{{ nodes.svg_source.outputs.output }}"
+    parameters:
+      width: 1600
+
+  - id: deliverable
+    type: template
+    dependencies: ["graphic_svg", "graphic_png"]
+    input_mapping:
+      d: "{{ nodes.draft.outputs.output }}"
+      svg: "{{ nodes.graphic_svg.outputs.graphic_svg_output }}"
+      png: "{{ nodes.graphic_png.outputs.graphic_png_output }}"
+    parameters:
+      output_format: json
+      template: |
+        {"deliverable": {
+          "kind": "infographic",
+          "title": {{ d.title | json_encode() }},
+          "content": {{ d | json_encode() }},
+          "citations": [{% set_global first = true %}{% for n in d.stats | concat(with=d.sections) %}{% if n.chunk_id %}{% set_global sid = "" %}{% set_global passage = "" %}{% for c in chunks %}{% if c.chunk_id == n.chunk_id %}{% set_global sid = c.source_id %}{% set_global passage = c.content %}{% endif %}{% endfor %}{% if passage %}{% if not first %},{% endif %}{% set_global first = false %}{"source_id": {{ sid | json_encode() }}, "chunk_id": {{ n.chunk_id | json_encode() }}, "quote": {{ passage | truncate(length=300) | json_encode() }}}{% endif %}{% endif %}{% endfor %}],
+          "files": [
+            {"node_id": "graphic_svg", "name": {{ svg | split(pat="/") | last | json_encode() }}, "mime_type": "image/svg+xml", "role": "primary"},
+            {"node_id": "graphic_png", "name": {{ png | split(pat="/") | last | json_encode() }}, "mime_type": "image/png", "role": "preview"}
+          ]
+        }}

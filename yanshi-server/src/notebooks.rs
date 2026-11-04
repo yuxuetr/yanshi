@@ -473,6 +473,10 @@ const GENERATORS: &[(&str, &str)] = &[
     include_str!("../../examples/generators/flashcards.yml"),
   ),
   ("quiz", include_str!("../../examples/generators/quiz.yml")),
+  (
+    "infographic",
+    include_str!("../../examples/generators/infographic.yml"),
+  ),
 ];
 
 /// How much notebook text a generator gets, in characters (the

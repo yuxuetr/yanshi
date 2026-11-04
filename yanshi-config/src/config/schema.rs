@@ -488,6 +488,7 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
     "render_svg" => Some(vec![
       ParamSpec::required_input("svg", ParamType::String),
       ParamSpec::optional("width", ParamType::Integer),
+      ParamSpec::optional("format", ParamType::String),
     ]),
     "render_markdown" => Some(vec![
       ParamSpec::required_input("markdown", ParamType::String),

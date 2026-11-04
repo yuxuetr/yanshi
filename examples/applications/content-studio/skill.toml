@@ -15,7 +15,7 @@
 [skill]
 name        = "content-studio"
 version     = "0.1.0"
-description = "Turn a source into the deliverables you ask for: report, mind map, audio overview, slides, flashcards, quiz"
+description = "Turn a source into the deliverables you ask for: report, mind map, audio overview, slides, flashcards, quiz, infographic"
 
 [persona]
 language = "en"
@@ -30,6 +30,7 @@ Tools, one per deliverable kind:
 - `slides`: a slide deck with rendered figures (.pptx)
 - `flashcards`: study cards (.html, cards as JSON)
 - `quiz`: a self-checking multiple-choice quiz (.html, questions as JSON)
+- `infographic`: headline numbers and key points on one page (.svg, .png)
 
 Rules:
 1. Call each wanted tool exactly once, all in your first turn. Pass the
@@ -78,6 +79,11 @@ description = "Write study flashcards on the source: JSON cards and a click-to-f
 name        = "quiz"
 path        = "../../generators/quiz.yml"
 description = "Write a multiple-choice quiz on the source: JSON questions and a self-checking .html page"
+
+[[workflows]]
+name        = "infographic"
+path        = "../../generators/infographic.yml"
+description = "Draw an infographic of the source: headline numbers, key points and a takeaway as .svg and .png"
 
 [memory]
 type          = "session"
