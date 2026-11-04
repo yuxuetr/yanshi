@@ -175,6 +175,9 @@ pub struct LLMResponse {
   /// `None` when the model didn't emit reasoning text or thinking wasn't
   /// requested. See [`crate::ThinkingConfig`] for how to ask for it.
   pub thinking: Option<String>,
+  /// Y6.6 (M7): the reply's non-text parts (images, audio) in order, e.g.
+  /// from a Gemini image-output model. `content` holds only the text.
+  pub media: Vec<crate::providers::ContentBlock>,
 }
 
 impl LLMResponse {
@@ -259,6 +262,7 @@ mod tests {
       usage: None,
       raw_metadata: None,
       thinking: None,
+      media: Vec::new(),
     };
     assert!(resp.has_tool_calls());
   }

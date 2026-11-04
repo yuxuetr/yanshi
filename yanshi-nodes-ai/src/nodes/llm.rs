@@ -6,10 +6,26 @@ use yanshi_core::{
   error::YanshiError,
   value::FlowValue,
 };
-use yanshi_llm::Yanshi;
+use yanshi_llm::{Yanshi, providers::ContentBlock};
+use yanshi_nodes::common::artifacts;
 
+/// A chat-model call. `output` is the reply's text (or its parsed JSON
+/// under `json_schema`); a reply that also carries images (Y6.6, e.g. a
+/// Gemini image-output model) adds `images`, the images written as this
+/// node's artifacts.
 #[derive(Debug, Clone, Default)]
-pub struct LlmNode;
+pub struct LlmNode {
+  /// Names the artifact directory for reply images (`llm` when unset).
+  id: Option<String>,
+}
+
+impl LlmNode {
+  pub fn with_id(id: impl Into<String>) -> Self {
+    Self {
+      id: Some(id.into()),
+    }
+  }
+}
 
 #[async_trait]
 impl AsyncNode for LlmNode {
@@ -58,7 +74,7 @@ impl AsyncNode for LlmNode {
 
     tracing::debug!("executing LLM request");
     let response = request
-      .execute()
+      .execute_full()
       .await
       .map_err(|e| YanshiError::AsyncExecutionError {
         message: format!("LLM execution failed: {}", e),
@@ -66,11 +82,27 @@ impl AsyncNode for LlmNode {
     tracing::debug!("LLM response received");
 
     let output = match schema {
-      Some(_) => parse_json_reply(&response)?,
-      None => Value::String(response),
+      Some(_) => parse_json_reply(&response.content)?,
+      None => Value::String(response.content),
     };
     let mut outputs = HashMap::new();
     outputs.insert("output".to_string(), FlowValue::Json(output));
+
+    let node = self.id.as_deref().unwrap_or("llm");
+    let mut images = Vec::new();
+    for block in &response.media {
+      if let ContentBlock::Image { data, media_type } = block {
+        let file = artifacts::write_artifact(node, data, media_type).await?;
+        images.push(
+          serde_json::to_value(&file).map_err(|e| YanshiError::NodeExecutionFailed {
+            message: format!("{node}: cannot describe a reply image: {e}"),
+          })?,
+        );
+      }
+    }
+    if !images.is_empty() {
+      outputs.insert("images".to_string(), FlowValue::Json(Value::Array(images)));
+    }
 
     Ok(outputs)
   }
@@ -151,7 +183,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_llm_node_async_execution() {
-    let node = LlmNode;
+    let node = LlmNode::default();
     let mut inputs = AsyncNodeInputs::new();
     inputs.insert(
       "prompt".to_string(),

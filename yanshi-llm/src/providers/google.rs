@@ -2,7 +2,7 @@ use super::line_buffer::LineBuffer;
 use crate::{
   LLMError, ResponseFormat, Result,
   client::streaming::{StreamChunk, StreamingResponse, TokenUsage, ToolCallDelta},
-  providers::{ContentType, LLMProvider, ProviderRequest, ProviderResponse},
+  providers::{ContentBlock, ContentType, LLMProvider, ProviderRequest, ProviderResponse},
   thinking::ThinkingConfig,
   tool_calling::{StopReason, ToolCallRequest, ToolChoice, ToolSpec},
 };
@@ -438,20 +438,12 @@ impl LLMProvider for GoogleProvider {
     let google_response: GoogleResponse = response.json().await?;
 
     let first_candidate = google_response.candidates.first();
-    // Concatenate all text parts; functionCall parts are surfaced via
-    // `tool_calls` instead of being stringified into content.
-    let content_text = first_candidate
-      .map(|c| {
-        c.content
-          .parts
-          .iter()
-          .filter_map(|p| p.text.as_deref())
-          .collect::<Vec<_>>()
-          .join("")
-      })
-      .unwrap_or_default();
-
-    let content = ContentType::Text(content_text);
+    // Text and inline images, in order; functionCall parts are surfaced
+    // via `tool_calls` instead of being stringified into content.
+    let content = match first_candidate {
+      Some(candidate) => google_parts_to_content(&candidate.content.parts)?,
+      None => ContentType::Text(String::new()),
+    };
 
     let usage = google_response
       .usage_metadata
@@ -590,6 +582,11 @@ struct GoogleContent {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct GooglePart {
   pub text: Option<String>,
+  /// Y6.6 (M7): inline media in a reply, e.g. the image of a Gemini
+  /// image-output model. Not re-serialized into the response metadata:
+  /// the decoded bytes are already in `content`.
+  #[serde(rename = "inlineData", default, skip_serializing)]
+  pub inline_data: Option<GoogleInlineData>,
   /// Native function call payload: `{ "name": "...", "args": { ... } }`.
   #[serde(
     rename = "functionCall",
@@ -597,6 +594,56 @@ pub(crate) struct GooglePart {
     skip_serializing_if = "Option::is_none"
   )]
   pub function_call: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct GoogleInlineData {
+  #[serde(rename = "mimeType")]
+  pub mime_type: String,
+  /// Base64.
+  pub data: String,
+}
+
+/// Y6.6 (M7): a reply's parts as content, in order. Text only (the usual
+/// case) stays `ContentType::Text`; one image alone is
+/// `ContentType::Image`; text and images together are `Mixed`. Function
+/// calls are not content (they become `tool_calls`).
+pub(crate) fn google_parts_to_content(parts: &[GooglePart]) -> Result<ContentType> {
+  use base64::{Engine as _, engine::general_purpose::STANDARD};
+  let mut blocks: Vec<ContentBlock> = Vec::new();
+  for part in parts {
+    if let Some(text) = &part.text {
+      match blocks.last_mut() {
+        Some(ContentBlock::Text(previous)) => previous.push_str(text),
+        _ => blocks.push(ContentBlock::Text(text.clone())),
+      }
+    } else if let Some(inline) = &part.inline_data {
+      let data =
+        STANDARD
+          .decode(inline.data.trim())
+          .map_err(|e| LLMError::ResponseParsingError {
+            message: format!(
+              "Gemini inlineData ({}) is not valid base64: {e}",
+              inline.mime_type
+            ),
+          })?;
+      let media_type = inline.mime_type.clone();
+      blocks.push(if media_type.starts_with("audio/") {
+        ContentBlock::Audio { data, media_type }
+      } else {
+        ContentBlock::Image { data, media_type }
+      });
+    }
+  }
+  Ok(match blocks.len() {
+    0 => ContentType::Text(String::new()),
+    1 => match blocks.remove(0) {
+      ContentBlock::Text(text) => ContentType::Text(text),
+      ContentBlock::Image { data, media_type } => ContentType::Image { data, media_type },
+      ContentBlock::Audio { data, media_type } => ContentType::Audio { data, media_type },
+    },
+    _ => ContentType::Mixed(blocks),
+  })
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1153,9 +1200,57 @@ mod tests {
   fn parse_google_function_calls_text_only_returns_empty() {
     let parts = vec![GooglePart {
       text: Some("hi".to_string()),
+      inline_data: None,
       function_call: None,
     }];
     assert!(parse_google_function_calls(&parts).is_empty());
+  }
+
+  #[test]
+  fn reply_images_become_image_content_in_order() {
+    let parts: Vec<GooglePart> = serde_json::from_value(json!([
+      {"text": "Here is "},
+      {"text": "your cat:"},
+      {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}},
+      {"functionCall": {"name": "f", "args": {}}}
+    ]))
+    .expect("parts");
+    match google_parts_to_content(&parts).expect("content") {
+      ContentType::Mixed(blocks) => {
+        assert!(matches!(&blocks[0], ContentBlock::Text(t) if t == "Here is your cat:"));
+        assert!(
+          matches!(&blocks[1], ContentBlock::Image { data, media_type }
+          if media_type == "image/png" && data.starts_with(b"\x89PNG"))
+        );
+        assert_eq!(blocks.len(), 2);
+      }
+      other => panic!("{other:?}"),
+    }
+    let image_only: Vec<GooglePart> = serde_json::from_value(json!([
+      {"inlineData": {"mimeType": "image/jpeg", "data": "/9j/"}}
+    ]))
+    .expect("parts");
+    assert!(
+      google_parts_to_content(&image_only)
+        .expect("content")
+        .has_images()
+    );
+    let text_only: Vec<GooglePart> =
+      serde_json::from_value(json!([{"text": "a"}, {"text": "b"}])).expect("parts");
+    assert!(
+      matches!(google_parts_to_content(&text_only).expect("content"), ContentType::Text(t) if t == "ab")
+    );
+    let broken: Vec<GooglePart> = serde_json::from_value(json!([
+      {"inlineData": {"mimeType": "image/png", "data": "***"}}
+    ]))
+    .expect("parts");
+    assert!(google_parts_to_content(&broken).is_err());
+    // The image bytes are not serialized back into the response metadata.
+    assert!(
+      !serde_json::to_string(&parts)
+        .expect("json")
+        .contains("iVBOR")
+    );
   }
 
   #[test]

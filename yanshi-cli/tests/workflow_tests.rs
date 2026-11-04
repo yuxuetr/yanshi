@@ -1392,7 +1392,7 @@ async fn test_simple_two_step_llm_workflow() {
 
   let answer_generator_node = GraphNode {
     id: "answer_generator".to_string(),
-    node_type: NodeType::Standard(Arc::new(LlmNode)),
+    node_type: NodeType::Standard(Arc::new(LlmNode::default())),
     dependencies: vec!["prompt_generator".to_string()],
     input_mapping: Some({
       let mut map = HashMap::new();
@@ -1436,7 +1436,7 @@ async fn test_conditional_workflow_runs() {
 
   let condition_node = GraphNode {
     id: "condition_node".to_string(),
-    node_type: NodeType::Standard(Arc::new(LlmNode)),
+    node_type: NodeType::Standard(Arc::new(LlmNode::default())),
     dependencies: vec![],
     input_mapping: None,
     run_if: None,
@@ -1489,7 +1489,7 @@ async fn test_conditional_workflow_skips() {
 
   let condition_node = GraphNode {
     id: "condition_node".to_string(),
-    node_type: NodeType::Standard(Arc::new(LlmNode)),
+    node_type: NodeType::Standard(Arc::new(LlmNode::default())),
     dependencies: vec![],
     input_mapping: None,
     run_if: None,
@@ -1548,7 +1548,7 @@ async fn test_parallel_map_workflow() {
     },
     GraphNode {
       id: "poem_generator".to_string(),
-      node_type: NodeType::Standard(Arc::new(LlmNode)),
+      node_type: NodeType::Standard(Arc::new(LlmNode::default())),
       dependencies: vec!["poem_prompt".to_string()],
       input_mapping: Some(
         [(
@@ -1625,7 +1625,7 @@ async fn test_stateful_while_loop_workflow() {
     },
     GraphNode {
       id: "decrementer_llm".to_string(),
-      node_type: NodeType::Standard(Arc::new(LlmNode)),
+      node_type: NodeType::Standard(Arc::new(LlmNode::default())),
       dependencies: vec!["decrementer_prompt".to_string()],
       input_mapping: Some(
         [(

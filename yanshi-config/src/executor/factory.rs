@@ -54,7 +54,7 @@ fn get_string_param_optional(params: &HashMap<String, serde_yaml::Value>, key: &
 
 pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
   let node_type = match node_def.node_type.as_str() {
-    "llm" => Ok(NodeType::Standard(Arc::new(LlmNode))),
+    "llm" => Ok(NodeType::Standard(Arc::new(LlmNode::with_id(&node_def.id)))),
     "skill_agent" | "agent" => {
       let node = SkillAgentWorkflowNode::new(&node_def.id);
       Ok(NodeType::Standard(Arc::new(node)))

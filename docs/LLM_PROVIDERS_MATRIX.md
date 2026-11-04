@@ -362,6 +362,14 @@ under `YANSHI_LIVE_IMAGE_TESTS`; `tests/image2image_providers.rs` covers
 both offline. A registry name has one `type`, which is why the OpenAI
 entry is a separate model from `gpt-image-1` (`image_edit`).
 
+Images in chat replies (Y6.6, evaluation M7): Gemini `inlineData` parts
+become `ContentType::Image` / `Mixed` (in order, base64 decoded, not
+copied into the response metadata). `LLMResponse` keeps `content`
+text-only and adds `media` (the non-text blocks); the `llm` node writes
+reply images as artifacts under an `images` output. Streaming replies
+still carry text only. Offline: `tests/chat_reply_images.rs`; live:
+`google_chat_reply_carries_an_image_live` (`YANSHI_LIVE_IMAGE_TESTS`).
+
 StepFun modality smoke tests are enabled by those gates:
 
 ```bash

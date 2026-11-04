@@ -425,9 +425,10 @@ impl LLMClient {
     .await?;
     let duration = start_time.elapsed();
 
-    let content_text = provider_response.content.to_string();
+    let (content_text, media) = provider_response.content.split_text_and_media();
     let response = LLMResponse {
       content: content_text.clone(),
+      media,
       tool_calls: provider_response.tool_calls.clone(),
       stop_reason: provider_response.stop_reason.clone(),
       usage: provider_response.usage.clone(),

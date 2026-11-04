@@ -626,7 +626,10 @@ mod tests {
     match parse_task_poll_response(&succeeded).unwrap() {
       TaskPollOutcome::Succeeded(results) => {
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].url.as_deref(), Some("https://example.com/img.png"));
+        assert_eq!(
+          results[0].url.as_deref(),
+          Some("https://example.com/img.png")
+        );
       }
       _ => panic!("expected Succeeded"),
     }

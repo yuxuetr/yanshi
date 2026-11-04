@@ -2307,3 +2307,33 @@ async fn dashscope_wan_image_to_image_live() {
   )
   .await;
 }
+
+// ── Y6.6 (M7): an image in a chat reply (YANSHI_LIVE_IMAGE_TESTS) ───────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_chat_reply_carries_an_image_live() {
+  if !prepare_live_provider("google", LiveCapability::Image).await {
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["GEMINI_API_KEY", "GOOGLE_API_KEY"]) else {
+    eprintln!("[live] google chat image: skipped (GEMINI_API_KEY not set)");
+    return;
+  };
+  let provider = GoogleProvider::with_client(no_proxy_client(), &api_key, None).expect("provider");
+  let mut request = provider_request("gemini-2.5-flash-image");
+  request.messages = vec![
+    json!({"role": "user", "content": "Draw a small red square on white. Reply with the image."}),
+  ];
+  let response = tokio::time::timeout(Duration::from_secs(120), provider.execute(&request))
+    .await
+    .expect("google chat image timed out")
+    .expect("google chat image failed");
+  let (_, media) = response.content.split_text_and_media();
+  assert!(
+    media.iter().any(
+      |b| matches!(b, yanshi_llm::providers::ContentBlock::Image { data, .. } if !data.is_empty())
+    ),
+    "no image in the reply: {:?}",
+    response.content.to_string()
+  );
+}

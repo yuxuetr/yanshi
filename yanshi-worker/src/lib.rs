@@ -876,7 +876,9 @@ async fn execute_mock_payload(payload: &NodeExecutionPayload, attempt: u32) -> A
 }
 
 async fn execute_llm_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {
-  LlmNode.execute(&payload.inputs).await
+  LlmNode::with_id(&payload.node_id)
+    .execute(&payload.inputs)
+    .await
 }
 
 async fn execute_http_payload(payload: &NodeExecutionPayload) -> AsyncNodeResult {

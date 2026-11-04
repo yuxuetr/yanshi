@@ -192,6 +192,9 @@ where
     usage,
     raw_metadata,
     thinking: None,
+    // Streamed replies carry text deltas only; inline images are parsed
+    // on the non-streaming path.
+    media: Vec::new(),
   })
 }
 

@@ -496,7 +496,13 @@ mod tests {
   fn implemented_modalities_for_openai_covers_everything_but_video() {
     assert_eq!(
       implemented_modalities_for("openai"),
-      vec!["ASR", "TTS", "text-to-image", "image-to-image", "image-edit"]
+      vec![
+        "ASR",
+        "TTS",
+        "text-to-image",
+        "image-to-image",
+        "image-edit"
+      ]
     );
   }
 

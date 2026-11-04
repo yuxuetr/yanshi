@@ -288,6 +288,39 @@ impl ContentType {
     }
   }
 
+  /// Y6.6 (M7): the text (without `[Image]` placeholders) and the
+  /// non-text blocks, in order.
+  pub fn split_text_and_media(&self) -> (String, Vec<ContentBlock>) {
+    match self {
+      ContentType::Text(text) => (text.clone(), Vec::new()),
+      ContentType::Image { data, media_type } => (
+        String::new(),
+        vec![ContentBlock::Image {
+          data: data.clone(),
+          media_type: media_type.clone(),
+        }],
+      ),
+      ContentType::Audio { data, media_type } => (
+        String::new(),
+        vec![ContentBlock::Audio {
+          data: data.clone(),
+          media_type: media_type.clone(),
+        }],
+      ),
+      ContentType::Mixed(blocks) => {
+        let mut text = String::new();
+        let mut media = Vec::new();
+        for block in blocks {
+          match block {
+            ContentBlock::Text(part) => text.push_str(part),
+            other => media.push(other.clone()),
+          }
+        }
+        (text, media)
+      }
+    }
+  }
+
   /// Check if content is purely text
   pub fn is_text(&self) -> bool {
     matches!(self, ContentType::Text(_))
