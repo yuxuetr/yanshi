@@ -90,6 +90,11 @@ pub struct AgentLoopCheckpoint {
   pub last_tool_call: Option<(String, serde_json::Value)>,
   pub recent_tool_calls: VecDeque<(String, serde_json::Value)>,
   pub cumulative_cost_usd: f64,
+  /// Y2.2 (COR-2): provider-reported tokens spent by this run so far, the
+  /// sum of every LLM call's usage. ReAct checks `token_budget` against
+  /// it. Defaulted so checkpoints written before Y2.2 still load.
+  #[serde(default)]
+  pub cumulative_tokens: u64,
   pub system_prompt: String,
   pub user_input: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -210,6 +215,7 @@ mod tests {
       last_tool_call: Some(("search".to_string(), serde_json::json!({"q": "rust"}))),
       recent_tool_calls: recent,
       cumulative_cost_usd: 0.0123,
+      cumulative_tokens: 21_890,
       system_prompt: "be helpful".into(),
       user_input: "find the bug".into(),
       trace_context: None,
@@ -246,6 +252,19 @@ mod tests {
     assert!(json.contains("pending_question"));
     let parsed: AgentLoopCheckpoint = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed, checkpoint);
+  }
+
+  /// Y2.2: a checkpoint written before `cumulative_tokens` existed loads
+  /// with the total at zero rather than failing.
+  #[test]
+  fn checkpoint_without_cumulative_tokens_loads_as_zero() {
+    let mut json = serde_json::to_value(sample_checkpoint()).expect("serialize");
+    json
+      .as_object_mut()
+      .expect("object")
+      .remove("cumulative_tokens");
+    let parsed: AgentLoopCheckpoint = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(parsed.cumulative_tokens, 0);
   }
 
   /// V2.3: `pending_question` is additive (`#[serde(default)]`) — a

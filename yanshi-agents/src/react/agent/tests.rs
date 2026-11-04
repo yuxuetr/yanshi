@@ -819,6 +819,7 @@ fn bare_react_checkpoint(
     last_tool_call: None,
     recent_tool_calls: std::collections::VecDeque::new(),
     cumulative_cost_usd: 0.0,
+    cumulative_tokens: 0,
     system_prompt: String::new(),
     user_input: "hello".into(),
     trace_context: None,
@@ -3801,4 +3802,125 @@ async fn remember_preference_tool_write_is_visible_to_a_second_agent_instance() 
   unsafe {
     std::env::remove_var("YANSHI_MOCK_RESPONSES");
   }
+}
+
+// ── Y2.2 (COR-2): token budget is cumulative spend ─────────────────────
+
+/// A memory whose token count never exceeds a context window, like any
+/// summarising / trimming store. The pre-Y2.2 budget check read this
+/// number, so a budget above the window could never trip.
+struct WindowCappedMemory {
+  inner: SessionMemory,
+  window: u32,
+}
+
+#[async_trait]
+impl MemoryStore for WindowCappedMemory {
+  async fn add_message(&self, message: Message) -> Result<(), yanshi_memory::MemoryError> {
+    self.inner.add_message(message).await
+  }
+  async fn get_history(
+    &self,
+    session_id: &str,
+    limit: usize,
+  ) -> Result<Vec<Message>, yanshi_memory::MemoryError> {
+    self.inner.get_history(session_id, limit).await
+  }
+  async fn get_all(&self, session_id: &str) -> Result<Vec<Message>, yanshi_memory::MemoryError> {
+    self.inner.get_all(session_id).await
+  }
+  async fn search(
+    &self,
+    session_id: &str,
+    query: &str,
+    limit: usize,
+  ) -> Result<Vec<Message>, yanshi_memory::MemoryError> {
+    self.inner.search(session_id, query, limit).await
+  }
+  async fn clear_session(&self, session_id: &str) -> Result<(), yanshi_memory::MemoryError> {
+    self.inner.clear_session(session_id).await
+  }
+  async fn session_token_count(&self, session_id: &str) -> Result<u32, yanshi_memory::MemoryError> {
+    Ok(
+      self
+        .inner
+        .session_token_count(session_id)
+        .await?
+        .min(self.window),
+    )
+  }
+}
+
+/// Budget 20 000 with an 8 000-token window and ~2 000 tokens per call:
+/// the run must stop with `TokenBudgetExceeded` on the first turn after
+/// cumulative spend passes 20 000. Before Y2.2 the check read the capped
+/// window (≤ 8 000) and the run went on to `max_iterations`.
+#[tokio::test]
+async fn token_budget_stops_on_cumulative_spend_not_the_memory_window() {
+  let _guard = crate::LLM_TEST_LOCK.lock().await;
+  let model = format!("mock-token-budget-{}", uuid::Uuid::new_v4());
+  // The mock bills 50 prompt tokens + one completion token per
+  // whitespace-separated word of its reply.
+  let padding = "w ".repeat(1_950);
+  unsafe {
+    std::env::set_var(
+      "YANSHI_MOCK_RESPONSE",
+      format!(
+        r#"{{"thought":"{padding}","action":{{"tool":"counting_echo","params":{{"text":"x"}}}}}}"#
+      ),
+    );
+  }
+  init_mock_model(&model).await;
+
+  let mut registry = ToolRegistry::new();
+  registry.register(Arc::new(CountingTool {
+    calls: Arc::new(AtomicUsize::new(0)),
+  }));
+  let budget = 20_000;
+  let mut agent = ReActAgent::new(
+    ReActConfig::new(&model)
+      .with_max_iterations(50)
+      .without_loop_detection(),
+    Box::new(WindowCappedMemory {
+      inner: SessionMemory::default_window(),
+      window: 8_000,
+    }),
+    Arc::new(registry),
+  );
+  let mut context = AgentContext::new("session-token-budget", "go", &model);
+  context.limits.token_budget = Some(budget);
+  let result = agent.run_with_context(context).await.unwrap();
+
+  unsafe {
+    std::env::remove_var("YANSHI_MOCK_RESPONSE");
+  }
+
+  let per_call: Vec<u32> = result
+    .events
+    .iter()
+    .filter_map(|event| match event {
+      AgentEvent::LlmCallCompleted { total_tokens, .. } => *total_tokens,
+      _ => None,
+    })
+    .collect();
+  let first = *per_call.first().expect("at least one LLM call");
+  assert!(
+    first > 1_900,
+    "each call should bill ~2 000 tokens, got {first}"
+  );
+  let spent: u32 = per_call.iter().sum();
+  let expected_calls = (budget / first + 1) as usize;
+  assert_eq!(
+    result.stop_reason,
+    AgentStopReason::TokenBudgetExceeded {
+      used: spent,
+      budget
+    },
+    "must stop on cumulative spend"
+  );
+  assert_eq!(
+    per_call.len(),
+    expected_calls,
+    "stop on the first turn after spend passes the budget"
+  );
 }

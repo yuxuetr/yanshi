@@ -110,6 +110,15 @@ _New entries go here. Will roll into the next tag (likely
   field, and GLM documents none. The OpenAI, Moonshot and StepFun
   readers continue to `[DONE]`, and Moonshot's choice-level usage is
   read. Regression fixtures are in `yanshi-llm/tests/sse_buffer_regression.rs`.
+- **`token_budget` limits spend, not context size (Y2.2, COR-2).** ReAct
+  compared the budget with the memory store's token count, which a
+  summarising or trimming store keeps below its window. A 20 000-token
+  budget over an 8 000-token window therefore never tripped. ReAct now
+  adds each call's provider-reported usage to a running total and stops
+  when that total passes the budget. The memory count is kept as a
+  floor for providers that report no usage. `AgentLoopCheckpoint`
+  gains `cumulative_tokens` (`#[serde(default)]`, so older checkpoints
+  load with 0), and a resumed run keeps its spend.
 - **`/metrics` recorder init is serialized.** A caller that lost the
   install race could scrape before the handle was stored and get an
   empty body, which made the `metrics_endpoint` tests flaky.

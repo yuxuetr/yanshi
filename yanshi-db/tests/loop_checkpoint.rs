@@ -49,6 +49,7 @@ fn sample_checkpoint(session_id: Uuid, pending_question: Option<String>) -> Agen
     last_tool_call: Some(("search".to_string(), serde_json::json!({"q": "rust"}))),
     recent_tool_calls: recent,
     cumulative_cost_usd: 0.0123,
+    cumulative_tokens: 0,
     system_prompt: "be helpful".into(),
     user_input: "find the bug".into(),
     trace_context: None,

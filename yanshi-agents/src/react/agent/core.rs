@@ -697,6 +697,7 @@ impl ReActAgent {
       budget_tokens: context.limits.token_budget.or(self.config.budget_tokens),
       cost_limit_usd: context.limits.cost_limit_usd.or(self.config.cost_limit_usd),
       cumulative_cost_usd: 0.0,
+      cumulative_tokens: 0,
       cancellation_token: context.cancellation_token.clone(),
       run_started_at: Instant::now(),
       system_prompt,
@@ -763,6 +764,7 @@ impl ReActAgent {
         st.budget_tokens,
         st.cost_limit_usd,
         st.cumulative_cost_usd,
+        st.cumulative_tokens,
         &st.cancellation_token,
         &st.recent_tool_calls,
         st.loop_detection,
@@ -786,6 +788,7 @@ impl ReActAgent {
         st.timeout_ms,
         &st.cancellation_token,
         &mut st.cumulative_cost_usd,
+        &mut st.cumulative_tokens,
       )
       .await?
     {
@@ -1124,6 +1127,7 @@ impl ReActAgent {
     timeout_ms: Option<u64>,
     cancellation_token: &Option<AgentCancellationToken>,
     cumulative_cost_usd: &mut f64,
+    cumulative_tokens: &mut u64,
   ) -> Result<LlmTurnOutcome, ReActError> {
     // Phase 2b between-turn control point.
     if let Some(hook) = between_turn_hook {
@@ -1249,6 +1253,15 @@ impl ReActAgent {
       timestamp: chrono::Utc::now(),
     });
 
+    // Y2.2 (COR-2): accrue what the provider says this call actually
+    // consumed. `total_tokens` when reported, else prompt + completion.
+    if let Some(u) = usage {
+      let call_tokens = u.total_tokens.map(u64::from).unwrap_or_else(|| {
+        u64::from(u.prompt_tokens.unwrap_or(0)) + u64::from(u.completion_tokens.unwrap_or(0))
+      });
+      *cumulative_tokens = cumulative_tokens.saturating_add(call_tokens);
+    }
+
     // T1.1: accrue this call's estimated cost against the run's cost
     // budget. `pricing_table` defaults to all-zero, so this is a no-op
     // unless the caller configured real per-model prices.
@@ -1346,6 +1359,7 @@ impl ReActAgent {
     budget_tokens: Option<u32>,
     cost_limit_usd: Option<f64>,
     cumulative_cost_usd: f64,
+    cumulative_tokens: u64,
     cancellation_token: &Option<AgentCancellationToken>,
     recent_tool_calls: &std::collections::VecDeque<(String, serde_json::Value)>,
     loop_detection: Option<LoopDetectionConfig>,
@@ -1411,7 +1425,14 @@ impl ReActAgent {
     }
 
     if let Some(budget) = budget_tokens {
-      let used = self.memory.session_token_count(&self.session_id).await?;
+      // Y2.2 (COR-2): the budget is spend, not context size. The memory
+      // window's token count is capped by summarisation / trimming, so a
+      // budget above the window size could never trip on it. It stays as
+      // a floor for providers that report no usage at all.
+      let window = self.memory.session_token_count(&self.session_id).await?;
+      let used = u32::try_from(cumulative_tokens)
+        .unwrap_or(u32::MAX)
+        .max(window);
       if used > budget {
         self
           .record_reflection(

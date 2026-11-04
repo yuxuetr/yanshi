@@ -197,6 +197,7 @@ mod tests {
       last_tool_call: None,
       recent_tool_calls: VecDeque::new(),
       cumulative_cost_usd: 0.0,
+      cumulative_tokens: 0,
       system_prompt: "be helpful".into(),
       user_input: "do the thing".into(),
       trace_context: None,

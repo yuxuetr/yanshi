@@ -66,6 +66,9 @@ pub(crate) struct LoopState {
   /// T1.1: running total of `pricing_table`-estimated cost across every
   /// LLM call made so far this run.
   pub(crate) cumulative_cost_usd: f64,
+  /// Y2.2: running total of provider-reported tokens across every LLM
+  /// call this run — what `budget_tokens` is checked against.
+  pub(crate) cumulative_tokens: u64,
   pub(crate) cancellation_token: Option<AgentCancellationToken>,
   pub(crate) run_started_at: Instant,
   pub(crate) system_prompt: String,
@@ -106,6 +109,7 @@ impl LoopState {
       last_tool_call: self.last_tool_call.clone(),
       recent_tool_calls: self.recent_tool_calls.clone(),
       cumulative_cost_usd: self.cumulative_cost_usd,
+      cumulative_tokens: self.cumulative_tokens,
       system_prompt: self.system_prompt.clone(),
       user_input: self.user_input.clone(),
       trace_context: self.trace_context.clone(),
@@ -143,6 +147,7 @@ impl LoopState {
       budget_tokens: context.limits.token_budget.or(config.budget_tokens),
       cost_limit_usd: context.limits.cost_limit_usd.or(config.cost_limit_usd),
       cumulative_cost_usd: checkpoint.cumulative_cost_usd,
+      cumulative_tokens: checkpoint.cumulative_tokens,
       cancellation_token: context.cancellation_token.clone(),
       run_started_at: Instant::now(),
       system_prompt: checkpoint.system_prompt.clone(),
