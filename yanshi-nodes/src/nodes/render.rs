@@ -390,6 +390,229 @@ impl AsyncNode for RenderMarkdownNode {
   }
 }
 
+// ── render_document (external: pandoc, typst for PDF) ─────────────────
+
+/// `render_document` (Y3.3): Markdown → `docx` / `pptx` / `html` /
+/// `epub` / `pdf` through pandoc; PDF uses `--pdf-engine=typst` (one
+/// binary, no TeX). Inputs: `markdown` (required), `format` (required),
+/// `title`, `toc` (bool).
+///
+/// pandoc (and typst under it) runs under the platform OS sandbox
+/// backend, writing only to this node's artifact directory and the temp
+/// dir; see [`run_pandoc`]. Raw HTML in the source is read as
+/// text (`-f markdown-raw_html`), for the same reason as
+/// `render_markdown`.
+pub struct RenderDocumentNode {
+  id: String,
+}
+
+impl RenderDocumentNode {
+  pub fn new(id: impl Into<String>) -> Self {
+    Self { id: id.into() }
+  }
+}
+
+/// (pandoc extension, MIME type) for each supported `format`.
+fn document_format(format: &str) -> Option<(&'static str, &'static str)> {
+  Some(match format {
+    "docx" => (
+      "docx",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ),
+    "pptx" => (
+      "pptx",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ),
+    "html" => ("html", "text/html"),
+    "epub" => ("epub", "application/epub+zip"),
+    "pdf" => ("pdf", "application/pdf"),
+    _ => return None,
+  })
+}
+
+/// First executable named `name` on PATH.
+fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+  let path = std::env::var_os("PATH")?;
+  std::env::split_paths(&path)
+    .map(|dir| dir.join(name))
+    .find(|candidate| candidate.is_file())
+}
+
+/// The install prefix a binary loads its libraries from, granted
+/// read-only: `/opt/homebrew/bin/pandoc` → `/opt/homebrew`.
+fn install_prefix(binary: &std::path::Path) -> Option<std::path::PathBuf> {
+  let dir = binary.parent()?;
+  match dir.file_name() {
+    Some(name) if name == "bin" => dir.parent().map(std::path::Path::to_path_buf),
+    _ => Some(dir.to_path_buf()),
+  }
+}
+
+/// Font directories typst searches; read-only.
+fn font_dirs() -> Vec<std::path::PathBuf> {
+  let mut dirs = vec![
+    std::path::PathBuf::from("/Library/Fonts"),
+    std::path::PathBuf::from("/usr/share/fonts"),
+    std::path::PathBuf::from("/usr/local/share/fonts"),
+    std::path::PathBuf::from("/etc/fonts"),
+  ];
+  if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+    dirs.push(home.join("Library/Fonts"));
+    dirs.push(home.join(".local/share/fonts"));
+    dirs.push(home.join(".fonts"));
+  }
+  dirs
+}
+
+/// Run pandoc under the platform OS sandbox: read-only access to its own
+/// (and, for PDF, typst's) install prefix and the font directories,
+/// write access only to `workdir` and the temp dir, a scrubbed
+/// environment and a timeout. Nothing but `pandoc` is ever executed by
+/// this node, and its arguments are an argv vector, never a shell line.
+async fn run_pandoc(
+  node: &str,
+  workdir: &std::path::Path,
+  args: &[std::ffi::OsString],
+  needs_typst: bool,
+) -> Result<(), YanshiError> {
+  use yanshi_tools::sandbox::SandboxScope;
+  use yanshi_tools::{Capability, sandbox::default_backend};
+  const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+  const KEEP_ENV: &[&str] = &[
+    "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
+  ];
+
+  let not_installed = |tool: &str| YanshiError::NodeExecutionFailed {
+    message: format!("{node}: {tool} is not on PATH (`yanshi doctor` lists renderer binaries)"),
+  };
+  let pandoc = find_on_path("pandoc").ok_or_else(|| not_installed("pandoc"))?;
+  let mut read_paths: Vec<std::path::PathBuf> = font_dirs();
+  read_paths.extend(install_prefix(&pandoc));
+  if needs_typst {
+    let typst = find_on_path("typst").ok_or_else(|| not_installed("typst (the PDF engine)"))?;
+    read_paths.extend(install_prefix(&typst));
+  }
+  let writable = vec![workdir.to_path_buf(), std::env::temp_dir()];
+  read_paths.extend(writable.iter().cloned());
+  let scope = SandboxScope::new()
+    .with_read_paths(read_paths)
+    .with_write_paths(writable)
+    .with_working_directory(workdir);
+
+  let mut command = tokio::process::Command::new(&pandoc);
+  command.args(args).current_dir(workdir).kill_on_drop(true);
+  default_backend()
+    .wrap_command(
+      &mut command,
+      &[Capability::FsRead, Capability::FsWrite, Capability::Exec],
+      &scope,
+    )
+    .map_err(|e| YanshiError::NodeExecutionFailed {
+      message: format!("{node}: preparing the sandbox failed: {e}"),
+    })?;
+  // After `wrap_command`: the macOS backend rebuilds the command.
+  command.env_clear();
+  for key in KEEP_ENV {
+    if let Some(value) = std::env::var_os(key) {
+      command.env(key, value);
+    }
+  }
+  let output = tokio::time::timeout(TIMEOUT, command.output())
+    .await
+    .map_err(|_| YanshiError::TimeoutExceeded {
+      duration_ms: TIMEOUT.as_millis() as u64,
+    })?
+    .map_err(|e| YanshiError::NodeExecutionFailed {
+      message: format!("{node}: starting pandoc failed: {e}"),
+    })?;
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let tail: Vec<&str> = stderr.trim().lines().rev().take(12).collect();
+    return Err(YanshiError::NodeExecutionFailed {
+      message: format!(
+        "{node}: pandoc exited with {}: {}",
+        output.status,
+        tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+      ),
+    });
+  }
+  Ok(())
+}
+
+#[async_trait]
+impl AsyncNode for RenderDocumentNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let markdown = text_input(&self.id, inputs, "markdown").await?;
+    let format = optional_str(inputs, "format")
+      .ok_or_else(|| input_error(&self.id, "missing input 'format'"))?;
+    let (extension, mime) = document_format(format).ok_or_else(|| {
+      input_error(
+        &self.id,
+        format!("unknown format '{format}': expected docx, pptx, html, epub or pdf"),
+      )
+    })?;
+
+    let workdir = crate::common::artifacts::artifact_dir(&self.id);
+    tokio::fs::create_dir_all(&workdir).await.map_err(|e| {
+      input_error(
+        &self.id,
+        format!("cannot create {}: {e}", workdir.display()),
+      )
+    })?;
+    let stem = format!(".render-{}", uuid::Uuid::new_v4());
+    let source = workdir.join(format!("{stem}.md"));
+    let target = workdir.join(format!("{stem}.{extension}"));
+    let metadata = workdir.join(format!("{stem}.json"));
+    let cleanup = [source.clone(), target.clone(), metadata.clone()];
+
+    let rendered = async {
+      tokio::fs::write(&source, markdown.as_bytes())
+        .await
+        .map_err(|e| input_error(&self.id, format!("cannot stage the source: {e}")))?;
+      let mut args: Vec<std::ffi::OsString> = vec![
+        source.clone().into(),
+        "-f".into(),
+        "markdown-raw_html".into(),
+        "--standalone".into(),
+        "-o".into(),
+        target.clone().into(),
+        "--resource-path".into(),
+        workdir.clone().into(),
+      ];
+      if let Some(title) = optional_str(inputs, "title") {
+        tokio::fs::write(&metadata, serde_json::json!({ "title": title }).to_string())
+          .await
+          .map_err(|e| input_error(&self.id, format!("cannot stage metadata: {e}")))?;
+        args.push("--metadata-file".into());
+        args.push(metadata.clone().into());
+      }
+      if matches!(inputs.get("toc"), Some(FlowValue::Json(Value::Bool(true)))) {
+        args.push("--toc".into());
+      }
+      match extension {
+        "html" => args.push("--embed-resources".into()),
+        "pdf" => args.push("--pdf-engine=typst".into()),
+        _ => {}
+      }
+      run_pandoc(&self.id, &workdir, &args, extension == "pdf").await?;
+      tokio::fs::read(&target)
+        .await
+        .map_err(|e| YanshiError::NodeExecutionFailed {
+          message: format!("{}: pandoc wrote no output: {e}", self.id),
+        })
+    }
+    .await;
+    for path in cleanup {
+      let _ = tokio::fs::remove_file(path).await;
+    }
+    let bytes = rendered?;
+    Ok(output(
+      &self.id,
+      write_artifact(&self.id, &bytes, mime).await?,
+    ))
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -472,7 +695,10 @@ mod tests {
     };
     let sheet = read("xl/worksheets/sheet1.xml");
     let strings = read("xl/sharedStrings.xml");
-    assert!(strings.contains("city") && strings.contains("Lisbon"), "{strings}");
+    assert!(
+      strings.contains("city") && strings.contains("Lisbon"),
+      "{strings}"
+    );
     assert!(
       sheet.contains("<v>545000</v>"),
       "the number is stored as a number cell: {sheet}"
@@ -550,5 +776,79 @@ mod tests {
     assert!(html.contains("<style>"), "stylesheet is inline");
     assert!(!html.contains("<script>"), "raw HTML must not pass through");
     assert!(html.contains("&lt;script&gt;"));
+  }
+
+  /// Y3.3 acceptance. Needs `pandoc` and `typst` on PATH:
+  /// `cargo test -p yanshi-nodes --lib render_document -- --ignored`.
+  #[tokio::test]
+  #[ignore = "needs pandoc and typst"]
+  async fn render_document_pdf_has_pages_and_docx_reads_back() {
+    let markdown =
+      "# 潮汐\n\nTides follow **the moon**. 潮汐由月球引力引起。\n\n<script>x</script>\n";
+    let (pdf, mime) = run(
+      &RenderDocumentNode::new("doc"),
+      inputs(&[
+        ("markdown", json!(markdown)),
+        ("format", json!("pdf")),
+        ("title", json!("It's a \"report\"")),
+      ]),
+    )
+    .await;
+    assert_eq!(mime, "application/pdf");
+    let bytes = std::fs::read(&pdf).expect("pdf");
+    assert!(bytes.starts_with(b"%PDF"));
+    let text = String::from_utf8_lossy(&bytes);
+    let pages: u32 = text
+      .split("/Count ")
+      .skip(1)
+      .filter_map(|rest| {
+        rest
+          .split(|c: char| !c.is_ascii_digit())
+          .next()?
+          .parse()
+          .ok()
+      })
+      .max()
+      .unwrap_or(0);
+    assert!(pages > 0, "PDF page count must be > 0");
+
+    let (docx, mime) = run(
+      &RenderDocumentNode::new("doc"),
+      inputs(&[("markdown", json!(markdown)), ("format", json!("docx"))]),
+    )
+    .await;
+    assert!(mime.ends_with("wordprocessingml.document"));
+    let back = std::process::Command::new("pandoc")
+      .arg(&docx)
+      .args(["-t", "plain"])
+      .output()
+      .expect("pandoc reads the docx back");
+    let body = String::from_utf8_lossy(&back.stdout);
+    assert!(body.contains("潮汐由月球引力引起"), "{body}");
+    assert!(
+      body.contains("<script>x</script>"),
+      "raw HTML stays literal text: {body}"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(docx.parent().expect("dir"))
+      .expect("dir")
+      .flatten()
+      .filter(|e| e.file_name().to_string_lossy().starts_with(".render-"))
+      .collect();
+    assert!(leftovers.is_empty(), "staging files are removed");
+  }
+
+  #[tokio::test]
+  async fn render_document_rejects_an_unknown_format_before_running_pandoc() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let err = run_context::with_artifact_root(
+      tmp.path().to_path_buf(),
+      RenderDocumentNode::new("d").execute(&inputs(&[
+        ("markdown", json!("# x")),
+        ("format", json!("odt")),
+      ])),
+    )
+    .await
+    .expect_err("unknown format");
+    assert!(err.to_string().contains("unknown format 'odt'"), "{err}");
   }
 }

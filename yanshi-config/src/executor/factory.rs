@@ -210,6 +210,10 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     "render_markdown" => Ok(NodeType::Standard(Arc::new(
       yanshi_nodes::nodes::render::RenderMarkdownNode::new(&node_def.id),
     ))),
+    // Y3.3: external, pandoc (+ typst for PDF) under the OS sandbox.
+    "render_document" => Ok(NodeType::Standard(Arc::new(
+      yanshi_nodes::nodes::render::RenderDocumentNode::new(&node_def.id),
+    ))),
     "markmap" => {
       // markdown content will be provided via input_mapping at runtime
       let markdown = get_string_param_optional(&node_def.parameters, "markdown");

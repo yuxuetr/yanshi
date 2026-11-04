@@ -338,6 +338,15 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`render_document`: Markdown → DOCX / PPTX / HTML / EPUB / PDF (Y3.3).**
+  The new node calls pandoc; PDF goes through `--pdf-engine=typst`, a
+  single binary with no TeX, and typst's font fallback renders CJK.
+  pandoc runs under the platform OS sandbox. Its own and typst's install
+  prefixes and the font directories are readable; only the node's
+  artifact directory and the temp dir are writable. It is invoked with
+  an argv vector, a scrubbed environment and a 300 s timeout. Raw HTML
+  in the source is read as text. `yanshi doctor` lists `pandoc` and
+  `typst` separately, since without typst only PDF is unavailable.
 - **`media-tools` MCP server: ffmpeg as agent / workflow tools (Y3.2).**
   `examples/ecosystem/mcp/media-tools/server.py` is a standard-library
   Python stdio MCP server with `audio_concat`, `loudness_normalize`

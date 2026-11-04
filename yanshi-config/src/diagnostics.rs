@@ -648,6 +648,8 @@ pub struct ExternalToolReport {
 const EXTERNAL_TOOLS: &[(&str, &str)] = &[
   ("ffmpeg", "media-tools MCP server: audio / video finishing"),
   ("ffprobe", "media-tools MCP server: media inspection"),
+  ("pandoc", "render_document: docx / pptx / html / epub / pdf"),
+  ("typst", "render_document: PDF engine (docx / pptx work without it)"),
 ];
 
 fn external_tools_report() -> Vec<ExternalToolReport> {

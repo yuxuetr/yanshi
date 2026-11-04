@@ -35,6 +35,9 @@ pub fn extension_for_mime(mime: &str) -> &'static str {
     "text/html" => "html",
     "text/markdown" => "md",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+    "application/epub+zip" => "epub",
     _ => "bin",
   }
 }

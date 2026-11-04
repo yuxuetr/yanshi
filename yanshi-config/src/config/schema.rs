@@ -487,6 +487,12 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required_input("markdown", ParamType::String),
       ParamSpec::optional("title", ParamType::String),
     ]),
+    "render_document" => Some(vec![
+      ParamSpec::required_input("markdown", ParamType::String),
+      ParamSpec::required("format", ParamType::String),
+      ParamSpec::optional("title", ParamType::String),
+      ParamSpec::optional("toc", ParamType::Bool),
+    ]),
     "tts" => Some(vec![
       ParamSpec::required("model", ParamType::String),
       ParamSpec::required("voice", ParamType::String),

@@ -215,6 +215,12 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
     | "render_markdown" => {
       (PermissionCategory::Pure, vec![])
     }
+    // Y3.3: runs pandoc (and typst) under the OS sandbox, writing only
+    // to its artifact directory.
+    "render_document" => (
+      PermissionCategory::Exec,
+      vec!["exec".to_string(), "fs.write".to_string()],
+    ),
     "llm" => {
       if let Some(model) = node.parameters.get("model").and_then(yaml_summary) {
         constraints.insert("model".to_string(), model);
