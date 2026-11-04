@@ -58,6 +58,19 @@ pub struct FlowExecutionConfig {
 }
 
 impl FlowExecutionConfig {
+  /// The base directory each run's `<run_id>/` dir is created under:
+  /// `run_base_dir` when set, else `~/.yanshi/runs`.
+  pub fn resolved_run_base_dir(&self) -> crate::Result<PathBuf> {
+    match &self.run_base_dir {
+      Some(dir) => Ok(dir.clone()),
+      None => dirs::home_dir()
+        .map(|home| home.join(".yanshi").join("runs"))
+        .ok_or_else(|| crate::YanshiError::ConfigurationError {
+          message: "Could not find home directory".to_string(),
+        }),
+    }
+  }
+
   pub fn serial() -> Self {
     Self::default()
   }

@@ -13,7 +13,6 @@ use crate::{
   state_size::estimated_state_pool_bytes,
   value::FlowValue,
 };
-use dirs;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -304,17 +303,7 @@ impl<'f> FlowExecutor<'f> {
       });
       return Err(YanshiError::TaskCancelled);
     }
-    let base_dir = execution_config
-      .run_base_dir
-      .clone()
-      .map(Ok)
-      .unwrap_or_else(|| {
-        dirs::home_dir()
-          .ok_or_else(|| YanshiError::ConfigurationError {
-            message: "Could not find home directory".to_string(),
-          })
-          .map(|home| home.join(".yanshi").join("runs"))
-      })?;
+    let base_dir = execution_config.resolved_run_base_dir()?;
     let run_dir = base_dir.join(&run_id);
     fs::create_dir_all(&run_dir).map_err(|e| YanshiError::PersistenceError {
       message: e.to_string(),
