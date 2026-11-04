@@ -256,6 +256,7 @@ pub async fn run_skill(
         approval_timeout: crate::serve::HARNESS_APPROVAL_TIMEOUT,
         run_max_concurrency,
         cost_limit_usd: None,
+        resume: false,
       })
       .await;
     cancellation_registry.complete(run_id);

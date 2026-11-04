@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use axum::{
   Extension, Json,
   extract::{Path, Query, State},
+  response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -218,6 +219,9 @@ pub struct RunContext {
   /// Y2.3: the request's `cost_limit_usd`, combined with the workflow's
   /// own in `flow_execute`. `None` for skill runs.
   pub cost_limit_usd: Option<f64>,
+  /// Y2.4: continue this run from its checkpoint (`POST
+  /// /v1/runs/{id}:resume`) instead of starting it fresh.
+  pub resume: bool,
 }
 
 /// Postgres NOTIFY channel carrying cross-replica cancellation intents
@@ -686,12 +690,23 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   // trace tui <run_id>` against the same run. Kept opt-in because the
   // gateway is long-running and unmanaged trace files would accumulate
   // — the existing run/event retention sweep does not cover this dir.
+  // Y2.4: a resumed run's events continue its `seq` series.
+  let first_seq = if ctx.resume {
+    ctx
+      .repos
+      .events
+      .max_seq(&ctx.tenant_id, ctx.run_id)
+      .await?
+      .map_or(0, |seq| seq + 1)
+  } else {
+    0
+  };
   let event_listener = WorkflowEventListener::from_state(
     ctx.run_id,
     ctx.tenant_id.clone(),
     ctx.repos.clone(),
     ctx.broker.clone(),
-    0,
+    first_seq,
   );
   let events_flushed = event_listener.flush_handle();
   let mut listeners: Vec<Box<dyn EventListener>> = vec![Box::new(event_listener)];
@@ -729,9 +744,34 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   {
     execution_config = execution_config.with_cost_limit_usd(limit);
   }
-  let state = flow
-    .execute_from_inputs_with_id_and_config(run_id, initial_inputs, execution_config)
-    .await?;
+  // Y2.4: every gateway run checkpoints after each node, so a failed or
+  // cancelled run can be resumed with `POST /v1/runs/{id}:resume`.
+  let run_base_dir = execution_config
+    .run_base_dir
+    .clone()
+    .unwrap_or_else(default_run_base_dir);
+  flow = flow.with_checkpointing(
+    CheckpointConfig::default()
+      .with_checkpoint_dir(checkpoint_dir_for_run(&run_base_dir, ctx.run_id)),
+  )?;
+  let state = if ctx.resume {
+    // The checkpoint carries the original inputs, spend and cost limit;
+    // scheduling and cancellation stay this gateway's.
+    flow
+      .resume_with_config(
+        &run_id,
+        &ResumePlanOptions::default(),
+        |recorded| match recorded.cost_limit_usd {
+          Some(limit) => execution_config.with_cost_limit_usd(limit),
+          None => execution_config,
+        },
+      )
+      .await?
+  } else {
+    flow
+      .execute_from_inputs_with_id_and_config(run_id, initial_inputs, execution_config)
+      .await?
+  };
 
   // The listener bridges sync Flow events to async DB/SSE writes; persist
   // them all before the run is marked finished and its channel closed.
@@ -1496,8 +1536,45 @@ pub async fn submit_run(
     }
   };
 
-  // Dispatch in the background so the HTTP request returns immediately. The
-  // executor owns the entire run lifecycle from this point.
+  dispatch_run(
+    &state,
+    executor,
+    DispatchedRun {
+      run_id,
+      workflow,
+      tenant_id,
+      run_base_dir,
+      cost_limit_usd,
+      resume: false,
+    },
+    local_admission_guard,
+  );
+
+  Ok(Json(CreateRunResponse {
+    run_id: run.id,
+    status: "queued",
+  }))
+}
+
+/// What [`dispatch_run`] needs to start (or resume) one run.
+struct DispatchedRun {
+  run_id: Uuid,
+  workflow: String,
+  tenant_id: String,
+  run_base_dir: PathBuf,
+  cost_limit_usd: Option<f64>,
+  resume: bool,
+}
+
+/// Execute a run in the background so the HTTP request returns
+/// immediately; the executor owns the run's lifecycle from here. Shared
+/// by `POST /v1/runs` and `POST /v1/runs/{id}:resume`.
+fn dispatch_run<G: Send + 'static>(
+  state: &AppState,
+  executor: Arc<dyn RunExecutor>,
+  run: DispatchedRun,
+  admission_guard: G,
+) {
   let repos = state.repos.clone();
   let broker = state.event_broker.clone();
   let cancellation_registry = state.cancellation_registry.clone();
@@ -1506,28 +1583,29 @@ pub async fn submit_run(
   let run_max_concurrency = state.run_max_concurrency;
   let cancellation_token = FlowCancellationToken::new();
   let task_token = cancellation_token.clone();
+  let run_id = run.run_id;
   let handle = tokio::spawn(async move {
     // Held until the task completes — releases the local pre-check's
-    // admission slot on drop (V3.4). Cluster-wide correctness now comes
-    // from `create_if_admitted`'s DB-derived concurrency count instead
-    // (W4.2f), which self-heals from `runs.status` regardless of this
-    // guard's lifetime.
-    let _admission_guard = local_admission_guard;
+    // admission slot on drop (V3.4). Cluster-wide correctness for new
+    // runs comes from `create_if_admitted`'s DB-derived concurrency
+    // count (W4.2f), which self-heals from `runs.status`.
+    let _admission_guard = admission_guard;
     executor
       .execute(RunContext {
         run_id,
-        workflow,
+        workflow: run.workflow,
         repos,
-        run_base_dir: Some(run_base_dir),
+        run_base_dir: Some(run.run_base_dir),
         cancellation_token: task_token,
         broker,
-        tenant_id,
+        tenant_id: run.tenant_id,
         live_state_registry: Some(live_state_registry),
         skill_dir: None,
         approval_registry,
         approval_timeout: crate::serve::HARNESS_APPROVAL_TIMEOUT,
         run_max_concurrency,
-        cost_limit_usd,
+        cost_limit_usd: run.cost_limit_usd,
+        resume: run.resume,
       })
       .await;
     cancellation_registry.complete(run_id);
@@ -1538,11 +1616,103 @@ pub async fn submit_run(
   if handle.is_finished() {
     state.cancellation_registry.complete(run_id);
   }
+}
 
-  Ok(Json(CreateRunResponse {
-    run_id: run.id,
-    status: "queued",
-  }))
+/// Where a gateway run's checkpoints live: `<run_dir>/checkpoint`.
+fn checkpoint_dir_for_run(run_base_dir: &FsPath, run_id: Uuid) -> PathBuf {
+  run_dir_for_run(run_base_dir, run_id).join("checkpoint")
+}
+
+/// `POST /v1/runs/{id}:cancel` and `POST /v1/runs/{id}:resume` share the
+/// route; the suffix picks the action.
+pub async fn post_run_action(
+  state: State<AppState>,
+  tenant: Extension<TenantId>,
+  Path(id_action): Path<String>,
+) -> Response {
+  if let Some(id_raw) = id_action.strip_suffix(":resume") {
+    return resume_run(state, tenant, id_raw).await.into_response();
+  }
+  cancel_run(state, tenant, Path(id_action))
+    .await
+    .into_response()
+}
+
+/// Y2.4: `POST /v1/runs/{id}:resume` — continue a `failed` / `cancelled`
+/// run from its checkpoint under the same run id and run directory. Only
+/// nodes the checkpoint does not show as finished run again, with the
+/// run's original inputs and cost limit; events continue the run's
+/// `seq`. Skill runs and runs without a checkpoint (e.g. distributed
+/// runs, whose nodes ran on workers) are rejected with 400.
+async fn resume_run(
+  State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
+  id_raw: &str,
+) -> Result<Json<RunResponse>, ApiError> {
+  let id = Uuid::parse_str(id_raw)
+    .map_err(|_| ApiError::BadRequest(format!("invalid run id '{id_raw}'")))?;
+  let run = state
+    .repos
+    .runs
+    .get(id)
+    .await?
+    .filter(|run| run.tenant_id == tenant.as_str())
+    .ok_or_else(|| ApiError::NotFound(format!("run {id} not found")))?;
+  if run.workflow.starts_with("@skill:") {
+    return Err(ApiError::BadRequest(
+      "skill runs cannot be resumed; submit the skill again".into(),
+    ));
+  }
+  if run.status != "failed" && run.status != "cancelled" {
+    return Err(ApiError::BadRequest(format!(
+      "run {id} is '{}'; only failed or cancelled runs can be resumed",
+      run.status
+    )));
+  }
+  let run_base_dir = run_base_dir_for_request();
+  let has_checkpoint = CheckpointManager::new(
+    CheckpointConfig::default().with_checkpoint_dir(checkpoint_dir_for_run(&run_base_dir, id)),
+  )
+  .map_err(|e| ApiError::Internal(format!("checkpoint manager init failed: {e}")))?
+  .load_latest_checkpoint(&id.to_string())
+  .await
+  .map_err(|e| ApiError::Internal(format!("failed to load checkpoint: {e}")))?
+  .is_some();
+  if !has_checkpoint {
+    return Err(ApiError::BadRequest(format!(
+      "run {id} has no checkpoint on this gateway to resume from"
+    )));
+  }
+  let admission_guard = state
+    .run_admission_registry
+    .try_admit(tenant.as_str())
+    .map_err(|err| ApiError::TooManyRequests(err.to_string()))?;
+  if !state.repos.runs.reopen_for_resume(id).await? {
+    return Err(ApiError::BadRequest(format!(
+      "run {id} is no longer failed or cancelled; it may already be resuming"
+    )));
+  }
+
+  dispatch_run(
+    &state,
+    state.executor.clone(),
+    DispatchedRun {
+      run_id: id,
+      workflow: run.workflow,
+      tenant_id: run.tenant_id,
+      run_base_dir,
+      cost_limit_usd: None,
+      resume: true,
+    },
+    admission_guard,
+  );
+  let run = state
+    .repos
+    .runs
+    .get(id)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("run {id} not found")))?;
+  Ok(Json(RunResponse { run }))
 }
 
 #[derive(Debug, Serialize)]
@@ -1772,7 +1942,9 @@ pub async fn get_run_resume_plan(
     return Err(ApiError::NotFound(format!("run {} not found", id)));
   }
 
-  let mut config = CheckpointConfig::default();
+  // Y2.4: default to where gateway runs checkpoint (`<run_dir>/checkpoint`).
+  let mut config = CheckpointConfig::default()
+    .with_checkpoint_dir(checkpoint_dir_for_run(&run_base_dir_for_request(), id));
   if let Some(dir) = params.checkpoint_dir.as_ref() {
     // Eval 2026-10-07 S7: the server reads whatever directory this names.
     state

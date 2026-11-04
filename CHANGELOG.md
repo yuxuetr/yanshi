@@ -110,6 +110,13 @@ _New entries go here. Will roll into the next tag (likely
   field, and GLM documents none. The OpenAI, Moonshot and StepFun
   readers continue to `[DONE]`, and Moonshot's choice-level usage is
   read. Regression fixtures are in `yanshi-llm/tests/sse_buffer_regression.rs`.
+- **`POST /v1/runs/{id}:resume` (Y2.4).** Gateway runs now checkpoint
+  after every node to `<run_dir>/checkpoint`; a `failed` / `cancelled`
+  run resumes under the same id, re-running only unfinished nodes with
+  the original inputs and cost limit, continuing the event `seq`.
+  `RunRepo::reopen_for_resume` is the one atomic exit from a terminal
+  status (and clears stale cancellation intents). `GET
+  /v1/runs/{id}/resume-plan` defaults to the run's checkpoint dir.
 - **`yanshi workflow run --checkpoint` and `yanshi workflow resume`
   (Y2.4).** `--checkpoint` checkpoints after every node to
   `<run_dir>/<run_id>/checkpoint/` and prints the resume command;

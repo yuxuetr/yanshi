@@ -486,6 +486,27 @@ and `workflow.completed`. Runs with billed nodes also emit `node.cost`
 `cost_limit_usd` emits one `cost.limit_exceeded` (`spent_usd`,
 `limit_usd`); see `docs/CONFIGURATION.md` § Cost Limits.
 
+#### Resuming a failed run (Y2.4)
+
+Every gateway run checkpoints after each node to
+`<YANSHI_RUN_DIR>/<run_id>/checkpoint/`. A `failed` or `cancelled` run
+can be continued under the same id:
+
+```bash
+curl -X POST -H "Authorization: Bearer dev-secret" \
+  http://localhost:3000/v1/runs/$RUN_ID:resume
+```
+
+Only the nodes the checkpoint does not show as finished run again, with
+the run's original inputs and cost limit; its earlier spend counts
+toward that limit, and events continue the run's `seq`. The checkpoint
+lives on the pod that ran the run, so resume on that pod (or share
+`YANSHI_RUN_DIR`). Skill runs and distributed runs have no checkpoint
+and get 400; so does a run that is not `failed` / `cancelled`. Resume
+honours the replica-local admission pre-check but not the DB-level
+per-tenant concurrency count that `POST /v1/runs` applies.
+`GET /v1/runs/{id}/resume-plan` now reads the same directory by default.
+
 #### Per-run retention overrides (P10.14.1)
 
 The `POST /v1/runs` body accepts an optional `retention_overrides`

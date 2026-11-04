@@ -87,7 +87,7 @@ pub use runs::{
   RunAdmissionError, RunAdmissionGuard, RunAdmissionRegistry, RunApprovalDecisionResponse,
   RunCancellationRegistry, RunContext, RunExecutor, RunResponse, StubExecutor, cancel_run,
   decide_run_approval, default_executor, get_run, get_run_resume_plan, list_run_approvals,
-  list_runs, spawn_run_cancellation_listener, spawn_run_lease_loop, submit_run,
+  list_runs, post_run_action, spawn_run_cancellation_listener, spawn_run_lease_loop, submit_run,
 };
 pub use scheduler::{
   AdmissionConfigError, AdmissionError, AuthenticatedControlPlane, AuthenticatedGrpcWorkerService,
@@ -643,7 +643,7 @@ pub fn create_router(state: AppState) -> Router {
         .post(submit_run)
         .layer(DefaultBodyLimit::max(workflow_limit)),
     )
-    .route("/v1/runs/:id", get(get_run).post(cancel_run))
+    .route("/v1/runs/:id", get(get_run).post(post_run_action))
     .route("/v1/runs/:id/resume-plan", get(get_run_resume_plan))
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))

@@ -37,6 +37,13 @@ pub trait RunRepo: Send + Sync {
     status: RunStatus,
     error: Option<&str>,
   ) -> Result<(), DbError>;
+  /// Y2.4: move a `failed` / `cancelled` run back to `queued` so
+  /// `POST /v1/runs/{id}:resume` can execute it again under the same id,
+  /// clearing `finished_at`, `error` and any stale cancellation intent.
+  /// The one sanctioned exit from a terminal status (`update_status`
+  /// keeps them sticky). Returns `false` when the run is not in a
+  /// resumable status, so two concurrent resumes cannot both win.
+  async fn reopen_for_resume(&self, id: Uuid) -> Result<bool, DbError>;
   /// List runs for a tenant, newest first. Convenience shim over
   /// [`Self::list_filtered`] with no status filter and zero offset.
   async fn list(&self, tenant_id: &str, limit: i64) -> Result<Vec<Run>, DbError> {
@@ -377,6 +384,28 @@ impl RunRepo for PgRunRepo {
       });
     }
     Ok(())
+  }
+
+  async fn reopen_for_resume(&self, id: Uuid) -> Result<bool, DbError> {
+    let mut tx = self.pool.begin().await?;
+    let reopened = sqlx::query(
+      r#"UPDATE runs
+         SET status = 'queued', finished_at = NULL, error = NULL
+         WHERE id = $1 AND status IN ('failed', 'cancelled')"#,
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+      == 1;
+    if reopened {
+      sqlx::query("DELETE FROM run_cancellation_intents WHERE run_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(reopened)
   }
 
   async fn list_filtered(
