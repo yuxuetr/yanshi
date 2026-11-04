@@ -24,7 +24,7 @@
 //!
 //! Domains (`domain`, Y6.5): `circuit` (tikz only) adds circuitikz
 //! conventions to the prompt and, with a `spec` parts list, checks the
-//! source before rendering; see [`circuit`].
+//! source before rendering; see the `circuit` module.
 //!
 //! The external renderers run under the OS sandbox
 //! (`yanshi_nodes::common::sandboxed`), writing only inside a per-call

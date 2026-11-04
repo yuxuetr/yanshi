@@ -181,7 +181,8 @@ impl HookConfig {
     }
   }
 
-  /// Y7.1: approve by budget instead of per call; see [`CostBudget`].
+  /// Y7.1: approve by budget instead of per call (`CostBudget`: a priced
+  /// call runs unprompted while the spend stays within the threshold).
   /// `estimate` prices a call (e.g. `yanshi_tools_ai::estimate_cost_usd`
   /// over the operator's pricing table).
   pub fn with_cost_budget(mut self, threshold_usd: f64, estimate: CostEstimator) -> Self {

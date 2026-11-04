@@ -27,7 +27,7 @@ const KEEP_ENV: &[&str] = &[
   "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
 ];
 
-/// First executable named `name` on PATH, then in [`FALLBACK_DIRS`].
+/// First executable named `name` on PATH, then in `FALLBACK_DIRS`.
 pub fn find_tool(name: &str) -> Option<PathBuf> {
   let path_dirs = std::env::var_os("PATH")
     .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
@@ -100,7 +100,7 @@ pub struct SandboxedRun<'a> {
   pub read_paths: Vec<PathBuf>,
   /// Extra writable paths (e.g. a run-level TeX cache).
   pub write_paths: Vec<PathBuf>,
-  /// Extra environment variables on top of [`KEEP_ENV`].
+  /// Extra environment variables on top of `KEEP_ENV`.
   pub env: Vec<(&'static str, OsString)>,
   pub timeout: Duration,
 }

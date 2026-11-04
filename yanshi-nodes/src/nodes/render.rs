@@ -1454,7 +1454,7 @@ impl AsyncNode for RenderVideoNode {
 ///
 /// pandoc (and typst under it) runs under the platform OS sandbox
 /// backend, writing only to this node's artifact directory and the temp
-/// dir; see [`run_pandoc`]. Raw HTML in the source is read as
+/// dir; see `run_pandoc`. Raw HTML in the source is read as
 /// text (`-f markdown-raw_html`), for the same reason as
 /// `render_markdown`.
 pub struct RenderDocumentNode {
