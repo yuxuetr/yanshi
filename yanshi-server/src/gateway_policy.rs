@@ -14,7 +14,11 @@
 //! - [`HOST_NODE_TYPES_ENV`] — host-reaching node types tenants may use.
 //! - [`ALLOWED_COMMANDS_ENV`] — the most a `shell` node may allow.
 //! - [`PATH_ROOTS_ENV`] — absolute roots every `allowed_paths` entry,
-//!   harness `workspace_root` and `checkpoint_dir` must sit under.
+//!   harness `workspace_root`, `checkpoint_dir` and any node's
+//!   path-naming parameter (Y7.3) must sit under.
+//! - [`URL_HOSTS_ENV`] — hosts a node's endpoint parameter (`qdrant_url`,
+//!   any `*_url`) may name (Y7.3). The `http` node's `url` is not capped
+//!   here: its own SSRF filter runs on every request.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -24,12 +28,15 @@ use yanshi_config::config::v2::{FlowDefinitionV2, HOST_NODE_TYPES, NodeDefinitio
 pub const HOST_NODE_TYPES_ENV: &str = "YANSHI_GATEWAY_HOST_NODE_TYPES";
 pub const ALLOWED_COMMANDS_ENV: &str = "YANSHI_GATEWAY_ALLOWED_COMMANDS";
 pub const PATH_ROOTS_ENV: &str = "YANSHI_GATEWAY_PATH_ROOTS";
+pub const URL_HOSTS_ENV: &str = "YANSHI_GATEWAY_URL_HOSTS";
 
 #[derive(Debug, Clone, Default)]
 pub struct GatewayPolicy {
   pub host_node_types: HashSet<String>,
   pub allowed_commands: HashSet<String>,
   pub path_roots: Vec<PathBuf>,
+  /// Y7.3: hosts endpoint parameters may name (exact match).
+  pub url_hosts: HashSet<String>,
 }
 
 impl GatewayPolicy {
@@ -69,6 +76,10 @@ impl GatewayPolicy {
       host_node_types,
       allowed_commands: list(ALLOWED_COMMANDS_ENV).into_iter().collect(),
       path_roots,
+      url_hosts: list(URL_HOSTS_ENV)
+        .into_iter()
+        .map(|host| host.to_ascii_lowercase())
+        .collect(),
     })
   }
 
@@ -110,6 +121,7 @@ impl GatewayPolicy {
         "node '{id}': type '{kind}' is disabled on this gateway (operator enables it via {HOST_NODE_TYPES_ENV})"
       ));
     }
+    self.check_reach_parameters(node)?;
     match kind {
       "shell" => {
         for command in string_list(node, "allowed_commands") {
@@ -139,6 +151,70 @@ impl GatewayPolicy {
       _ => {}
     }
     Ok(())
+  }
+}
+
+/// What a parameter reaches, judged by its name (Y7.3).
+#[derive(Debug, PartialEq)]
+enum Reach {
+  Path,
+  Url,
+}
+
+fn reach_of(node_type: &str, key: &str) -> Option<Reach> {
+  match key {
+    // Lists checked per node type above.
+    "allowed_paths" | "allowed_commands" => None,
+    // `http` filters its target at run time; `arxiv` builds arxiv.org
+    // URLs from the paper id it parses out of `url`.
+    "url" if matches!(node_type, "http" | "arxiv") => None,
+    "url" | "endpoint" | "base_url" => Some(Reach::Url),
+    "path" | "save_to_file" => Some(Reach::Path),
+    _ if key.ends_with("_url") || key.ends_with("_endpoint") => Some(Reach::Url),
+    _ if key.ends_with("_path") || key.ends_with("_dir") || key.ends_with("_file") => {
+      Some(Reach::Path)
+    }
+    _ => None,
+  }
+}
+
+impl GatewayPolicy {
+  /// Y7.3 (SEC-2/3): every node parameter that names a host path or an
+  /// endpoint is held to the same ceiling as `allowed_paths` — whatever
+  /// the node type, since new nodes keep adding such parameters
+  /// (`markmap.save_to_file`, `rag.qdrant_url`).
+  fn check_reach_parameters(&self, node: &NodeDefinitionV2) -> Result<(), String> {
+    let id = &node.id;
+    for (key, value) in &node.parameters {
+      let Some(reach) = reach_of(&node.node_type, key) else {
+        continue;
+      };
+      let Some(text) = value.as_str() else {
+        return Err(format!(
+          "node '{id}' {key}: must be a plain string on the gateway"
+        ));
+      };
+      match reach {
+        Reach::Path => self.check_path(&format!("node '{id}' {key}"), text)?,
+        Reach::Url => self.check_url(&format!("node '{id}' {key}"), text)?,
+      }
+    }
+    Ok(())
+  }
+
+  /// `what` names the field in the error message.
+  pub fn check_url(&self, what: &str, text: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(text).map_err(|e| format!("{what} '{text}' is not a URL: {e}"))?;
+    let host = parsed
+      .host_str()
+      .map(str::to_ascii_lowercase)
+      .ok_or_else(|| format!("{what} '{text}' names no host"))?;
+    if self.url_hosts.contains(&host) {
+      return Ok(());
+    }
+    Err(format!(
+      "{what} '{text}': host '{host}' is not allowed on this gateway (operator lists endpoints in {URL_HOSTS_ENV})"
+    ))
   }
 }
 
@@ -175,6 +251,7 @@ mod tests {
       host_node_types: ["shell", "file"].iter().map(|s| s.to_string()).collect(),
       allowed_commands: ["git", "ls"].iter().map(|s| s.to_string()).collect(),
       path_roots: vec![PathBuf::from("/srv/work")],
+      url_hosts: HashSet::new(),
     }
   }
 
@@ -234,5 +311,55 @@ mod tests {
         .check_path("workspace_root", "/srv/work")
         .is_err()
     );
+  }
+
+  /// Y7.3 (SEC-2/3): any node parameter that names a host path or a
+  /// network endpoint is capped, not only on the host-reaching types.
+  #[test]
+  fn path_and_url_parameters_are_capped_on_every_node() {
+    let mut policy = operator_policy();
+    let markmap = |path: &str| {
+      workflow(&format!(
+        "name: w\nnodes:\n  - id: m\n    type: markmap\n    parameters:\n      save_to_file: {path}\n"
+      ))
+    };
+    assert!(
+      policy
+        .check_workflow(&markmap("/srv/work/map.html"))
+        .is_ok()
+    );
+    for bad in ["/etc/cron.d/x", "relative.html", "/srv/work/../../etc/x"] {
+      let err = policy.check_workflow(&markmap(bad)).unwrap_err();
+      assert!(err.contains("save_to_file"), "{bad}: {err}");
+    }
+    let rag = |url: &str| {
+      workflow(&format!(
+        "name: w\nnodes:\n  - id: r\n    type: rag\n    parameters:\n      operation: search\n      qdrant_url: {url}\n"
+      ))
+    };
+    let err = policy
+      .check_workflow(&rag("http://169.254.169.254:6334"))
+      .unwrap_err();
+    assert!(
+      err.contains("qdrant_url") && err.contains(URL_HOSTS_ENV),
+      "{err}"
+    );
+    policy.url_hosts = ["qdrant.internal".to_string()].into_iter().collect();
+    assert!(
+      policy
+        .check_workflow(&rag("http://qdrant.internal:6334"))
+        .is_ok()
+    );
+    assert!(
+      policy
+        .check_workflow(&rag("http://qdrant.internal.evil.com:6334"))
+        .is_err()
+    );
+    assert!(policy.check_workflow(&rag("not a url")).is_err());
+    // `http` applies its own SSRF filter at run time; its `url` stays free.
+    let http = workflow(
+      "name: w\nnodes:\n  - id: h\n    type: http\n    parameters:\n      url: https://example.org\n",
+    );
+    assert!(GatewayPolicy::default().check_workflow(&http).is_ok());
   }
 }

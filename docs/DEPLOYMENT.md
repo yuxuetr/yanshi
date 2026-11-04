@@ -150,7 +150,8 @@ what a request may name, and **denies everything by default**:
 |---|---|---|
 | `YANSHI_GATEWAY_HOST_NODE_TYPES` | which of `shell`, `file`, `mcp`, `plugin`, `agent`, `skill_agent`, `multi_agent` a `POST /v1/runs` workflow may use | all rejected (400) |
 | `YANSHI_GATEWAY_ALLOWED_COMMANDS` | the most a `shell` node's `allowed_commands` may list | every shell command rejected |
-| `YANSHI_GATEWAY_PATH_ROOTS` | absolute roots that every `allowed_paths` entry, harness `workspace_root` and resume-plan `checkpoint_dir` must sit under | every host path rejected — so harness sessions need this set |
+| `YANSHI_GATEWAY_PATH_ROOTS` | absolute roots that every `allowed_paths` entry, harness `workspace_root`, resume-plan `checkpoint_dir` and any node parameter naming a path (`path`, `save_to_file`, `*_path` / `*_dir` / `*_file`; Y7.3) must sit under | every host path rejected — so harness sessions need this set |
+| `YANSHI_GATEWAY_URL_HOSTS` | hosts (exact, comma-separated) that a node's endpoint parameter (`qdrant_url`, `base_url`, `endpoint`, any `*_url`; Y7.3) may name. The `http` node's `url` is exempt because its own SSRF filter checks every request | every tenant-named endpoint rejected |
 
 Nested `map` / `while` nodes are checked too. `shell` nodes on the
 gateway must declare `allowed_paths`. Containment is lexical (`..` is

@@ -12,6 +12,8 @@ homepage.workspace = true
 # there and keeps only the hand-written tower `Service` + `WorkerControl` trait.
 
 [dependencies]
+# Y7.3: parse tenant-named endpoints for the gateway URL allowlist.
+url = "2.5"
 axum = "0.7"
 tokio = { workspace = true, features = ["full"] }
 tower = "0.4"

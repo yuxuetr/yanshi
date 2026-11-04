@@ -72,6 +72,7 @@ env:
   # YANSHI_GATEWAY_HOST_NODE_TYPES: "file"
   # YANSHI_GATEWAY_ALLOWED_COMMANDS: "git,ls"
   # YANSHI_GATEWAY_PATH_ROOTS: "/srv/yanshi/work"
+  # YANSHI_GATEWAY_URL_HOSTS: "qdrant.yanshi.svc"
 
 secretEnv:
   DATABASE_URL: ""

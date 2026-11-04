@@ -61,6 +61,7 @@ async fn operator_ceiling_caps_shell_commands_and_paths() {
     host_node_types: ["shell".to_string()].into(),
     allowed_commands: ["git".to_string()].into(),
     path_roots: vec!["/srv/work".into()],
+    ..Default::default()
   });
   let workflow = "name: w\nnodes:\n  - id: n\n    type: shell\n    parameters:\n      command: git status\n      allowed_commands: [git]\n      allowed_paths: [/proc/self]\n";
   let (status, body) = post(state, "/v1/runs", json!({"workflow": workflow})).await;

@@ -150,6 +150,7 @@ async fn distributed_with_an_unsupported_node_type_returns_400() {
       host_node_types: ["shell".to_string()].into(),
       allowed_commands: ["echo".to_string()].into(),
       path_roots: vec!["/tmp".into()],
+      ..Default::default()
     });
   // `shell` is a real, schema-known node type (so it passes
   // `parse_workflow_definition`'s validation and reaches
