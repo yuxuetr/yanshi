@@ -338,6 +338,25 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`report` generator template (Y4.1).** `examples/generators/report.yml`
+  is the first catalogue entry (RFC §3). The source is a `url`, fetched
+  through the http node's SSRF filter, or pasted `text`. It is then
+  outlined (`llm` with `json_schema`), sections are written in parallel
+  (Map, each returning its supporting quotes), and the result is
+  assembled into Markdown with footnoted quotes. Outputs are `.md`
+  (`render_markdown format: md`), `.html`, and `.pdf` unless `pdf=false`.
+  The run ends in a `deliverable` that parses as the new
+  `yanshi_config::content::Deliverable` contract (kind, title,
+  structured content, citations, files). Supporting changes:
+  - The `llm` node accepts `json_schema` and returns the parsed object.
+  - A workflow-level input now satisfies a node's required input in
+    validation.
+  - Generator outputs are checked against the contract type.
+- **Fixes found while building it.** `--model` now reaches `llm` nodes
+  inside map and while bodies. Model-backed nodes load the registry once
+  per process (`Yanshi::ensure_init`) instead of on every call, which
+  had reset rate-limit buckets. Template rendering errors now include
+  Tera's actual cause.
 - **`figure` language `python`: scientific drawing in a container
   (Y3.5).** The script must save `figure.svg`. It runs in the
   `code_exec` container tier: no network, read-only rootfs, only the

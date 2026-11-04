@@ -1,0 +1,200 @@
+# Y4.1 — `report` generator (docs/RFC_CONTENT_STUDIO.md §3, §4.3).
+#
+# Source (a URL, fetched with the http node's SSRF filter, or pasted
+# text) → outline (llm, json_schema) → sections written in parallel (Map,
+# each with the quotes it relies on) → Markdown with footnoted quotes →
+# .md + .html (+ .pdf via pandoc / typst) → one `Deliverable` JSON.
+#
+#   yanshi workflow run examples/generators/report.yml \
+#     --input url=https://example.org/article --output-dir out
+#   yanshi workflow run examples/generators/report.yml \
+#     --input text="$(cat notes.txt)" --input pdf=false --model <model>
+name: report
+description: "A sourced report: outline, sections, footnoted quotes; .md, .html and .pdf"
+
+inputs:
+  url:
+    description: "Page to report on (fetched with SSRF protection); leave empty to use `text`"
+    default: ""
+  text:
+    description: "Source text, used when `url` is empty"
+    default: ""
+  focus:
+    description: "What the report should concentrate on"
+    default: "the main points, with their supporting evidence"
+  sections:
+    description: "How many sections to write"
+    default: 4
+  pdf:
+    description: "Also render a PDF (needs pandoc + typst; see `yanshi doctor`)"
+    default: true
+
+nodes:
+  # run_if can read node outputs only, so the switches go through a node.
+  - id: options
+    type: template
+    parameters:
+      output_format: json
+      template: '{"has_url": {{ url != "" }}, "want_pdf": {{ pdf }}}'
+
+  # `url` (the workflow input) reaches the node directly.
+  - id: fetch
+    type: http
+    dependencies: ["options"]
+    run_if: "{{ nodes.options.outputs.has_url }}"
+
+  # The loader: HTML tags stripped, or the pasted text as is. `fetch` is a
+  # soft reference: when it was skipped, `page` is simply absent.
+  - id: source
+    type: template
+    input_mapping:
+      page: "{{ nodes.fetch.outputs.body }}"
+    parameters:
+      template: "{% if page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
+
+  - id: outline_prompt
+    type: template
+    dependencies: ["source"]
+    input_mapping:
+      source_text: "{{ nodes.source.outputs.output }}"
+    parameters:
+      template: |
+        Plan a report on the source below, concentrating on: {{ focus }}.
+        Give it a title and exactly {{ sections }} sections, each with a
+        heading and a one-sentence brief of what it covers. Use only what
+        the source supports.
+
+        SOURCE:
+        {{ source_text }}
+
+  - id: outline
+    type: llm
+    dependencies: ["outline_prompt"]
+    input_mapping:
+      prompt: "{{ nodes.outline_prompt.outputs.output }}"
+    parameters:
+      system: "You plan factual reports. Answer with JSON only."
+      json_schema:
+        type: object
+        required: [title, sections]
+        properties:
+          title: { type: string }
+          sections:
+            type: array
+            items:
+              type: object
+              required: [heading, brief]
+              properties:
+                heading: { type: string }
+                brief: { type: string }
+
+  - id: section_items
+    type: template
+    dependencies: ["outline", "source"]
+    input_mapping:
+      plan: "{{ nodes.outline.outputs.output }}"
+      source_text: "{{ nodes.source.outputs.output }}"
+    parameters:
+      output_format: json
+      template: |
+        {"items": [{% for s in plan.sections %}{"heading": {{ s.heading | json_encode() }}, "brief": {{ s.brief | json_encode() }}, "source": {{ source_text | json_encode() }}}{% if not loop.last %},{% endif %}{% endfor %}]}
+
+  - id: write_sections
+    type: map
+    dependencies: ["section_items"]
+    input_mapping:
+      input_list: "{{ nodes.section_items.outputs.items }}"
+    parameters:
+      parallel: true
+      max_concurrent: 4
+      template:
+        - id: section_prompt
+          type: template
+          parameters:
+            template: |
+              Write the report section "{{ item.heading }}" ({{ item.brief }}).
+              Two to four paragraphs of Markdown, no heading. Base every
+              claim on the source, and list the exact sentences you relied
+              on as quotes.
+
+              SOURCE:
+              {{ item.source }}
+        - id: write
+          type: llm
+          dependencies: ["section_prompt"]
+          input_mapping:
+            prompt: "{{ nodes.section_prompt.outputs.output }}"
+          parameters:
+            system: "You write sourced report sections. Answer with JSON only."
+            json_schema:
+              type: object
+              required: [markdown, quotes]
+              properties:
+                markdown: { type: string }
+                quotes: { type: array, items: { type: string } }
+
+  # Sections in outline order, each followed by its footnoted quotes.
+  - id: assemble
+    type: template
+    dependencies: ["write_sections", "outline"]
+    input_mapping:
+      plan: "{{ nodes.outline.outputs.output }}"
+      written: "{{ nodes.write_sections.outputs.results }}"
+    parameters:
+      template: |
+        # {{ plan.title }}
+        {% set_global n = 0 %}{% for r in written %}
+        ## {{ plan.sections[loop.index0].heading }}
+
+        {{ r.write.Ok.output.value.markdown }}{% for q in r.write.Ok.output.value.quotes %}{% set_global n = n + 1 %}[^{{ n }}]{% endfor %}
+        {% endfor %}
+        {% set_global n = 0 %}{% for r in written %}{% for q in r.write.Ok.output.value.quotes %}{% set_global n = n + 1 %}
+        [^{{ n }}]: "{{ q }}"{% if url %} — <{{ url }}>{% endif %}{% endfor %}{% endfor %}
+
+  - id: report_md
+    type: render_markdown
+    dependencies: ["assemble"]
+    input_mapping:
+      markdown: "{{ nodes.assemble.outputs.output }}"
+    parameters:
+      format: md
+
+  - id: report_html
+    type: render_markdown
+    dependencies: ["assemble"]
+    input_mapping:
+      markdown: "{{ nodes.assemble.outputs.output }}"
+
+  - id: report_pdf
+    type: render_document
+    dependencies: ["assemble"]
+    run_if: "{{ nodes.options.outputs.want_pdf }}"
+    input_mapping:
+      markdown: "{{ nodes.assemble.outputs.output }}"
+    parameters:
+      format: pdf
+
+  # The contract (RFC §4.3): structured content, citations, files.
+  - id: deliverable
+    type: template
+    dependencies: ["report_md", "report_html"]
+    input_mapping:
+      plan: "{{ nodes.outline.outputs.output }}"
+      written: "{{ nodes.write_sections.outputs.results }}"
+      md: "{{ nodes.report_md.outputs.report_md_output }}"
+      html: "{{ nodes.report_html.outputs.report_html_output }}"
+      pdf_file: "{{ nodes.report_pdf.outputs.report_pdf_output }}"
+    parameters:
+      output_format: json
+      template: |
+        {"deliverable": {
+          "kind": "report",
+          "title": {{ plan.title | json_encode() }},
+          "content": {"sections": [{% for r in written %}{"heading": {{ plan.sections[loop.index0].heading | json_encode() }}, "markdown": {{ r.write.Ok.output.value.markdown | json_encode() }}}{% if not loop.last %},{% endif %}{% endfor %}]},
+          "citations": [{% set_global first = true %}{% for r in written %}{% for q in r.write.Ok.output.value.quotes %}{% if not first %},{% endif %}{% set_global first = false %}{"source_id": {% if url %}{{ url | json_encode() }}{% else %}"text"{% endif %}, "chunk_id": "", "quote": {{ q | json_encode() }}}{% endfor %}{% endfor %}],
+          "files": [
+            {"node_id": "report_md", "name": {{ md | split(pat="/") | last | json_encode() }}, "mime_type": "text/markdown", "role": "primary"},
+            {"node_id": "report_html", "name": {{ html | split(pat="/") | last | json_encode() }}, "mime_type": "text/html", "role": "preview"}{% if pdf_file %},
+            {"node_id": "report_pdf", "name": {{ pdf_file | split(pat="/") | last | json_encode() }}, "mime_type": "application/pdf", "role": "primary"}{% endif %}
+          ]
+        }}

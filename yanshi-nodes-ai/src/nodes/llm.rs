@@ -18,7 +18,7 @@ impl AsyncNode for LlmNode {
     let model = get_optional_string_input(inputs, "model")?;
     let system = get_optional_string_input(inputs, "system")?;
 
-    Yanshi::init()
+    Yanshi::ensure_init()
       .await
       .map_err(|e| YanshiError::ConfigurationError {
         message: format!("Failed to initialize Yanshi LLM service: {}", e),
@@ -35,6 +35,26 @@ impl AsyncNode for LlmNode {
     if let Some(max_tokens) = get_optional_u64_input(inputs, "max_tokens")? {
       request = request.max_tokens(max_tokens as u32);
     }
+    // Y4.1: `json_schema` (a JSON Schema object) constrains the reply and
+    // makes `output` the parsed JSON value rather than a string, so a
+    // generator's outline can feed a Map node directly.
+    let schema = match inputs.get("json_schema") {
+      None => None,
+      Some(FlowValue::Json(Value::Object(schema))) => Some(Value::Object(schema.clone())),
+      Some(FlowValue::Json(Value::String(text))) => Some(serde_json::from_str(text).map_err(
+        |e| YanshiError::NodeInputError {
+          message: format!("Input 'json_schema' is not valid JSON: {e}"),
+        },
+      )?),
+      Some(_) => {
+        return Err(YanshiError::NodeInputError {
+          message: "Input 'json_schema' must be a JSON Schema object".to_string(),
+        });
+      }
+    };
+    if let Some(schema) = &schema {
+      request = request.json_schema("output", schema.clone());
+    }
 
     tracing::debug!("executing LLM request");
     let response = request
@@ -45,14 +65,29 @@ impl AsyncNode for LlmNode {
       })?;
     tracing::debug!("LLM response received");
 
+    let output = match schema {
+      Some(_) => parse_json_reply(&response)?,
+      None => Value::String(response),
+    };
     let mut outputs = HashMap::new();
-    outputs.insert(
-      "output".to_string(),
-      FlowValue::Json(Value::String(response)),
-    );
+    outputs.insert("output".to_string(), FlowValue::Json(output));
 
     Ok(outputs)
   }
+}
+
+/// The JSON in a schema-constrained reply. Providers that ignore the
+/// schema sometimes wrap it in a ```json fence; accept that too.
+fn parse_json_reply(reply: &str) -> Result<Value, YanshiError> {
+  let trimmed = reply.trim();
+  let unfenced = trimmed
+    .strip_prefix("```json")
+    .or_else(|| trimmed.strip_prefix("```"))
+    .and_then(|rest| rest.strip_suffix("```"))
+    .unwrap_or(trimmed);
+  serde_json::from_str(unfenced.trim()).map_err(|e| YanshiError::NodeExecutionFailed {
+    message: format!("the model did not return JSON for json_schema: {e}"),
+  })
 }
 
 fn get_string_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a str, YanshiError> {
@@ -137,5 +172,15 @@ mod tests {
         result.err().unwrap()
       );
     }
+  }
+
+  #[test]
+  fn json_replies_parse_with_or_without_a_fence() {
+    assert_eq!(parse_json_reply(r#"{"a": 1}"#).unwrap(), json!({"a": 1}));
+    assert_eq!(
+      parse_json_reply("```json\n[1, 2]\n```").unwrap(),
+      json!([1, 2])
+    );
+    assert!(parse_json_reply("not json").is_err());
   }
 }

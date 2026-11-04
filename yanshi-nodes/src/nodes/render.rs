@@ -331,8 +331,10 @@ impl AsyncNode for RenderSvgNode {
 
 // ── render_markdown ─────────────────────────────────────────────────────
 
-/// `render_markdown`: inputs `markdown` (required) and `title`
-/// (optional). Produces one HTML page with its stylesheet inline.
+/// `render_markdown`: inputs `markdown` (required), `title` (optional)
+/// and `format` (`html`, the default: one page with its stylesheet
+/// inline; or `md`: the Markdown itself as a `.md` file, for a
+/// deliverable that ships its source).
 pub struct RenderMarkdownNode {
   id: String,
 }
@@ -395,10 +397,22 @@ fn escape_html(text: &str) -> String {
 impl AsyncNode for RenderMarkdownNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     let markdown = text_input(&self.id, inputs, "markdown").await?;
-    let page = markdown_page(&markdown, optional_str(inputs, "title"));
+    let (bytes, mime) = match optional_str(inputs, "format").unwrap_or("html") {
+      "html" => (
+        markdown_page(&markdown, optional_str(inputs, "title")).into_bytes(),
+        "text/html",
+      ),
+      "md" => (markdown.into_bytes(), "text/markdown"),
+      other => {
+        return Err(input_error(
+          &self.id,
+          format!("unknown format '{other}': expected 'html' or 'md'"),
+        ));
+      }
+    };
     Ok(output(
       &self.id,
-      write_artifact(&self.id, page.as_bytes(), "text/html").await?,
+      write_artifact(&self.id, &bytes, mime).await?,
     ))
   }
 }

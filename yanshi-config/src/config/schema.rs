@@ -99,6 +99,9 @@ pub fn validate_flow_definition_with_options(
     report.issues.push(message);
   }
 
+  // Workflow-level inputs reach every top-level node at runtime, so a
+  // declared input satisfies a required node input of the same name.
+  let declared_inputs: HashSet<&str> = flow_def.inputs.keys().map(String::as_str).collect();
   for (idx, node) in flow_def.nodes.iter().enumerate() {
     let path = format!("nodes[{}]", idx);
     if node.id.trim().is_empty() {
@@ -109,7 +112,7 @@ pub fn validate_flow_definition_with_options(
         .push(format!("{}.id '{}' is duplicated", path, node.id));
     }
 
-    validate_node_schema(node, &path, options, &mut report);
+    validate_node_schema(node, &path, options, &declared_inputs, &mut report);
   }
 
   let valid_ids: HashSet<_> = flow_def.nodes.iter().map(|node| node.id.as_str()).collect();
@@ -214,6 +217,7 @@ fn validate_node_schema(
   node: &NodeDefinitionV2,
   path: &str,
   options: WorkflowValidationOptions,
+  declared_inputs: &HashSet<&str>,
   report: &mut WorkflowValidationReport,
 ) {
   let specs = match specs_for_node_type(node.node_type.as_str()) {
@@ -232,7 +236,8 @@ fn validate_node_schema(
   let known: BTreeSet<_> = specs.iter().map(|spec| spec.name).collect();
   for spec in specs {
     let has_param = node.parameters.contains_key(spec.name);
-    let has_input_mapping = spec.input_allowed && node.input_mapping.contains_key(spec.name);
+    let has_input_mapping = spec.input_allowed
+      && (node.input_mapping.contains_key(spec.name) || declared_inputs.contains(spec.name));
     if spec.required && !has_param && !has_input_mapping {
       report.issues.push(format!(
         "{}.{} requires '{}' as a parameter{}",
@@ -394,6 +399,7 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("system", ParamType::String),
       ParamSpec::optional("temperature", ParamType::Number),
       ParamSpec::optional("max_tokens", ParamType::Integer),
+      ParamSpec::optional("json_schema", ParamType::Any),
     ]),
     "skill_agent" | "agent" => Some(vec![
       ParamSpec::required_input("skill", ParamType::String),
@@ -486,6 +492,7 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
     "render_markdown" => Some(vec![
       ParamSpec::required_input("markdown", ParamType::String),
       ParamSpec::optional("title", ParamType::String),
+      ParamSpec::optional("format", ParamType::String),
     ]),
     "figure" => Some(vec![
       ParamSpec::required("language", ParamType::String),
@@ -623,10 +630,13 @@ fn validate_nested_nodes(
   };
 
   for (idx, nested) in nodes.iter().enumerate() {
+    // Sub-flows (map / while bodies) see only `item` / their own
+    // nodes, never the workflow-level inputs.
     validate_node_schema(
       nested,
       &format!("{}.parameters.{}[{}]", path, key, idx),
       options,
+      &HashSet::new(),
       report,
     );
   }

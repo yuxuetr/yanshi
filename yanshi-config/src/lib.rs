@@ -9,5 +9,6 @@
 //! original `yanshi_cli::{config, executor}` paths.
 
 pub mod config;
+pub mod content;
 pub mod diagnostics;
 pub mod executor;
