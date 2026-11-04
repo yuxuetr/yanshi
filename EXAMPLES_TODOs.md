@@ -1,6 +1,6 @@
 # Yanshi Applications TODOs
 
-Last updated: 2026-05-17
+Last updated: 2026-11-04（A8 content-studio 入队；A6 状态按已落地的四个 workflow 迭代更新）
 
 ## 维护约定
 
@@ -37,8 +37,9 @@ Last updated: 2026-05-17
 | A3 | [research-assistant](examples/applications/research-assistant/) | WIP — live ✅ iter 1 (2026-05-18) | arxiv search API, SqliteEntityFactStore dedup, one-shot LLM briefing | Moonshot LLM；arxiv API 免费；RAG + scheduled run 留 iter 2 |
 | A4 | [meeting-transcriber](examples/applications/meeting-transcriber/) | TODO | ASR node, LLM summarize, file output | Whisper (local 或 API) |
 | A5 | [weekly-digest](examples/applications/weekly-digest/) | TODO | RAG, LLM, HTTP (SMTP/SendGrid), scheduled | SendGrid/Mailgun/SMTP |
-| A6 | [doc-translator](examples/applications/doc-translator/) | TODO | template, batch / map (parallel), LLM, file | LLM API |
+| A6 | [doc-translator](examples/applications/doc-translator/) | WIP — workflow.yml + iter2/3/4 已落地（见 A6 段） | template, batch / map (parallel), LLM, file, shell | LLM API |
 | A7 | [changelog-writer](examples/applications/changelog-writer/) | WIP — live ✅ as L1 binary; L3 skill form rejected (2026-05-18) | custom AsyncNode + std::process git + single LlmInit::prompt call; LLM provider registry | 无（git + LLM key） |
+| A8 | content-studio（目录待建，`TODOs.md` Y4.4） | TODO | 规划 agent + `WorkflowTool` 三个生成器模板（report / mindmap / audio_overview）+ `FlowValue::File` 产物 + `--output-dir`；是 `docs/RFC_CONTENT_STUDIO.md` 的首个端到端验证 | LLM + TTS key；pandoc + typst；ffmpeg（经 media-tools MCP） |
 
 ---
 

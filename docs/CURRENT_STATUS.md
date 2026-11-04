@@ -1,9 +1,8 @@
 # Current Project Status
 
-Last updated: 2026-08-09 (V-track closed: all of V0–V4 plus the
-V4.4-FU1 follow-up — the 2026-08-05 production-readiness remediation
-that was active as of the 2026-08-08 update — are now DONE; see
-`TODOs.md`)
+Last updated: 2026-11-04 (direction reset to the Content Studio runtime;
+W / P-LLM2 / X segments closed; the active track is Y — see `RoadMap.md`
+and `TODOs.md`)
 
 This is the current authoritative status entrypoint for Yanshi. Historical
 evaluations, roadmap notes, and TODO queues may explain how the project arrived
@@ -12,7 +11,15 @@ and what remains active.
 
 ## Summary
 
-Yanshi is a Rust workspace for deterministic DAG workflows, agent-native
+Yanshi is a multimodal content-production runtime: sources in (idea / URL /
+files / recording), deliverables out (report, mind map, audio overview, slides,
+flashcards, quiz, infographic, data table, video overview, domain engineering
+diagrams). The contracts are in [`RFC_CONTENT_STUDIO.md`](RFC_CONTENT_STUDIO.md);
+the evaluation behind the reset is
+[`PROJECT_EVALUATION_2026-11-04.md`](PROJECT_EVALUATION_2026-11-04.md). It is
+not a coding-agent framework.
+
+Underneath it is a Rust workspace for deterministic DAG workflows, agent-native
 runtime loops, Skills, MCP tools, RAG, memory, tracing, plugins, distributed
 worker foundations, and a Web UI run console.
 
@@ -23,13 +30,15 @@ shared contracts (enforced by `cargo xtask check-arch`; see
 
 - L0 contract kernel: `yanshi-value` (`FlowValue`), `yanshi-graph`
   (the `Flow` IR), `yanshi-store-spi`, `yanshi-agent-spi`,
-  `yanshi-async-util` (+ `yanshi-tools` as the `Tool` contract).
+  `yanshi-async-util`, and `yanshi-tool` (the `Tool` contract, split out of
+  `yanshi-tools` in T3.3).
 - L1 execution core (the executor): `yanshi-core` runs the L0 `Flow` IR via
   the `FlowExt` trait (`flow.run()`).
 - L2 capability adapters: `yanshi-nodes` (tool-tier), `yanshi-nodes-ai`
   (capability-backed node adapters, split out of `yanshi-nodes` by the
-  P-A4.0 nodes decomposition), `yanshi-llm`, `yanshi-tools`,
-  `yanshi-mcp`, `yanshi-rag`, `yanshi-memory`.
+  P-A4.0 nodes decomposition), `yanshi-llm`, `yanshi-tools` (builtin tool
+  implementations + OS-sandbox backends), `yanshi-tools-ai` (TTS / ASR /
+  image / video as `Tool`s), `yanshi-mcp`, `yanshi-rag`, `yanshi-memory`.
 - L3 agent and orchestration: `yanshi-agents`, `yanshi-skills`,
   `yanshi-harness`, `yanshi-config` (shared config-first workflow assembly
   + diagnostics, consumed by both the CLI and server), `yanshi-cli`.
@@ -110,15 +119,41 @@ contracts.
 
 ## Active Work
 
-The short-term execution queue remains in `TODOs.md` (maintainer-local, gitignored). As of
-this update, **every segment through V has closed** — H, P-A, S, L, R, T,
-and U are archived to `docs/archive/`; V is closed but not yet archived
-(its full item-by-item record is still in `TODOs.md`). The most recent
-closed segment, **V (2026-08-05 production-readiness remediation)**, came
-from findings by six
-independent parallel sub-agents that each read one architecture layer (L0
-contract kernel / L1 execution core / L2 capability adapters / L3 agent
-orchestration / L4 platform), cross-checked by the orchestrator running
+The short-term execution queue remains in `TODOs.md` (maintainer-local,
+gitignored). As of this update every segment through **X** (the 2026-10-07
+evaluation fixes) has closed, and the active track is **Y — Content Studio**,
+derived from `PROJECT_EVALUATION_2026-11-04.md` §7 and specified by
+`RFC_CONTENT_STUDIO.md`:
+
+- **Y0** — the RFC (done) and this positioning sync.
+- **Y1** — media as a first-class value: modality nodes emit
+  `FlowValue::File`, consumers accept it, artifact registration + download
+  routes, CLI `--output-dir`.
+- **Y2** — cost accounting and resume: streaming `usage`, real token
+  accumulation, modality pricing, run-level `cost_limit_usd`, checkpoint /
+  resume reachable from the CLI and server.
+- **Y3** — renderers: embedded `render_table` / `render_svg` /
+  `render_markdown`; `media-tools` MCP over ffmpeg; `render_document` over
+  pandoc + typst; a `figure` node over TeX Live / typst / mermaid / d2 with a
+  validate → render → feed-back loop, and a `code_exec` Python science backend.
+- **Y4** — three generators end to end (`report`, `mindmap`,
+  `audio_overview`) plus a planner agent and the `content-studio` application.
+- **Y5** — notebook entity (`notebooks` / `sources` / `source_chunks` /
+  `notebook_artifacts`), ingestion as a run, unified citations,
+  `POST /v1/notebooks/{id}/generate`.
+- **Y6 / Y7** — second deliverable batch (slides, flashcards / quiz,
+  infographic, video overview, domain diagrams, more video vendors) and
+  product governance (budget-threshold approvals, a publish action class, the
+  remaining cheap gateway escapes).
+
+Tracks that this product does not need yet (distributed workers, remaining
+multi-replica gaps, coding-session Harness providers, seccomp refinement, MCP
+follow-ups) are listed in `RoadMap.md` § Deferred, each with the condition
+that reopens it.
+
+The previously closed **V (2026-08-05 production-readiness remediation)**
+segment came from findings by six independent parallel sub-agents that each
+read one architecture layer, cross-checked by the orchestrator running
 `cargo test/clippy/fmt/tree` locally:
 
 - **V0** — blocking correctness/security bugs (panics, unsafe defaults,
@@ -152,10 +187,18 @@ The ongoing documentation-convergence convention:
 
 ## Historical References
 
+- [`PROJECT_EVALUATION_2026-11-04.md`](PROJECT_EVALUATION_2026-11-04.md):
+  most recent evaluation — closure of the 10-07 findings (36 fixed / 13
+  partial / 17 open), new findings, then re-weighted for the
+  content-production goal (A− library / B− platform); drove the Y track.
+- [`PROJECT_EVALUATION_2026-10-07.md`](PROJECT_EVALUATION_2026-10-07.md):
+  evaluation that drove the X segment (gateway policy, cross-replica fixes).
+- [`PROJECT_EVALUATION_2026-08-09.md`](PROJECT_EVALUATION_2026-08-09.md):
+  evaluation that drove the W segment; the baseline of
+  [`TRIAL_GUIDE.md`](TRIAL_GUIDE.md).
 - [`PROJECT_EVALUATION_2026-08-05.md`](PROJECT_EVALUATION_2026-08-05.md):
-  most recent evaluation (6 parallel layer sub-agents + orchestrator
-  cross-check), B+/A- composite, production-readiness C+; drove the
-  active V segment above.
+  6 parallel layer sub-agents + orchestrator cross-check, B+/A- composite,
+  production-readiness C+; drove the V segment above.
 - [`PROJECT_EVALUATION_2026-05-19.md`](archive/PROJECT_EVALUATION_2026-05-19.md):
   prior module-by-module evaluation (A overall, v1.0.0-rc.1 candidate).
 - [`PROJECT_EVALUATION_2026-05-14.md`](archive/PROJECT_EVALUATION_2026-05-14.md):

@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-manual-green.svg)](https://yuxuetr.github.io/yanshi/)
 
-> **A modular Rust agent framework for deterministic DAG workflows, agent-native execution loops, Skills, MCP tools, memory, tracing, and checkpointed recovery.**
+> **A multimodal content-production runtime in Rust: sources in (an idea, a URL, files, a recording), finished deliverables out (reports, mind maps, audio overviews, slides, quizzes, infographics, videos, domain diagrams) — built on deterministic DAG workflows, agent-native loops, Skills, MCP tools, memory, tracing and checkpointed recovery.**
 
 **About the name.** In the *Liezi* (列子·汤问), the artificer Yanshi (偃师) presents
 King Mu of Zhou with a figure that sings, dances and acts on its own — and, taken
@@ -14,7 +14,20 @@ oldest Chinese account of a built autonomous agent, and the idea this project
 is built on: autonomous agents assembled from explicit, inspectable structure
 (workflows, contracts, tools) that can be traced, replayed and recomposed.
 
-Yanshi V2 is evolving from a workflow orchestration engine into an agent framework with a shared runtime foundation. It supports deterministic DAG workflows for production automation and agent-native loops for planning, tool use, reflection, memory, and multi-step decision making.
+**Direction (reset 2026-11-04).** Yanshi is a runtime for turning sources into
+finished content, in the shape of NotebookLM Studio but with a richer and
+extensible catalogue. Every deliverable runs the same five stages — Sources →
+Planner → Generators → Renderers → Artifacts — where the LLM plans the
+*content* (outline, which deliverables, which figures) and hand-written DAG
+templates do the work, so cost is predictable and quality is testable. Media
+is a first-class value (`FlowValue::File`), and renderers (pandoc, TeX, ffmpeg,
+mermaid) run as sandboxed external tools. The design is
+[`docs/RFC_CONTENT_STUDIO.md`](docs/RFC_CONTENT_STUDIO.md); the active track
+is `RoadMap.md` § Y. It is not a coding-agent framework.
+
+Underneath sits the general runtime this README describes: deterministic DAG
+workflows for production automation and agent-native loops for planning, tool
+use, reflection, memory, and multi-step decision making.
 
 For the maintained snapshot of implemented surfaces, stability boundaries, and
 active work, see [docs/CURRENT_STATUS.md](docs/CURRENT_STATUS.md). For the
@@ -32,9 +45,9 @@ Yanshi is built on five core principles:
 4. **Shared tools and skills**: Built-in tools, script tools, MCP tools, and workflow tools all adapt into one `ToolRegistry`.
 5. **Recoverable execution**: Workflow checkpoints preserve node outputs and agent step history so interrupted runs can resume.
 
-## 🤖 Agent Framework Positioning
+## 🤖 Execution Paradigms
 
-Yanshi supports **four execution paradigms** on one shared runtime — points on a
+The content runtime above is built on **four execution paradigms** sharing one runtime — points on a
 single *planning / binding-time* spectrum, from fully-fixed to decided-every-step:
 
 - **Static DAG** — `yanshi-core::Flow` for deterministic production pipelines,
@@ -334,7 +347,9 @@ cargo check --workspace
 
 ### Core Documentation
 - **[Docs Index](docs/README.md)**: Current documentation entry point.
-- **[RoadMap](RoadMap.md)**: Current direction for evolving Yanshi into a DAG + agent framework.
+- **[RoadMap](RoadMap.md)**: Current direction — the Content Studio runtime (track Y) — plus deferred tracks with their re-evaluate conditions.
+- **[Content Studio RFC](docs/RFC_CONTENT_STUDIO.md)**: Five-stage model, artifact and `Deliverable` / `Citation` contracts, notebook entity, renderer strategy, decision log.
+- **[Project Evaluation 2026-11-04](docs/PROJECT_EVALUATION_2026-11-04.md)**: Latest full evaluation, re-weighted for the content-production goal.
 - **[Architecture](docs/ARCHITECTURE.md)**: The four-paradigm mental model (with an honest model-vs-code status), workspace layout, runtime model, CLI surface, and persistence.
 - **[Crate Architecture RFC](docs/RFC_CRATE_ARCHITECTURE.md)** + **[Evaluation](docs/ARCHITECTURE_EVALUATION_2026-06-20.md)**: The contract-kernel design (narrow-waist `value`/`graph`/`store-spi`/`agent-spi`/`async-util` + eight dependency laws, enforced by `cargo xtask check-arch`) and its dependency-graph validation.
 - **[Configuration](docs/CONFIGURATION.md)**: CLI config, secrets, workflow YAML, and run directories.

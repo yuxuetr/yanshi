@@ -13,6 +13,7 @@
 # Getting Started
 
 - [Configuration](CONFIGURATION.md)
+- [Trial Guide (中文)](TRIAL_GUIDE.md)
 - [CLI Config-First Tutorial](examples/cli_config_first_tutorial.md)
 - [Runnable Tutorials (中文)](examples/runnable_tutorials_zh.md)
 - [Example Index](examples/README.md)
@@ -99,6 +100,12 @@
 - [Architecture](ARCHITECTURE.md)
   - [Architecture Diagram (中文)](ARCHITECTURE_DIAGRAM.md)
 - [Current Status](CURRENT_STATUS.md)
+- [Evaluations]()
+  - [Project Evaluation 2026-11-04](PROJECT_EVALUATION_2026-11-04.md)
+  - [Project Evaluation 2026-10-07](PROJECT_EVALUATION_2026-10-07.md)
+  - [Project Evaluation 2026-08-09](PROJECT_EVALUATION_2026-08-09.md)
+  - [Project Evaluation 2026-08-05](PROJECT_EVALUATION_2026-08-05.md)
+  - [Architecture Evaluation 2026-06-20](ARCHITECTURE_EVALUATION_2026-06-20.md)
 - [Roadmap v2](ROADMAP_v2.md)
 - [Tracing Design (中文)](TRACING_DESIGN.md)
 - [MCP Production Design](MCP_PRODUCTION_DESIGN.md)

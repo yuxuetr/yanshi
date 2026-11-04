@@ -15,6 +15,10 @@ The curated manual built from this directory is published at
 
 - [CURRENT_STATUS.md](CURRENT_STATUS.md): current authoritative project status,
   implemented surfaces, stability links, and active work.
+- [RFC_CONTENT_STUDIO.md](RFC_CONTENT_STUDIO.md): the product direction —
+  a multimodal content-production runtime — and the contracts the Y track
+  implements.
+- [TRIAL_GUIDE.md](TRIAL_GUIDE.md): 试用手册 — which CLI paths are green today.
 - [ARCHITECTURE.md](ARCHITECTURE.md): current workspace layout and runtime model.
 - [CONFIGURATION.md](CONFIGURATION.md): CLI config, secrets, workflow YAML, and run directories.
 - [WORKFLOW_SCHEMA.md](WORKFLOW_SCHEMA.md): implemented config-first workflow validation contract.
@@ -43,14 +47,25 @@ The curated manual built from this directory is published at
 
 Live at the repository root:
 
-- [`RoadMap.md`](../RoadMap.md): N1–N10 status, including the closed N8/N9
-  foundations and the N10 plugin, distributed, Web UI, and marketplace base.
+- [`RoadMap.md`](../RoadMap.md): the Content Studio direction (track Y) and
+  the deferred tracks with their re-evaluate conditions.
 - `TODOs.md` (maintainer-local, gitignored): active task queue derived from the evaluation and roadmap.
+
+Current evaluations in `docs/`:
+
+- [`PROJECT_EVALUATION_2026-11-04.md`](PROJECT_EVALUATION_2026-11-04.md):
+  **most recent evaluation** — 10-07 closure accounting, new findings,
+  re-weighted for the content-production goal; drove track Y.
+- [`PROJECT_EVALUATION_2026-10-07.md`](PROJECT_EVALUATION_2026-10-07.md): drove segment X.
+- [`PROJECT_EVALUATION_2026-08-09.md`](PROJECT_EVALUATION_2026-08-09.md): drove segment W.
+- [`PROJECT_EVALUATION_2026-08-05.md`](PROJECT_EVALUATION_2026-08-05.md): drove segment V.
+- [`ARCHITECTURE_EVALUATION_2026-06-20.md`](ARCHITECTURE_EVALUATION_2026-06-20.md):
+  dependency-graph validation of the crate-architecture RFC.
 
 Archived under `docs/archive/`:
 
 - [`PROJECT_EVALUATION_2026-05-19.md`](archive/PROJECT_EVALUATION_2026-05-19.md):
-  **most recent evaluation** (HEAD `daaa912`, A overall) — v1.0.0-rc.1 candidate;
+  evaluation (HEAD `daaa912`, A overall) — v1.0.0-rc.1 candidate;
   all N1–N10 segments closed.
 - [`PROJECT_EVALUATION_2026-05-14.md`](archive/PROJECT_EVALUATION_2026-05-14.md):
   follow-up evaluation that drove the P6/P7/P-H/M segment additions.

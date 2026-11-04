@@ -24,13 +24,15 @@ status table.
 
 | # | Application | Status | Subdirectory |
 | --- | --- | --- | --- |
-| A1 | blog → two-speaker podcast | TODO | [`blog-to-podcast/`](blog-to-podcast/) |
-| A2 | GitHub PR code reviewer | TODO | [`code-reviewer/`](code-reviewer/) |
-| A3 | Arxiv research assistant | TODO | [`research-assistant/`](research-assistant/) |
+| A1 | blog → two-speaker podcast | WIP — live smoke ✅ (2026-05-18) | [`blog-to-podcast/`](blog-to-podcast/) |
+| A1.5 | podcast mastering via a skill driving an MCP subprocess | WIP — live smoke ✅ (2026-05-18) | [`podcast-mastering/`](podcast-mastering/) |
+| A2 | GitHub PR code reviewer | WIP — live ✅ as a skill (2026-05-18); [`code-reviewer-write/`](code-reviewer-write/) is the reference binary | [`code-reviewer/`](code-reviewer/) |
+| A3 | Arxiv research assistant | WIP — live ✅ iter 1 (2026-05-18) | [`research-assistant/`](research-assistant/) |
 | A4 | Meeting recording → transcript + action items | TODO | [`meeting-transcriber/`](meeting-transcriber/) |
 | A5 | Scheduled weekly digest email | TODO | [`weekly-digest/`](weekly-digest/) |
-| A6 | Markdown folder multi-language translator | TODO | [`doc-translator/`](doc-translator/) |
-| A7 | Git log → conventional CHANGELOG (yanshi eats its own dogfood) | TODO | [`changelog-writer/`](changelog-writer/) |
+| A6 | Markdown folder multi-language translator | WIP — four workflow iterations shipped | [`doc-translator/`](doc-translator/) |
+| A7 | Git log → conventional CHANGELOG (yanshi eats its own dogfood) | WIP — live ✅ as a binary; skill form rejected (2026-05-18) | [`changelog-writer/`](changelog-writer/) |
+| A8 | **Content Studio** — one URL or idea → report + mind map + audio overview via a planner agent (track Y, `TODOs.md` Y4.4) | TODO | `content-studio/` (not created yet) |
 
 ## Conventions for new applications
 
