@@ -101,8 +101,17 @@ impl AsyncNode for TemplateNode {
       });
       tera_guard
         .render_str(&self.template, &context)
-        .map_err(|e| YanshiError::AsyncExecutionError {
-          message: format!("Template rendering failed: {}", e),
+        .map_err(|e| {
+          // Tera's top-level message is just "Failed to render
+          // '__tera_one_off'"; the cause (unknown variable, bad filter
+          // argument, ...) is further down the source chain.
+          let mut message = format!("Template rendering failed: {e}");
+          let mut cause = std::error::Error::source(&e);
+          while let Some(inner) = cause {
+            message.push_str(&format!(": {inner}"));
+            cause = inner.source();
+          }
+          YanshiError::NodeExecutionFailed { message }
         })?
     };
 
