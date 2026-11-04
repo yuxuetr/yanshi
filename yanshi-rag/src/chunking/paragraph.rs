@@ -93,6 +93,10 @@ fn push_group(paragraphs: &[Paragraph], group: &[usize], chunks: &mut Vec<TextCh
 
 /// Seed the next group with trailing paragraphs from `group` whose combined
 /// length fits within `overlap`, so consecutive chunks share context.
+///
+/// A trailing paragraph longer than `overlap` contributes nothing: it used
+/// to be carried over whole, duplicating it into the next chunk and
+/// pushing that chunk past `chunk_size`.
 fn overlap_seed(paragraphs: &[Paragraph], group: &[usize], overlap: usize) -> Vec<usize> {
   if overlap == 0 {
     return Vec::new();
@@ -101,7 +105,7 @@ fn overlap_seed(paragraphs: &[Paragraph], group: &[usize], overlap: usize) -> Ve
   let mut len = 0usize;
   for &idx in group.iter().rev() {
     let addition = paragraphs[idx].content.len() + if seed.is_empty() { 0 } else { 2 };
-    if !seed.is_empty() && len + addition > overlap {
+    if len + addition > overlap {
       break;
     }
     seed.push(idx);
@@ -199,6 +203,35 @@ impl ChunkingStrategy for ParagraphChunker {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_paragraph_longer_than_the_overlap_is_not_carried_into_the_next_chunk() {
+    let text = format!("{}\n\n{}", "a".repeat(800), "b".repeat(800));
+    let chunks = ParagraphChunker::new(1200, 150)
+      .chunk(&text)
+      .expect("chunks");
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[0].content, "a".repeat(800));
+    assert_eq!(
+      chunks[1].content,
+      "b".repeat(800),
+      "no 800-char duplicate as 'overlap'"
+    );
+    assert!(chunks.iter().all(|c| c.content.len() <= 1200));
+  }
+
+  #[test]
+  fn short_trailing_paragraphs_still_overlap() {
+    let text = format!("{}\n\nshort tail\n\n{}", "a".repeat(700), "b".repeat(700));
+    let chunks = ParagraphChunker::new(1000, 50)
+      .chunk(&text)
+      .expect("chunks");
+    assert!(
+      chunks[1].content.starts_with("short tail"),
+      "{:?}",
+      chunks[1].content
+    );
+  }
 
   #[test]
   fn never_splits_a_paragraph_across_two_chunks() {
