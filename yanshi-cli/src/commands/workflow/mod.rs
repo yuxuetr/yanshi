@@ -2,6 +2,7 @@ pub mod artifacts;
 pub mod cli;
 pub mod debug;
 pub mod dynamic;
+pub mod resume;
 pub mod resume_plan;
 pub mod run;
 pub mod server_ops;

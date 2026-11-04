@@ -97,6 +97,7 @@ pub fn reject_local_only_flags(
   watch: bool,
   output: Option<&str>,
   output_dir: Option<&str>,
+  checkpoint: bool,
   input: &[String],
   dry_run: bool,
   timeout: &str,
@@ -116,6 +117,12 @@ pub fn reject_local_only_flags(
       "--output '{path}' is local-only (writes the final workflow output to a local file). \
        In server mode, capture the terminal run row via --format json-envelope or stream \
        events via `yanshi workflow logs <run_id> --follow`."
+    );
+  }
+  if checkpoint {
+    anyhow::bail!(
+      "--checkpoint is local-only: the server checkpoints every run itself. Drop --checkpoint \
+       when using --server and resume with POST /v1/runs/{{id}}:resume."
     );
   }
   if output_dir.is_some() {
@@ -596,6 +603,7 @@ mod tests {
       watch,
       output,
       None,
+      false,
       input,
       dry_run,
       timeout,

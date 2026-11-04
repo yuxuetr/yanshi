@@ -7,11 +7,12 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yanshi_core::FlowExt;
+use yanshi_core::checkpoint::CheckpointConfig;
 use yanshi_core::{
   FlowCancellationToken, FlowExecutionConfig, async_node::AsyncNodeInputs, flow::Flow,
   value::FlowValue,
@@ -32,6 +33,7 @@ pub async fn execute(
   max_concurrency: usize,
   run_dir: Option<String>,
   output_dir: Option<String>,
+  checkpoint: bool,
 ) -> Result<()> {
   if watch {
     bail!("--watch is not implemented yet; run without --watch or use workflow debug --dry-run");
@@ -148,6 +150,18 @@ pub async fn execute(
   let artifact_base = execution_config
     .resolved_run_base_dir()
     .context("Failed to resolve the run base directory")?;
+  // Y2.4: checkpoint after every node so a failed run can be resumed.
+  if checkpoint {
+    let dir = checkpoint_dir(&artifact_base, &workflow_id);
+    flow = flow
+      .with_checkpointing(CheckpointConfig::default().with_checkpoint_dir(&dir))
+      .with_context(|| format!("Failed to enable checkpointing at {}", dir.display()))?;
+    println!("💾 Checkpointing to {}", dir.display());
+    println!(
+      "   Resume after a failure: yanshi workflow resume {} {}",
+      workflow_id, workflow_file
+    );
+  }
 
   // 3. Execute the flow
   println!("\n▶️  Running flow...");
@@ -193,14 +207,37 @@ pub async fn execute(
   let duration = start_time.elapsed();
   println!("\n✅ Workflow completed in {:.2?}.", duration);
 
-  // 4. Print or save the results
+  report_outcome(
+    &final_state,
+    &workflow_id,
+    &artifact_base,
+    output.as_deref(),
+    output_dir,
+  )
+}
+
+/// Y2.4: where `--checkpoint` writes a run's checkpoints, and where
+/// `workflow resume` looks for them.
+pub(super) fn checkpoint_dir(run_base_dir: &Path, run_id: &str) -> PathBuf {
+  run_base_dir.join(run_id).join("checkpoint")
+}
+
+/// Print or save the final state, then the artifact table and the
+/// optional `--output-dir` copy. Shared by `run` and `resume`.
+pub(super) fn report_outcome(
+  final_state: &std::collections::HashMap<String, yanshi_core::async_node::AsyncNodeResult>,
+  run_id: &str,
+  artifact_base: &Path,
+  output: Option<&str>,
+  output_dir: Option<String>,
+) -> Result<()> {
   let mut redacted_final_state =
-    serde_json::to_value(&final_state).context("Failed to serialize final state for redaction.")?;
+    serde_json::to_value(final_state).context("Failed to serialize final state for redaction.")?;
   redact_cli_value(&mut redacted_final_state);
   let final_state_json = serde_json::to_string_pretty(&redacted_final_state)
     .context("Failed to serialize redacted final state to JSON.")?;
 
-  match output.as_deref() {
+  match output {
     Some("-") => {
       println!("{}", final_state_json);
     }
@@ -216,11 +253,11 @@ pub async fn execute(
   }
 
   // Y1.4: what the run produced, and optionally a copy of it.
-  let produced = yanshi_core::run_context::collect_file_outputs(&final_state, &artifact_base);
+  let produced = yanshi_core::run_context::collect_file_outputs(final_state, artifact_base);
   super::artifacts::print_table(&produced);
   if let Some(dir) = output_dir {
     let dir = PathBuf::from(dir);
-    let copied = super::artifacts::copy_to_output_dir(&produced, &dir, &workflow_id)?;
+    let copied = super::artifacts::copy_to_output_dir(&produced, &dir, run_id)?;
     println!(
       "📤 Copied {} artifact(s) to {} (manifest: {})",
       copied.len(),
@@ -286,7 +323,7 @@ fn parse_duration(raw: &str) -> Result<Duration> {
   Ok(Duration::from_millis(amount.saturating_mul(multiplier)))
 }
 
-fn parse_execution_config(
+pub(super) fn parse_execution_config(
   execution_mode: &str,
   max_concurrency: usize,
   run_dir: Option<String>,
@@ -382,7 +419,7 @@ async fn run_with_retries(
 /// V1.1: mirrors `yanshi_core::flow`'s `is_genuine_failure` -- a
 /// benign `run_if` skip (`YanshiError::NodeSkipped`) is not a
 /// workflow failure and must not trigger a retry or a non-zero exit.
-fn first_genuine_state_error(
+pub(super) fn first_genuine_state_error(
   state: &std::collections::HashMap<String, yanshi_core::async_node::AsyncNodeResult>,
 ) -> Option<String> {
   state.iter().find_map(|(node_id, result)| match result {

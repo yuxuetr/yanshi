@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::{debug, dynamic, resume_plan, run, server_ops, validate};
+use super::{debug, dynamic, resume, resume_plan, run, server_ops, validate};
 
 #[derive(Args)]
 pub struct WorkflowArgs {
@@ -40,6 +40,10 @@ enum WorkflowCommands {
     /// and write `<DIR>/artifacts.json` (size + SHA-256 per file).
     #[arg(long, value_name = "DIR")]
     output_dir: Option<String>,
+    /// Checkpoint after every node to `<run-dir>/<run_id>/checkpoint`, so
+    /// a failed run can be continued with `workflow resume`.
+    #[arg(long)]
+    checkpoint: bool,
     /// Submit the workflow to a remote `yanshi serve` instance instead
     /// of executing in-process. Falls back to YANSHI_SERVER_URL when
     /// the flag is omitted; if neither is set the CLI runs in-process.
@@ -143,6 +147,26 @@ enum WorkflowCommands {
     /// Print the per-node permission and capability requirements
     #[arg(long = "explain-permissions")]
     explain_permissions: bool,
+  },
+  /// Continue a run started with `workflow run --checkpoint`: only the
+  /// nodes that did not finish run again, with the run's original
+  /// inputs, scheduling and cost limit.
+  Resume {
+    /// Run id printed by `workflow run --checkpoint`
+    run_id: String,
+    /// The workflow file the run was started from
+    workflow_file: String,
+    /// Run base directory the run used (default: YANSHI_RUN_DIR or ~/.yanshi/runs)
+    #[arg(long)]
+    run_dir: Option<String>,
+    /// Treat `Unknown` idempotency tool calls as safe to replay
+    #[arg(long)]
+    force_replay: bool,
+    #[arg(short, long)]
+    output: Option<String>,
+    /// Copy the run's artifacts to `<DIR>/<node_id>/<file>` (see `run`)
+    #[arg(long, value_name = "DIR")]
+    output_dir: Option<String>,
   },
   /// Inspect the resume plan for a checkpointed workflow run
   ResumePlan {
@@ -269,6 +293,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
       max_concurrency,
       run_dir,
       output_dir,
+      checkpoint,
       server,
       auth_token,
       tenant,
@@ -304,6 +329,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
           watch,
           output.as_deref(),
           output_dir.as_deref(),
+          checkpoint,
           &input,
           dry_run,
           &timeout,
@@ -348,6 +374,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
           max_concurrency,
           run_dir,
           output_dir,
+          checkpoint,
         )
         .await
       }
@@ -429,6 +456,24 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
       strict,
       explain_permissions,
     } => validate::execute(workflow_file, format, strict, explain_permissions).await,
+    WorkflowCommands::Resume {
+      run_id,
+      workflow_file,
+      run_dir,
+      force_replay,
+      output,
+      output_dir,
+    } => {
+      resume::execute(
+        run_id,
+        workflow_file,
+        run_dir,
+        force_replay,
+        output,
+        output_dir,
+      )
+      .await
+    }
     WorkflowCommands::ResumePlan {
       run_id,
       checkpoint_dir,

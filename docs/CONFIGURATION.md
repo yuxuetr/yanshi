@@ -232,6 +232,22 @@ yanshi workflow run flow.yml --output-dir ./out
 ```
 
 Only `File` outputs under the run base directory count as artifacts.
+
+A long run with billed steps can be made resumable:
+
+```bash
+yanshi workflow run flow.yml --checkpoint --input topic=tides
+# fails at node 9 of 10; prints: yanshi workflow resume <run_id> flow.yml
+yanshi workflow resume <run_id> flow.yml
+```
+
+`--checkpoint` writes `<run_dir>/<run_id>/checkpoint/` after every node.
+`resume` re-runs only the nodes that did not finish, with the original
+`--input` values, execution mode, concurrency and `cost_limit_usd`; the
+spend already recorded counts toward the limit, so nothing finished is
+paid for twice. Pass the same `--run-dir` the run used. Inspect what a
+resume would replay with
+`yanshi workflow resume-plan <run_id> --checkpoint-dir <run_dir>/<run_id>/checkpoint`.
 `--output-dir` is local-only; against `--server`, list and download
 through `GET /v1/runs/{id}/artifacts`.
 

@@ -110,6 +110,13 @@ _New entries go here. Will roll into the next tag (likely
   field, and GLM documents none. The OpenAI, Moonshot and StepFun
   readers continue to `[DONE]`, and Moonshot's choice-level usage is
   read. Regression fixtures are in `yanshi-llm/tests/sse_buffer_regression.rs`.
+- **`yanshi workflow run --checkpoint` and `yanshi workflow resume`
+  (Y2.4).** `--checkpoint` checkpoints after every node to
+  `<run_dir>/<run_id>/checkpoint/` and prints the resume command;
+  `workflow resume <run_id> <file>` continues the run with its recorded
+  inputs and settings, then prints the state and artifact table like
+  `run` (and takes `--output` / `--output-dir`). `--checkpoint` is
+  rejected with `--server`.
 - **Resume replays the original run (Y2.4, D4).** `Flow::resume` used
   to run with empty inputs, the default (serial) config and no memory of
   spend. Checkpoints now carry the run's inputs, scheduling mode and
