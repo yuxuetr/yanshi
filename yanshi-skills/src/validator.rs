@@ -318,6 +318,7 @@ mod tests {
       validation,
       scripts: vec![],
       dependencies: Default::default(),
+      workflows: Vec::new(),
     }
   }
 

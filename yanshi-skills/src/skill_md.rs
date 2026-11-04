@@ -211,6 +211,7 @@ impl SkillMd {
       scripts: vec![],
       // No `[dependencies]`-equivalent frontmatter syntax either (S2.1).
       dependencies: Default::default(),
+      workflows: Vec::new(),
     }
   }
 }

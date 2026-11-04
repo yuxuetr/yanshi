@@ -20,6 +20,9 @@ pub struct WorkflowTool {
   flow: Arc<Flow>,
   runner: Arc<dyn FlowRunner>,
   timeout: Option<Duration>,
+  /// Y4.4: `(node_id, output_key)` to return instead of the whole final
+  /// state (see [`Self::with_result_output`]).
+  result_output: Option<(String, String)>,
 }
 
 impl WorkflowTool {
@@ -52,6 +55,7 @@ impl WorkflowTool {
       flow: Arc::new(flow),
       runner,
       timeout: None,
+      result_output: None,
     }
   }
 
@@ -69,6 +73,7 @@ impl WorkflowTool {
       flow,
       runner,
       timeout: None,
+      result_output: None,
     }
   }
 
@@ -79,6 +84,19 @@ impl WorkflowTool {
 
   pub fn with_timeout_ms(self, timeout_ms: u64) -> Self {
     self.with_timeout(Duration::from_millis(timeout_ms))
+  }
+
+  /// Y4.4: return only `node_id`'s `output_key` (e.g. a generator's
+  /// `deliverable`) instead of the whole final state, which for a content
+  /// generator includes the full source text and would flood the calling
+  /// agent's context. A failed run still reports its first error.
+  pub fn with_result_output(
+    mut self,
+    node_id: impl Into<String>,
+    output_key: impl Into<String>,
+  ) -> Self {
+    self.result_output = Some((node_id.into(), output_key.into()));
+    self
   }
 
   pub fn timeout(&self) -> Option<Duration> {
@@ -126,8 +144,28 @@ impl Tool for WorkflowTool {
     .map_err(|e| ToolError::ExecutionFailed {
       message: format!("Workflow tool '{}' failed: {}", self.name, e),
     })?;
-    let has_node_error = results.values().any(Result::is_err);
-    let value = serde_json::to_value(&results).map_err(ToolError::SerdeError)?;
+    let has_node_error = results
+      .values()
+      .any(|r| matches!(r, Err(e) if !matches!(e, yanshi_graph::error::YanshiError::NodeSkipped)));
+    let value = match &self.result_output {
+      Some((node_id, key)) => match results.get(node_id) {
+        Some(Ok(outputs)) => match outputs.get(key) {
+          Some(FlowValue::Json(value)) => value.clone(),
+          Some(other) => serde_json::to_value(other).map_err(ToolError::SerdeError)?,
+          None => serde_json::json!({ "error": format!("node '{node_id}' has no output '{key}'") }),
+        },
+        _ => {
+          let first_error = results.iter().find_map(|(id, result)| match result {
+            Err(e) if !matches!(e, yanshi_graph::error::YanshiError::NodeSkipped) => {
+              Some(format!("{id}: {e}"))
+            }
+            _ => None,
+          });
+          serde_json::json!({ "error": first_error.unwrap_or_else(|| format!("node '{node_id}' did not run")) })
+        }
+      },
+      None => serde_json::to_value(&results).map_err(ToolError::SerdeError)?,
+    };
     let content = serde_json::to_string_pretty(&value).map_err(ToolError::SerdeError)?;
     let parts = vec![ToolOutputPart::Resource {
       uri: format!("workflow://{}", self.name),

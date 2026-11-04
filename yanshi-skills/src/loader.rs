@@ -114,6 +114,37 @@ impl SkillLoader {
       });
     }
 
+    // ── workflows (Y4.4) ────────────────────────────────────────────────
+    let mut workflow_names = std::collections::HashSet::new();
+    for workflow in &manifest.workflows {
+      let name = workflow.name.trim();
+      if name.is_empty()
+        || !name
+          .chars()
+          .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+      {
+        return Err(SkillError::ValidationError {
+          message: format!(
+            "[[workflows]].name '{}' must be non-empty and use only letters, digits, '_' or '-'",
+            workflow.name
+          ),
+        });
+      }
+      if !workflow_names.insert(name) {
+        return Err(SkillError::ValidationError {
+          message: format!("[[workflows]].name '{name}' is declared twice"),
+        });
+      }
+      if !skill_dir.join(&workflow.path).is_file() {
+        return Err(SkillError::ValidationError {
+          message: format!(
+            "[[workflows]] '{name}': {} does not exist (paths are relative to the skill directory)",
+            workflow.path
+          ),
+        });
+      }
+    }
+
     // ── tools ───────────────────────────────────────────────────────────
     for tool in &manifest.tools {
       let name_lc = tool.name.to_lowercase();

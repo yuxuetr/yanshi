@@ -89,6 +89,49 @@ pub fn apply_declared_inputs(
   Ok(())
 }
 
+/// Y4.4: a JSON Schema for a workflow's declared `inputs`, so an agent
+/// that calls the workflow as a tool sees typed, described parameters
+/// (RFC §3: the planner picks from a closed menu). Types come from each
+/// input's `default`; inputs without one are strings. Required inputs
+/// with no default are `required`.
+pub fn inputs_json_schema(flow_def: &FlowDefinitionV2) -> Value {
+  let mut properties = serde_json::Map::new();
+  let mut required = Vec::new();
+  let mut names: Vec<&String> = flow_def.inputs.keys().collect();
+  names.sort();
+  for name in names {
+    let def = &flow_def.inputs[name];
+    let default: Option<Value> = def
+      .default
+      .as_ref()
+      .and_then(|value| serde_yaml::from_value(value.clone()).ok());
+    let kind = match &default {
+      Some(Value::Bool(_)) => "boolean",
+      Some(Value::Number(n)) if n.is_i64() || n.is_u64() => "integer",
+      Some(Value::Number(_)) => "number",
+      Some(Value::Array(_)) => "array",
+      Some(Value::Object(_)) => "object",
+      _ => "string",
+    };
+    let mut property = serde_json::json!({ "type": kind });
+    if let Some(description) = &def.description {
+      property["description"] = Value::String(description.clone());
+    }
+    match default {
+      Some(default) => property["default"] = default,
+      None if def.required => required.push(Value::String(name.clone())),
+      None => {}
+    }
+    properties.insert(name.clone(), property);
+  }
+  serde_json::json!({
+    "type": "object",
+    "properties": properties,
+    "required": required,
+    "additionalProperties": false,
+  })
+}
+
 /// Apply the CLI/server model override to node kinds that invoke agents or
 /// LLMs, including those inside `map` / `while` bodies (Y4.1: an `llm` in
 /// a Map template used to keep its own, possibly empty, model).
@@ -302,5 +345,30 @@ nodes:
       expected,
       "nested llm gets the override"
     );
+  }
+
+  #[test]
+  fn inputs_schema_types_inputs_from_their_defaults() {
+    let flow_def = parse(
+      r#"
+name: gen
+inputs:
+  url: { description: "Page", default: "" }
+  sections: { default: 4 }
+  pdf: { default: true }
+  topic: { required: true }
+nodes:
+  - id: t
+    type: template
+    parameters: { template: "x" }
+"#,
+    );
+    let schema = inputs_json_schema(&flow_def);
+    assert_eq!(schema["properties"]["url"]["type"], "string");
+    assert_eq!(schema["properties"]["url"]["description"], "Page");
+    assert_eq!(schema["properties"]["sections"]["type"], "integer");
+    assert_eq!(schema["properties"]["pdf"]["type"], "boolean");
+    assert_eq!(schema["required"], serde_json::json!(["topic"]));
+    assert_eq!(schema["additionalProperties"], false);
   }
 }

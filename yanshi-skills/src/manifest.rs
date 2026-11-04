@@ -74,6 +74,29 @@ pub struct SkillManifest {
   /// as before this field existed.
   #[serde(default)]
   pub dependencies: DependenciesConfig,
+  /// Y4.4: workflow templates exposed to the agent as tools, one per
+  /// entry (`[[workflows]]`). The CLI builds them (`yanshi-config` owns
+  /// workflow assembly, and this crate cannot depend on it).
+  #[serde(default)]
+  pub workflows: Vec<WorkflowToolConfig>,
+}
+
+/// One `[[workflows]]` entry: a config-first workflow YAML the agent can
+/// call as a tool named `name`, with parameters derived from the
+/// template's declared `inputs`.
+///
+/// ```toml
+/// [[workflows]]
+/// name = "report"
+/// path = "../../generators/report.yml"   # relative to the skill dir
+/// description = "A sourced report as .md / .html / .pdf"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct WorkflowToolConfig {
+  pub name: String,
+  pub path: String,
+  #[serde(default)]
+  pub description: Option<String>,
 }
 
 /// `[dependencies]` section.
