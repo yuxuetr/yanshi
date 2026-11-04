@@ -97,7 +97,21 @@ pub fn register_custom_filters(tera: &mut Tera) {
           "`file_size` filter expects a file path string",
         ));
       };
-      let len = std::fs::metadata(path)
+      // Y7.3: only this run's artifacts; any other path would make the
+      // filter a probe of the host's file system.
+      let root = yanshi_core::run_context::current_artifact_root()
+        .and_then(|root| root.canonicalize().ok())
+        .ok_or_else(|| tera::Error::msg("`file_size` works only inside a workflow run"))?;
+      let inside = std::path::Path::new(path)
+        .canonicalize()
+        .ok()
+        .filter(|resolved| resolved.starts_with(&root))
+        .ok_or_else(|| {
+          tera::Error::msg(format!(
+            "`file_size`: '{path}' is not an artifact of this run"
+          ))
+        })?;
+      let len = std::fs::metadata(inside)
         .map_err(|e| tera::Error::msg(format!("`file_size`: cannot stat '{path}': {e}")))?
         .len();
       Ok(TeraValue::Number(len.into()))
@@ -116,6 +130,18 @@ pub fn register_custom_filters(tera: &mut Tera) {
 
 /// Register custom functions for Yanshi
 pub fn register_custom_functions(tera: &mut Tera) {
+  // Y7.3 (SEC-1): Tera's built-in `get_env` would let a (tenant-written)
+  // template read the host environment, where API keys live. Replacing it
+  // by name disables it; workflow inputs are the way to pass values in.
+  tera.register_function(
+    "get_env",
+    |_args: &HashMap<String, TeraValue>| -> TeraResult<TeraValue> {
+      Err(tera::Error::msg(
+        "`get_env` is disabled: pass the value in as a workflow input",
+      ))
+    },
+  );
+
   // Function to get current timestamp
   tera.register_function(
     "now",
@@ -216,8 +242,8 @@ mod tests {
     assert!(tera.get_function("now").is_ok());
     assert!(tera.get_function("uuid").is_ok());
   }
-  #[test]
-  fn file_values_render_as_paths_and_expose_mime_and_size() {
+  #[tokio::test]
+  async fn file_values_render_as_paths_and_expose_mime_and_size() {
     let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("1.wav");
     std::fs::write(&audio, vec![0u8; 44]).unwrap();
@@ -232,12 +258,15 @@ mod tests {
         mime_type: Some("audio/wav".to_string()),
       }),
     );
-    let rendered = tera
-      .render_str(
+    // `file_size` reads only this run's artifacts (Y7.3).
+    let rendered = yanshi_core::run_context::with_artifact_root(dir.path().to_path_buf(), async {
+      tera.render_str(
         "{{ audio }}|{{ audio | mime }}|{{ audio | file_size }}",
         &ctx,
       )
-      .unwrap();
+    })
+    .await
+    .unwrap();
     assert_eq!(rendered, format!("{}|audio/wav|44", audio.display()));
   }
 }

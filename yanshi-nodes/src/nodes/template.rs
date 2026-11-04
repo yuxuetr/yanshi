@@ -205,6 +205,45 @@ mod tests {
   use super::*;
   use serde_json::json;
 
+  /// Y7.3 (SEC-1): a gateway workflow is tenant-written; a template must
+  /// not read the host's environment (API keys live there).
+  #[tokio::test]
+  async fn get_env_is_disabled() {
+    // SAFETY: a variable only this test reads.
+    unsafe {
+      std::env::set_var("YANSHI_TEMPLATE_SECRET_PROBE", "s3cret");
+    }
+    let node = TemplateNode::new("env", "{{ get_env(name='YANSHI_TEMPLATE_SECRET_PROBE') }}");
+    let result = node.execute(&AsyncNodeInputs::new()).await;
+    let err = result.expect_err("get_env must not render");
+    assert!(!err.to_string().contains("s3cret"), "{err}");
+    assert!(err.to_string().contains("get_env"), "{err}");
+  }
+
+  /// Y7.3: `file_size` stats only this run's artifacts, not host paths.
+  #[tokio::test]
+  async fn file_size_is_confined_to_the_run_artifacts() {
+    let root = tempfile::TempDir::new().expect("tempdir");
+    let inside = root.path().join("artifacts").join("a.txt");
+    std::fs::create_dir_all(inside.parent().expect("parent")).expect("dir");
+    std::fs::write(&inside, "hello").expect("write");
+    let outside = tempfile::NamedTempFile::new().expect("tmp");
+    let render = |path: std::path::PathBuf| {
+      let node = TemplateNode::new("size", "{{ p | file_size }}");
+      let mut inputs = AsyncNodeInputs::new();
+      inputs.insert("p".to_string(), FlowValue::Json(json!(path)));
+      yanshi_core::run_context::with_artifact_root(root.path().to_path_buf(), async move {
+        node.execute(&inputs).await
+      })
+    };
+    let ok = render(inside).await.expect("inside the run");
+    assert_eq!(ok["output"], FlowValue::Json(json!("5")));
+    assert!(
+      render(outside.path().to_path_buf()).await.is_err(),
+      "host path"
+    );
+  }
+
   #[tokio::test]
   async fn test_template_node_simple_rendering() {
     let node = TemplateNode::new("simple_test", "Hello {{name}}, welcome to {{place}}!");
