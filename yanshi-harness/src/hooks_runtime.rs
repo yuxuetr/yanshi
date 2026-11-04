@@ -43,7 +43,7 @@ use tokio::sync::Mutex;
 
 use yanshi_tool::{
   Capability, SandboxStatus, Tool, ToolEffect, ToolError, ToolIdempotency, ToolMetadata,
-  ToolOutput, ToolRegistry,
+  ToolOutput, ToolRegistry, ToolSource,
 };
 
 use crate::approval::{
@@ -354,6 +354,18 @@ impl ApprovalCache {
   }
 }
 
+/// The modality tools (`yanshi-tools-ai`): each call is a billed vendor
+/// job whose prompt is the action.
+const MODALITY_TOOLS: &[&str] = &[
+  "tts",
+  "asr",
+  "text_to_image",
+  "image_to_image",
+  "image_edit",
+  "image_understand",
+  "text_to_video",
+];
+
 /// Params digest folded into the approval cache key for tool classes
 /// where the params materially change the call's risk — a session/run
 /// "allow" decided for one invocation must not blanket-approve every
@@ -368,10 +380,29 @@ impl ApprovalCache {
 /// later code with the same preamble (eval 2026-10-07 S3). `script` also
 /// folds in `args`, since the same script with different args is a
 /// different action.
-fn approval_cache_digest(tool: &str, params: &serde_json::Value) -> Option<String> {
+///
+/// Y7.3 (SEC-4): `http` is keyed by method + URL (the request's target;
+/// headers and body don't make it a different action), and MCP and
+/// modality tool calls by their whole parameters: approving one search or
+/// one billed generation approves only that call.
+fn approval_cache_digest(
+  tool: &str,
+  source: Option<&ToolSource>,
+  params: &serde_json::Value,
+) -> Option<String> {
   let field = |name: &str| params.get(name).and_then(serde_json::Value::as_str);
   let mut hasher = Sha256::new();
+  if matches!(source, Some(ToolSource::Mcp)) || MODALITY_TOOLS.contains(&tool) {
+    hasher.update(params.to_string());
+    return Some(format!("{:x}", hasher.finalize()));
+  }
   match tool {
+    "http" => {
+      hasher.update(field("method").unwrap_or("GET").to_ascii_uppercase());
+      // NUL can't appear in a method, so the boundary is unambiguous.
+      hasher.update([0]);
+      hasher.update(field("url")?);
+    }
     "shell" => hasher.update(field("command")?),
     "code_exec" => hasher.update(field("code")?),
     "script" => {
@@ -670,7 +701,7 @@ impl HookedTool {
     };
 
     // Cached decision wins when scope is Session/Run.
-    let digest = approval_cache_digest(&pending.tool, &pending.params);
+    let digest = approval_cache_digest(&pending.tool, pending.source.as_ref(), &pending.params);
     if let Some((scope, outcome)) = {
       let cache = self.config.approval_cache.lock().await;
       if cache.stop_after_deny {
@@ -938,7 +969,7 @@ mod tests {
   use super::*;
   use crate::approval_providers::{AutoAllowApprovalProvider, AutoDenyApprovalProvider};
   use crate::persistence::{HarnessEventSink, InMemoryEventSink};
-  use yanshi_tool::{ToolMetadata, ToolOutput, ToolPermissionSet, ToolSource};
+  use yanshi_tool::{ToolMetadata, ToolOutput, ToolPermissionSet};
 
   // ── Test fixtures ────────────────────────────────────────────────
 
@@ -1087,6 +1118,64 @@ mod tests {
   }
 
   // ── Tests ────────────────────────────────────────────────────────
+
+  /// Y7.3 (SEC-4): a session/run "allow" for one `http` request, MCP
+  /// call or modality call must not cover a different one.
+  #[test]
+  fn http_mcp_and_modality_calls_are_cached_per_request() {
+    let digest = |tool: &str, source: Option<ToolSource>, params: serde_json::Value| {
+      approval_cache_digest(tool, source.as_ref(), &params)
+    };
+    let get_a = digest(
+      "http",
+      None,
+      serde_json::json!({"method": "GET", "url": "https://a.example/x"}),
+    );
+    let post_a = digest(
+      "http",
+      None,
+      serde_json::json!({"method": "POST", "url": "https://a.example/x"}),
+    );
+    let get_b = digest(
+      "http",
+      None,
+      serde_json::json!({"method": "GET", "url": "https://b.example/x"}),
+    );
+    assert!(get_a.is_some() && get_a != post_a && get_a != get_b);
+    // Only method + url count for http (a header change is the same call).
+    assert_eq!(
+      get_a,
+      digest(
+        "http",
+        None,
+        serde_json::json!({"method": "get", "url": "https://a.example/x", "headers": {"x": "1"}})
+      )
+    );
+    let mcp = |args: serde_json::Value| digest("search_issues", Some(ToolSource::Mcp), args);
+    assert!(mcp(serde_json::json!({"q": "a"})).is_some());
+    assert_ne!(
+      mcp(serde_json::json!({"q": "a"})),
+      mcp(serde_json::json!({"q": "b"}))
+    );
+    let video = |prompt: &str| {
+      digest(
+        "text_to_video",
+        None,
+        serde_json::json!({"model": "m", "prompt": prompt}),
+      )
+    };
+    assert!(video("a fox").is_some());
+    assert_ne!(video("a fox"), video("a bear"));
+    // Plain local tools keep coarse per-tool caching.
+    assert_eq!(
+      digest(
+        "probe",
+        Some(ToolSource::Builtin),
+        serde_json::json!({"x": 1})
+      ),
+      None
+    );
+  }
 
   fn approvals_requested(events: &[crate::event::HarnessEvent]) -> usize {
     events
