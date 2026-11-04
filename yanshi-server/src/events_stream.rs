@@ -1005,6 +1005,18 @@ fn workflow_event_payload(event: &yanshi_core::events::WorkflowEvent) -> serde_j
         "force_replay": force_replay,
       },
     }),
+    W::NodeProgress {
+      workflow_id,
+      node_id,
+      kind,
+      detail,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "kind": kind,
+      "detail": detail,
+    }),
     W::NodeCostRecorded {
       workflow_id,
       node_id,

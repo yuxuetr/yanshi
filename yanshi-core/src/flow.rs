@@ -1324,12 +1324,23 @@ impl<'f> FlowExecutor<'f> {
     config: &FlowExecutionConfig,
     node_meter: &Option<std::sync::Arc<crate::run_context::CostMeter>>,
   ) -> AsyncNodeResult {
+    // Y3.4: the node can report progress onto this run's event stream.
+    let reporter = self.flow.event_listener().map(|listener| {
+      std::sync::Arc::new(crate::run_context::NodeReporter::new(
+        run_id,
+        node_id,
+        listener.clone(),
+      ))
+    });
     let run_once = || async {
-      let execute = crate::run_context::with_cost_meter(
-        node_meter.clone(),
-        crate::run_context::with_artifact_root(
-          run_dir.to_path_buf(),
-          self.execute_node_type(node_type, inputs, config),
+      let execute = crate::run_context::with_node_reporter(
+        reporter.clone(),
+        crate::run_context::with_cost_meter(
+          node_meter.clone(),
+          crate::run_context::with_artifact_root(
+            run_dir.to_path_buf(),
+            self.execute_node_type(node_type, inputs, config),
+          ),
         ),
       );
       match config.node_timeout_ms {

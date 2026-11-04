@@ -141,6 +141,17 @@ pub enum WorkflowEvent {
     timestamp: Instant,
   },
 
+  /// Y3.4: a node reports progress from inside its execution, e.g.
+  /// `figure` re-generating after a render failure (`kind:
+  /// "figure_retry"`). `detail` is kind-specific JSON.
+  NodeProgress {
+    workflow_id: String,
+    node_id: String,
+    kind: String,
+    detail: serde_json::Value,
+    timestamp: Instant,
+  },
+
   /// Y2.3: a node finished having recorded billed spend.
   NodeCostRecorded {
     workflow_id: String,
@@ -241,6 +252,7 @@ impl WorkflowEvent {
       | Self::RetryAttempt { workflow_id, .. }
       | Self::ResourceWarning { workflow_id, .. }
       | Self::NodeCostRecorded { workflow_id, .. }
+      | Self::NodeProgress { workflow_id, .. }
       | Self::CostLimitExceeded { workflow_id, .. }
       | Self::LLMPromptSent { workflow_id, .. }
       | Self::LLMResponseReceived { workflow_id, .. }
@@ -265,6 +277,7 @@ impl WorkflowEvent {
       | Self::RetryAttempt { timestamp, .. }
       | Self::ResourceWarning { timestamp, .. }
       | Self::NodeCostRecorded { timestamp, .. }
+      | Self::NodeProgress { timestamp, .. }
       | Self::CostLimitExceeded { timestamp, .. }
       | Self::LLMPromptSent { timestamp, .. }
       | Self::LLMResponseReceived { timestamp, .. }
@@ -289,6 +302,7 @@ impl WorkflowEvent {
       Self::RetryAttempt { .. } => "retry.attempt",
       Self::ResourceWarning { .. } => "resource.warning",
       Self::NodeCostRecorded { .. } => "node.cost",
+      Self::NodeProgress { .. } => "node.progress",
       Self::CostLimitExceeded { .. } => "cost.limit_exceeded",
       Self::LLMPromptSent { .. } => "llm.prompt.sent",
       Self::LLMResponseReceived { .. } => "llm.response.received",
@@ -372,6 +386,9 @@ impl fmt::Display for WorkflowEvent {
           usage * 100.0,
           limit
         )
+      }
+      Self::NodeProgress { node_id, kind, .. } => {
+        write!(f, "Node '{}' progress: {}", node_id, kind)
       }
       Self::NodeCostRecorded {
         node_id,

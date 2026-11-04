@@ -146,6 +146,59 @@ pub async fn with_cost_meter<F: Future>(
   }
 }
 
+/// Y3.4: lets a running node put a `WorkflowEvent::NodeProgress` on its
+/// run's event stream. The executor installs one per node execution.
+pub struct NodeReporter {
+  workflow_id: String,
+  node_id: String,
+  listener: std::sync::Arc<dyn crate::events::EventListener>,
+}
+
+impl NodeReporter {
+  pub fn new(
+    workflow_id: impl Into<String>,
+    node_id: impl Into<String>,
+    listener: std::sync::Arc<dyn crate::events::EventListener>,
+  ) -> Self {
+    Self {
+      workflow_id: workflow_id.into(),
+      node_id: node_id.into(),
+      listener,
+    }
+  }
+}
+
+tokio::task_local! {
+  static NODE_REPORTER: std::sync::Arc<NodeReporter>;
+}
+
+/// Emit a progress event for the node currently executing. A no-op
+/// outside a flow, or when the flow has no event listener.
+pub fn report_progress(kind: &str, detail: serde_json::Value) {
+  let _ = NODE_REPORTER.try_with(|reporter| {
+    reporter
+      .listener
+      .on_event(&crate::events::WorkflowEvent::NodeProgress {
+        workflow_id: reporter.workflow_id.clone(),
+        node_id: reporter.node_id.clone(),
+        kind: kind.to_string(),
+        detail,
+        timestamp: std::time::Instant::now(),
+      });
+  });
+}
+
+/// Run `fut` with `reporter` receiving its [`report_progress`] calls.
+pub async fn with_node_reporter<F: Future>(
+  reporter: Option<std::sync::Arc<NodeReporter>>,
+  fut: F,
+) -> F::Output {
+  match reporter {
+    Some(reporter) => NODE_REPORTER.scope(reporter, fut).await,
+    None => fut.await,
+  }
+}
+
 /// One `FlowValue::File` a finished run left in its state pool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileOutput {
