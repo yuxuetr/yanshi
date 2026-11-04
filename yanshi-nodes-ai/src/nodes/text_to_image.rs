@@ -170,8 +170,14 @@ impl TextToImageNode {
     inputs: &AsyncNodeInputs,
   ) -> Result<serde_json::Map<String, Value>, YanshiError> {
     let mut config = serde_json::Map::new();
-
-    config.insert("model".to_string(), Value::String(self.model.clone()));
+    // Y6.4: `model` / `size` may also arrive as inputs (a Map item picks
+    // them), overriding the build-time parameters, as `tts` does.
+    let string_input = |key: &str| match inputs.get(key) {
+      Some(FlowValue::Json(Value::String(s))) if !s.trim().is_empty() => Some(s.clone()),
+      _ => None,
+    };
+    let model = string_input("model").unwrap_or_else(|| self.model.clone());
+    config.insert("model".to_string(), Value::String(model));
     config.insert(
       "prompt".to_string(),
       Value::String(resolved_prompt.to_string()),
@@ -193,8 +199,8 @@ impl TextToImageNode {
       );
     }
 
-    if let Some(ref size) = self.size {
-      config.insert("size".to_string(), Value::String(size.clone()));
+    if let Some(size) = string_input("size").or_else(|| self.size.clone()) {
+      config.insert("size".to_string(), Value::String(size));
     }
 
     // `ImageResponseFormat` is a renamed unit-variant enum — serialization

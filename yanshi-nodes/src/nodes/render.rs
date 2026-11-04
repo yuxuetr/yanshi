@@ -868,20 +868,117 @@ fn stat_f64(stats: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
     .filter(|v| v.is_finite())
 }
 
+/// A JSON path (a string, or a serialized `File` object with a `path`).
+fn json_path(node: &str, value: &Value, what: &str) -> Result<std::path::PathBuf, YanshiError> {
+  match value {
+    Value::String(path) => Ok(std::path::PathBuf::from(path)),
+    Value::Object(file) => file
+      .get("path")
+      .and_then(Value::as_str)
+      .map(std::path::PathBuf::from)
+      .ok_or_else(|| input_error(node, format!("each {what} needs a path"))),
+    other => Err(input_error(node, format!("{what} {other} is not a path"))),
+  }
+}
+
+/// Resolve `path` and require it inside the run's artifact root: in the
+/// gateway the workflow is tenant-written, and a media node must not
+/// become a way to read host files.
+fn inside_artifact_root(
+  node: &str,
+  path: &std::path::Path,
+) -> Result<std::path::PathBuf, YanshiError> {
+  let root = yanshi_core::run_context::current_artifact_root()
+    .ok_or_else(|| input_error(node, "this node runs only inside a workflow run"))?;
+  let root = root.canonicalize().unwrap_or(root);
+  let resolved = path
+    .canonicalize()
+    .map_err(|e| input_error(node, format!("{}: {e}", path.display())))?;
+  if resolved.starts_with(&root) {
+    Ok(resolved)
+  } else {
+    Err(input_error(
+      node,
+      format!("{} is outside this run's artifacts", path.display()),
+    ))
+  }
+}
+
+/// The run's artifact root as seen from `node`'s artifact directory, and
+/// a fresh scratch directory under the latter (removed by the caller).
+async fn media_workdirs(
+  node: &str,
+  prefix: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), YanshiError> {
+  let dir = crate::common::artifacts::artifact_dir(node);
+  let root = dir
+    .parent()
+    .and_then(std::path::Path::parent)
+    .map(std::path::Path::to_path_buf)
+    .ok_or_else(|| input_error(node, "no artifact root"))?;
+  let workdir = dir.join(format!(".{prefix}-{}", uuid::Uuid::new_v4()));
+  tokio::fs::create_dir_all(&workdir)
+    .await
+    .map_err(|e| input_error(node, format!("cannot create {}: {e}", workdir.display())))?;
+  Ok((root, workdir))
+}
+
+fn media_tool(node: &str, name: &str) -> Result<std::path::PathBuf, YanshiError> {
+  crate::common::sandboxed::find_tool(name).ok_or_else(|| YanshiError::NodeExecutionFailed {
+    message: format!("{node}: {name} is not installed (`yanshi doctor`)"),
+  })
+}
+
+/// Run an ffmpeg-family `program` under the OS sandbox: read access to
+/// the run's artifact `root`, writes confined to `workdir`.
+async fn run_media_tool(
+  node: &str,
+  program: &std::path::Path,
+  workdir: &std::path::Path,
+  root: &std::path::Path,
+  args: Vec<std::ffi::OsString>,
+) -> Result<std::process::Output, YanshiError> {
+  use crate::common::sandboxed;
+  let output = sandboxed::run(sandboxed::SandboxedRun {
+    node,
+    program: program.to_path_buf(),
+    args,
+    workdir,
+    read_paths: vec![root.to_path_buf()],
+    write_paths: Vec::new(),
+    env: Vec::new(),
+    timeout: std::time::Duration::from_secs(600),
+  })
+  .await?;
+  if !output.status.success() {
+    let name = program
+      .file_name()
+      .map(|n| n.to_string_lossy().into_owned())
+      .unwrap_or_default();
+    return Err(YanshiError::NodeExecutionFailed {
+      message: format!(
+        "{node}: {name} exited with {}: {}",
+        output.status,
+        sandboxed::output_tail(&output, 12)
+      ),
+    });
+  }
+  Ok(output)
+}
+
+fn ffmpeg_args(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+  let mut full: Vec<std::ffi::OsString> =
+    ["-hide_banner", "-nostdin", "-y"].map(Into::into).to_vec();
+  full.extend(args);
+  full
+}
+
 impl RenderAudioNode {
   fn clip_paths(&self, inputs: &AsyncNodeInputs) -> Result<Vec<std::path::PathBuf>, YanshiError> {
     let raw: Vec<std::path::PathBuf> = match inputs.get("clips") {
       Some(FlowValue::Json(Value::Array(items))) => items
         .iter()
-        .map(|item| match item {
-          Value::String(path) => Ok(std::path::PathBuf::from(path)),
-          Value::Object(file) => file
-            .get("path")
-            .and_then(Value::as_str)
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| input_error(&self.id, "each clip needs a path")),
-          other => Err(input_error(&self.id, format!("clip {other} is not a path"))),
-        })
+        .map(|item| json_path(&self.id, item, "clip"))
         .collect::<Result<_, _>>()?,
       Some(FlowValue::File { path, .. }) => vec![path.clone()],
       _ => {
@@ -894,24 +991,9 @@ impl RenderAudioNode {
     if raw.is_empty() {
       return Err(input_error(&self.id, "'clips' is empty"));
     }
-    let root = yanshi_core::run_context::current_artifact_root()
-      .ok_or_else(|| input_error(&self.id, "render_audio runs only inside a workflow run"))?;
-    let root = root.canonicalize().unwrap_or(root);
     raw
-      .into_iter()
-      .map(|clip| {
-        let resolved = clip
-          .canonicalize()
-          .map_err(|e| input_error(&self.id, format!("clip {}: {e}", clip.display())))?;
-        if resolved.starts_with(&root) {
-          Ok(resolved)
-        } else {
-          Err(input_error(
-            &self.id,
-            format!("clip {} is outside this run's artifacts", clip.display()),
-          ))
-        }
-      })
+      .iter()
+      .map(|clip| inside_artifact_root(&self.id, clip))
       .collect()
   }
 
@@ -922,32 +1004,7 @@ impl RenderAudioNode {
     root: &std::path::Path,
     args: Vec<std::ffi::OsString>,
   ) -> Result<std::process::Output, YanshiError> {
-    use crate::common::sandboxed;
-    let mut full: Vec<std::ffi::OsString> =
-      ["-hide_banner", "-nostdin", "-y"].map(Into::into).to_vec();
-    full.extend(args);
-    let output = sandboxed::run(sandboxed::SandboxedRun {
-      node: &self.id,
-      program: ffmpeg.to_path_buf(),
-      args: full,
-      workdir,
-      read_paths: vec![root.to_path_buf()],
-      write_paths: Vec::new(),
-      env: Vec::new(),
-      timeout: std::time::Duration::from_secs(600),
-    })
-    .await?;
-    if !output.status.success() {
-      return Err(YanshiError::NodeExecutionFailed {
-        message: format!(
-          "{}: ffmpeg exited with {}: {}",
-          self.id,
-          output.status,
-          sandboxed::output_tail(&output, 12)
-        ),
-      });
-    }
-    Ok(output)
+    run_media_tool(&self.id, ffmpeg, workdir, root, ffmpeg_args(args)).await
   }
 }
 
@@ -966,24 +1023,8 @@ impl AsyncNode for RenderAudioNode {
       Some(FlowValue::Json(Value::Number(n))) => n.as_f64().unwrap_or(-16.0),
       _ => -16.0,
     };
-    let ffmpeg = crate::common::sandboxed::find_tool("ffmpeg").ok_or_else(|| {
-      YanshiError::NodeExecutionFailed {
-        message: format!("{}: ffmpeg is not installed (`yanshi doctor`)", self.id),
-      }
-    })?;
-    let root = crate::common::artifacts::artifact_dir(&self.id)
-      .parent()
-      .and_then(std::path::Path::parent)
-      .map(std::path::Path::to_path_buf)
-      .ok_or_else(|| input_error(&self.id, "no artifact root"))?;
-    let workdir = crate::common::artifacts::artifact_dir(&self.id)
-      .join(format!(".audio-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&workdir).await.map_err(|e| {
-      input_error(
-        &self.id,
-        format!("cannot create {}: {e}", workdir.display()),
-      )
-    })?;
+    let ffmpeg = media_tool(&self.id, "ffmpeg")?;
+    let (root, workdir) = media_workdirs(&self.id, "audio").await?;
 
     let produced = async {
       // 1. Join, re-encoding to one PCM stream.
@@ -1069,6 +1110,334 @@ impl AsyncNode for RenderAudioNode {
     outputs.insert(
       format!("{}_lufs", self.id),
       FlowValue::Json(lufs.map_or(Value::Null, |v| serde_json::json!(v))),
+    );
+    Ok(outputs)
+  }
+}
+
+// ── render_video (external: ffmpeg) ────────────────────────────────────
+
+/// `render_video` (Y6.4): a narrated slideshow. Input `scenes`, in order:
+/// `[{image | video, audio, caption?}]`, each a file of this run. A scene
+/// shows its still `image` (or loops its `video` clip) for exactly as
+/// long as its `audio` plays. `width` × `height` (default 1280 × 720,
+/// even numbers) letterbox every picture. Captions become a soft
+/// subtitle track (`mov_text`, toggled in the player; burning in would
+/// need ffmpeg built with libass) and a separate `.srt`.
+///
+/// Outputs `<id>_output` (MP4), `<id>_subtitles` (SRT, when any scene
+/// has a caption) and `<id>_seconds`. Inputs must be inside the run's
+/// artifact root, and ffmpeg / ffprobe run sandboxed, as for
+/// `render_audio`.
+pub struct RenderVideoNode {
+  id: String,
+}
+
+impl RenderVideoNode {
+  pub fn new(id: impl Into<String>) -> Self {
+    Self { id: id.into() }
+  }
+}
+
+struct Scene {
+  picture: std::path::PathBuf,
+  moving: bool,
+  audio: std::path::PathBuf,
+  caption: String,
+}
+
+const VIDEO_FPS: u32 = 25;
+
+/// `HH:MM:SS,mmm`.
+fn srt_time(seconds: f64) -> String {
+  let ms = (seconds.max(0.0) * 1000.0).round() as u64;
+  format!(
+    "{:02}:{:02}:{:02},{:03}",
+    ms / 3_600_000,
+    ms / 60_000 % 60,
+    ms / 1000 % 60,
+    ms % 1000
+  )
+}
+
+/// Split a caption into sentences (Latin and CJK end marks), so one
+/// long narration becomes several short cues.
+fn caption_sentences(caption: &str) -> Vec<String> {
+  let chars: Vec<char> = caption.chars().collect();
+  let mut out = Vec::new();
+  let mut current = String::new();
+  for (i, &c) in chars.iter().enumerate() {
+    current.push(c);
+    let cjk_end = matches!(c, '。' | '！' | '？' | '；');
+    // `.!?` ends a sentence only before whitespace and a word that does
+    // not start lowercase or with a digit, so "e.g. 3.5 m" stays whole.
+    let latin_end = matches!(c, '.' | '!' | '?')
+      && match chars.get(i + 1) {
+        None => true,
+        Some(next) if next.is_whitespace() => chars[i + 1..]
+          .iter()
+          .find(|n| !n.is_whitespace())
+          .is_none_or(|n| !(n.is_lowercase() || n.is_ascii_digit())),
+        Some(_) => false,
+      };
+    if cjk_end || latin_end {
+      let sentence = current.trim().to_string();
+      if !sentence.is_empty() {
+        out.push(sentence);
+      }
+      current.clear();
+    }
+  }
+  let rest = current.trim();
+  if !rest.is_empty() {
+    out.push(rest.to_string());
+  }
+  out
+}
+
+/// SRT for scenes of the given durations: each caption's sentences
+/// share its scene's time in proportion to their length.
+fn build_srt(captions: &[&str], durations: &[f64]) -> String {
+  let mut srt = String::new();
+  let mut cue = 1;
+  let mut start = 0.0;
+  for (caption, duration) in captions.iter().zip(durations) {
+    let sentences = caption_sentences(caption);
+    let total: usize = sentences.iter().map(|s| s.chars().count()).sum();
+    let mut t = start;
+    for sentence in &sentences {
+      let share = duration * sentence.chars().count() as f64 / total.max(1) as f64;
+      srt.push_str(&format!(
+        "{cue}\n{} --> {}\n{sentence}\n\n",
+        srt_time(t),
+        srt_time(t + share)
+      ));
+      cue += 1;
+      t += share;
+    }
+    start += duration;
+  }
+  srt
+}
+
+impl RenderVideoNode {
+  fn scenes(&self, inputs: &AsyncNodeInputs) -> Result<Vec<Scene>, YanshiError> {
+    let items = match inputs.get("scenes") {
+      Some(FlowValue::Json(Value::Array(items))) if !items.is_empty() => items,
+      _ => {
+        return Err(input_error(
+          &self.id,
+          "missing input 'scenes' (a non-empty array of {image | video, audio, caption})",
+        ));
+      }
+    };
+    items
+      .iter()
+      .enumerate()
+      .map(|(i, item)| {
+        let (picture, moving) = match (item.get("image"), item.get("video")) {
+          (_, Some(video)) if !video.is_null() => (video, true),
+          (Some(image), _) => (image, false),
+          _ => {
+            return Err(input_error(
+              &self.id,
+              format!("scene {i} needs an image or a video"),
+            ));
+          }
+        };
+        let audio = item
+          .get("audio")
+          .ok_or_else(|| input_error(&self.id, format!("scene {i} needs audio")))?;
+        Ok(Scene {
+          picture: inside_artifact_root(&self.id, &json_path(&self.id, picture, "picture")?)?,
+          moving,
+          audio: inside_artifact_root(&self.id, &json_path(&self.id, audio, "audio")?)?,
+          caption: item
+            .get("caption")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        })
+      })
+      .collect()
+  }
+
+  fn dimension(
+    &self,
+    inputs: &AsyncNodeInputs,
+    key: &str,
+    default: u32,
+  ) -> Result<u32, YanshiError> {
+    let value = match inputs.get(key) {
+      Some(FlowValue::Json(Value::Number(n))) => n
+        .as_u64()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(|| input_error(&self.id, format!("'{key}' must be a positive integer")))?,
+      _ => default,
+    };
+    if !(16..=4096).contains(&value) || value % 2 != 0 {
+      return Err(input_error(
+        &self.id,
+        format!("'{key}' must be an even number of pixels in 16..=4096"),
+      ));
+    }
+    Ok(value)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for RenderVideoNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let scenes = self.scenes(inputs)?;
+    let width = self.dimension(inputs, "width", 1280)?;
+    let height = self.dimension(inputs, "height", 720)?;
+    let ffmpeg = media_tool(&self.id, "ffmpeg")?;
+    let ffprobe = media_tool(&self.id, "ffprobe")?;
+    let (root, workdir) = media_workdirs(&self.id, "video").await?;
+
+    let produced = async {
+      // 1. Each scene's length is its narration's.
+      let mut durations = Vec::with_capacity(scenes.len());
+      for scene in &scenes {
+        let probe = run_media_tool(
+          &self.id,
+          &ffprobe,
+          &workdir,
+          &root,
+          vec![
+            "-v".into(),
+            "error".into(),
+            "-show_entries".into(),
+            "format=duration".into(),
+            "-of".into(),
+            "csv=p=0".into(),
+            scene.audio.clone().into(),
+          ],
+        )
+        .await?;
+        let seconds = String::from_utf8_lossy(&probe.stdout)
+          .trim()
+          .parse::<f64>()
+          .ok()
+          .filter(|s| s.is_finite() && *s > 0.0)
+          .ok_or_else(|| {
+            input_error(
+              &self.id,
+              format!("{} has no measurable duration", scene.audio.display()),
+            )
+          })?;
+        durations.push(seconds);
+      }
+
+      // 2. One uniformly encoded segment per scene, so step 3 can join
+      // them without re-encoding.
+      let fit = format!(
+        "scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={VIDEO_FPS},format=yuv420p"
+      );
+      let mut list = String::new();
+      for (i, (scene, seconds)) in scenes.iter().zip(&durations).enumerate() {
+        let segment = workdir.join(format!("scene-{i}.mp4"));
+        let mut args: Vec<std::ffi::OsString> = if scene.moving {
+          vec!["-stream_loop".into(), "-1".into()]
+        } else {
+          vec!["-loop".into(), "1".into()]
+        };
+        args.extend([
+          "-i".into(),
+          scene.picture.clone().into(),
+          "-i".into(),
+          scene.audio.clone().into(),
+          "-map".into(),
+          "0:v:0".into(),
+          "-map".into(),
+          "1:a:0".into(),
+          "-vf".into(),
+          fit.clone().into(),
+          "-c:v".into(),
+          "libx264".into(),
+          "-preset".into(),
+          "veryfast".into(),
+          "-c:a".into(),
+          "aac".into(),
+          "-b:a".into(),
+          "160k".into(),
+          "-ar".into(),
+          "44100".into(),
+          "-ac".into(),
+          "2".into(),
+          "-t".into(),
+          format!("{seconds:.3}").into(),
+          segment.clone().into(),
+        ]);
+        run_media_tool(&self.id, &ffmpeg, &workdir, &root, ffmpeg_args(args)).await?;
+        list.push_str(&format!("file 'scene-{i}.mp4'\n"));
+      }
+      let list_path = workdir.join("scenes.txt");
+      tokio::fs::write(&list_path, list)
+        .await
+        .map_err(|e| input_error(&self.id, format!("cannot write the scene list: {e}")))?;
+
+      // 3. Join; 4. add the subtitle track when there are captions.
+      let captions: Vec<&str> = scenes.iter().map(|s| s.caption.as_str()).collect();
+      let srt = if captions.iter().any(|c| !c.is_empty()) {
+        Some(build_srt(&captions, &durations))
+      } else {
+        None
+      };
+      let out = workdir.join("out.mp4");
+      let mut join: Vec<std::ffi::OsString> = vec![
+        "-f".into(),
+        "concat".into(),
+        "-safe".into(),
+        "0".into(),
+        "-i".into(),
+        list_path.into(),
+      ];
+      if let Some(srt) = &srt {
+        let srt_path = workdir.join("captions.srt");
+        tokio::fs::write(&srt_path, srt)
+          .await
+          .map_err(|e| input_error(&self.id, format!("cannot write the captions: {e}")))?;
+        join.extend([
+          "-i".into(),
+          srt_path.into(),
+          "-map".into(),
+          "0:v".into(),
+          "-map".into(),
+          "0:a".into(),
+          "-map".into(),
+          "1:0".into(),
+          "-c:s".into(),
+          "mov_text".into(),
+        ]);
+      }
+      join.extend(["-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart"].map(Into::into));
+      join.push(out.clone().into());
+      run_media_tool(&self.id, &ffmpeg, &workdir, &root, ffmpeg_args(join)).await?;
+      let bytes = tokio::fs::read(&out)
+        .await
+        .map_err(|e| YanshiError::NodeExecutionFailed {
+          message: format!("{}: ffmpeg wrote no output: {e}", self.id),
+        })?;
+      Ok::<_, YanshiError>((bytes, srt, durations.iter().sum::<f64>()))
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&workdir).await;
+    let (bytes, srt, seconds) = produced?;
+    let mut outputs = output(
+      &self.id,
+      write_artifact(&self.id, &bytes, "video/mp4").await?,
+    );
+    if let Some(srt) = srt {
+      outputs.insert(
+        format!("{}_subtitles", self.id),
+        write_artifact(&self.id, srt.as_bytes(), "application/x-subrip").await?,
+      );
+    }
+    outputs.insert(
+      format!("{}_seconds", self.id),
+      FlowValue::Json(serde_json::json!((seconds * 1000.0).round() / 1000.0)),
     );
     Ok(outputs)
   }
@@ -1717,5 +2086,138 @@ mod tests {
       "no back"
     );
     assert!(study_page("flashcards", "t", &[]).is_err(), "empty");
+  }
+
+  #[test]
+  fn captions_split_into_timed_sentence_cues() {
+    assert_eq!(
+      caption_sentences("Tides rise. They fall again! 潮起。潮落"),
+      vec!["Tides rise.", "They fall again!", "潮起。", "潮落"]
+    );
+    assert_eq!(caption_sentences("e.g. 3.5 m"), vec!["e.g. 3.5 m"]);
+    let srt = build_srt(&["One. Two two.", "", "Three."], &[3.0, 1.0, 2.0]);
+    assert_eq!(
+      srt,
+      "1\n00:00:00,000 --> 00:00:01,000\nOne.\n\n2\n00:00:01,000 --> 00:00:03,000\nTwo two.\n\n3\n00:00:04,000 --> 00:00:06,000\nThree.\n\n"
+    );
+    assert_eq!(srt_time(3725.5), "01:02:05,500");
+  }
+
+  /// Needs ffmpeg: `cargo test -p yanshi-nodes --lib render_video -- --ignored`.
+  #[tokio::test]
+  #[ignore = "needs ffmpeg"]
+  async fn render_video_joins_scenes_with_a_subtitle_track() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    let dir = root.join("artifacts").join("scene");
+    std::fs::create_dir_all(&dir).expect("dir");
+    let make = |args: &[&str], out: &str| {
+      let status = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(args)
+        .arg(dir.join(out))
+        .status()
+        .expect("ffmpeg");
+      assert!(status.success(), "{out}");
+    };
+    make(
+      &[
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=red:s=301x200:d=1",
+        "-frames:v",
+        "1",
+      ],
+      "a.png",
+    );
+    make(&["-f", "lavfi", "-i", "testsrc=s=320x240:d=0.5"], "b.mp4");
+    make(
+      &["-f", "lavfi", "-i", "sine=frequency=440:duration=1.2"],
+      "a.wav",
+    );
+    make(
+      &["-f", "lavfi", "-i", "sine=frequency=660:duration=0.8"],
+      "b.wav",
+    );
+    let scenes = json!([
+      {"image": dir.join("a.png"), "audio": dir.join("a.wav"), "caption": "A red card. It stays."},
+      {"video": dir.join("b.mp4"), "audio": dir.join("b.wav"), "caption": "A test pattern."}
+    ]);
+    let outputs = run_context::with_artifact_root(
+      root.clone(),
+      RenderVideoNode::new("film").execute(&inputs(&[
+        ("scenes", scenes),
+        ("width", json!(640)),
+        ("height", json!(360)),
+      ])),
+    )
+    .await
+    .expect("renders");
+    let FlowValue::File { path, mime_type } = &outputs["film_output"] else {
+      panic!("expected File");
+    };
+    assert_eq!(mime_type.as_deref(), Some("video/mp4"));
+    let FlowValue::Json(seconds) = &outputs["film_seconds"] else {
+      panic!("seconds");
+    };
+    assert!(
+      (seconds.as_f64().expect("number") - 2.0).abs() < 0.05,
+      "{seconds}"
+    );
+    let probe = std::process::Command::new("ffprobe")
+      .args([
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=codec_type,width,height",
+        "-of",
+        "csv=p=0",
+      ])
+      .arg(path)
+      .output()
+      .expect("ffprobe");
+    let streams = String::from_utf8_lossy(&probe.stdout);
+    assert!(streams.contains("video,640,360"), "{streams}");
+    assert!(
+      streams.contains("audio") && streams.contains("subtitle"),
+      "{streams}"
+    );
+    let FlowValue::File { path: srt, .. } = &outputs["film_subtitles"] else {
+      panic!("srt");
+    };
+    let srt = std::fs::read_to_string(srt).expect("srt");
+    assert!(
+      srt.contains("00:00:01,200 --> 00:00:02,000\nA test pattern."),
+      "{srt}"
+    );
+
+    // Odd sizes and pictures outside the run are refused.
+    let bad = inputs(&[
+      (
+        "scenes",
+        json!([{"image": dir.join("a.png"), "audio": dir.join("a.wav")}]),
+      ),
+      ("width", json!(641)),
+    ]);
+    let err =
+      run_context::with_artifact_root(root.clone(), RenderVideoNode::new("film").execute(&bad))
+        .await
+        .expect_err("odd width");
+    assert!(err.to_string().contains("even"), "{err}");
+    let outside = tempfile::NamedTempFile::new().expect("tmp");
+    let err = run_context::with_artifact_root(
+      root,
+      RenderVideoNode::new("film").execute(&inputs(&[(
+        "scenes",
+        json!([{"image": outside.path(), "audio": dir.join("a.wav")}]),
+      )])),
+    )
+    .await
+    .expect_err("outside");
+    assert!(
+      err.to_string().contains("outside this run's artifacts"),
+      "{err}"
+    );
   }
 }

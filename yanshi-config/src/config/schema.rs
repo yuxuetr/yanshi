@@ -473,7 +473,8 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("save_to_file", ParamType::String),
     ]),
     "text_to_image" => Some(vec![
-      ParamSpec::required("model", ParamType::String),
+      // Y6.4: `model` / `size` may come from `input_mapping` (a Map item).
+      ParamSpec::required_input("model", ParamType::String),
       ParamSpec::required_input("prompt", ParamType::String),
       ParamSpec::optional("negative_prompt", ParamType::String),
       ParamSpec::optional("size", ParamType::String),
@@ -503,6 +504,11 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
     "render_mindmap" => Some(vec![
       ParamSpec::required_input("tree", ParamType::Any),
       ParamSpec::optional("format", ParamType::String),
+    ]),
+    "render_video" => Some(vec![
+      ParamSpec::required_input("scenes", ParamType::Any),
+      ParamSpec::optional("width", ParamType::Integer),
+      ParamSpec::optional("height", ParamType::Integer),
     ]),
     "render_study" => Some(vec![
       ParamSpec::required("kind", ParamType::String),

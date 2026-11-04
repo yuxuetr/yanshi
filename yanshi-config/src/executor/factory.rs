@@ -217,6 +217,10 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     "render_mindmap" => Ok(NodeType::Standard(Arc::new(
       yanshi_nodes::nodes::render::RenderMindmapNode::new(&node_def.id),
     ))),
+    // Y6.4: a narrated slideshow, ffmpeg under the OS sandbox.
+    "render_video" => Ok(NodeType::Standard(Arc::new(
+      yanshi_nodes::nodes::render::RenderVideoNode::new(&node_def.id),
+    ))),
     // Y6.2: flashcards / quiz → one self-contained HTML page.
     "render_study" => Ok(NodeType::Standard(Arc::new(
       yanshi_nodes::nodes::render::RenderStudyNode::new(&node_def.id),

@@ -223,8 +223,9 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
         "fs.write".to_string(),
       ],
     ),
-    // Y4.3: runs ffmpeg under the OS sandbox over this run's artifacts.
-    "render_audio" => (
+    // Y4.3 / Y6.4: run ffmpeg under the OS sandbox over this run's
+    // artifacts.
+    "render_audio" | "render_video" => (
       PermissionCategory::Exec,
       vec!["exec".to_string(), "fs.write".to_string()],
     ),

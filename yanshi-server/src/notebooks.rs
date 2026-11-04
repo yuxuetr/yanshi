@@ -477,6 +477,10 @@ const GENERATORS: &[(&str, &str)] = &[
     "infographic",
     include_str!("../../examples/generators/infographic.yml"),
   ),
+  (
+    "video_overview",
+    include_str!("../../examples/generators/video_overview.yml"),
+  ),
 ];
 
 /// How much notebook text a generator gets, in characters (the
