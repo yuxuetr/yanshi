@@ -157,3 +157,21 @@ models:
     type: asr
     accepts: [audio]
     base_url: null
+  # Y6.6: image-to-image through /images/edits (no mask). A registry name has one
+  # type, so this is a separate entry from gpt-image-1 (image_edit).
+  gpt-image-1-mini:
+    vendor: openai
+    type: image_to_image
+    accepts: [text, image]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null

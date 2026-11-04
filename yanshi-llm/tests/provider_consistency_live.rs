@@ -2220,3 +2220,90 @@ async fn kling_text_to_video_live() {
   )
   .await;
 }
+
+// ── Y6.6: image-to-image, one call per vendor (YANSHI_LIVE_IMAGE_TESTS) ──
+
+/// A stable, freely licensed photo (Wikimedia Commons) large enough for
+/// every vendor's minimum input size.
+const LIVE_SOURCE_IMAGE: &str =
+  "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg";
+
+async fn live_image2image(
+  vendor: &str,
+  key_env: &str,
+  provider: impl FnOnce(&str) -> Box<dyn yanshi_llm::providers::modality::Image2ImageProvider>,
+  model: &str,
+) {
+  if !prepare_live_provider(vendor, LiveCapability::Image).await {
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&[key_env]) else {
+    eprintln!("[live] {vendor} image-to-image: skipped ({key_env} not set)");
+    return;
+  };
+  let request = yanshi_llm::providers::modality::Image2ImageRequest {
+    model: model.to_string(),
+    prompt: "Turn this photo into a watercolour painting".to_string(),
+    source_url: LIVE_SOURCE_IMAGE.to_string(),
+    source_weight: 0.6,
+    size: None,
+    n: Some(1),
+    response_format: None,
+    seed: None,
+    steps: None,
+    cfg_scale: None,
+  };
+  let response = tokio::time::timeout(
+    Duration::from_secs(180),
+    provider(&api_key).transform(request),
+  )
+  .await
+  .unwrap_or_else(|_| panic!("{vendor} image-to-image timed out"))
+  .unwrap_or_else(|e| panic!("{vendor} image-to-image failed: {e}"));
+  let first = response.images.first().expect("one image");
+  assert!(
+    first.url.as_deref().is_some_and(|u| u.starts_with("http"))
+      || first.b64_json.as_deref().is_some_and(|b| !b.is_empty()),
+    "{vendor}: no image in the response"
+  );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_image_to_image_live() {
+  live_image2image(
+    "openai",
+    "OPENAI_API_KEY",
+    |key| {
+      Box::new(
+        yanshi_llm::providers::openai_images::OpenAIImageProvider::with_client(
+          no_proxy_client(),
+          key,
+          None,
+        )
+        .expect("provider"),
+      )
+    },
+    "gpt-image-1-mini",
+  )
+  .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashscope_wan_image_to_image_live() {
+  live_image2image(
+    "dashscope",
+    "DASHSCOPE_API_KEY",
+    |key| {
+      Box::new(
+        yanshi_llm::providers::dashscope_media::DashScopeMediaProvider::with_client(
+          no_proxy_client(),
+          key,
+          None,
+        )
+        .expect("provider"),
+      )
+    },
+    "wan2.5-i2i-preview",
+  )
+  .await;
+}

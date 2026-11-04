@@ -1418,3 +1418,20 @@ models:
     supports_tools: false
     supports_multimodal: false
     response_format: null
+  # Y6.6: Wan image-to-image (source as URL or data URI; PNG out).
+  wan2.5-i2i-preview:
+    vendor: dashscope
+    type: image_to_image
+    accepts: [text, image]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null

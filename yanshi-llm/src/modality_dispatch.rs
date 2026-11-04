@@ -154,7 +154,20 @@ fn build_glm_text2image(
 fn build_minimax_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
   Ok(Box::new(MiniMaxTtsProvider::new(api_key, base_url)?))
 }
-// Y6.6: three more text-to-video vendors (async submit + poll jobs).
+// Y6.6: image-to-image for OpenAI (`/images/edits`, no mask) and
+// DashScope (Wan), and three more text-to-video vendors.
+fn build_openai_image2image(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Image2ImageProvider>> {
+  Ok(Box::new(OpenAIImageProvider::new(api_key, base_url)?))
+}
+fn build_dashscope_image2image(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Image2ImageProvider>> {
+  Ok(Box::new(DashScopeMediaProvider::new(api_key, base_url)?))
+}
 fn build_dashscope_text2video(
   api_key: &str,
   base_url: Option<String>,
@@ -234,6 +247,8 @@ const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
 const IMAGE2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Image2ImageProvider>)] = &[
   ("stepfun", build_stepfun_image2image),
   ("step", build_stepfun_image2image),
+  ("openai", build_openai_image2image),
+  ("dashscope", build_dashscope_image2image),
   ("mock", build_mock_image2image),
 ];
 const IMAGE_EDIT_PROVIDERS: &[(&str, Ctor<dyn ImageEditProvider>)] = &[
@@ -441,13 +456,13 @@ mod tests {
 
   #[test]
   fn unsupported_vendor_message_lists_vendors_other_implemented_modalities() {
-    // openai implements ASR/TTS/text-to-image/image-edit but not
-    // image-to-image: the error should name the ones it does implement
-    // as a hint that the vendor isn't wholesale unsupported.
-    let err = unsupported_vendor::<()>("openai", "image-to-image").unwrap_err();
+    // openai implements every modality but text-to-video: the error
+    // should name the ones it does implement as a hint that the vendor
+    // isn't wholesale unsupported.
+    let err = unsupported_vendor::<()>("openai", "text-to-video").unwrap_err();
     let msg = err.to_string();
     assert!(
-      msg.contains("implements: ASR, TTS, text-to-image, image-edit"),
+      msg.contains("implements: ASR, TTS, text-to-image, image-to-image, image-edit"),
       "should list openai's existing modality support: {msg}"
     );
   }
@@ -478,10 +493,10 @@ mod tests {
   }
 
   #[test]
-  fn implemented_modalities_for_openai_covers_asr_tts_text_to_image_and_image_edit() {
+  fn implemented_modalities_for_openai_covers_everything_but_video() {
     assert_eq!(
       implemented_modalities_for("openai"),
-      vec!["ASR", "TTS", "text-to-image", "image-edit"]
+      vec!["ASR", "TTS", "text-to-image", "image-to-image", "image-edit"]
     );
   }
 

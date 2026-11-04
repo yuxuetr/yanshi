@@ -18,8 +18,8 @@
 use crate::{
   LLMError, Result,
   providers::modality::{
-    GeneratedImage, ImageEditProvider, ImageEditRequest, ImageGenerationResponse,
-    Text2ImageProvider, Text2ImageRequest,
+    GeneratedImage, Image2ImageProvider, Image2ImageRequest, ImageEditProvider, ImageEditRequest,
+    ImageGenerationResponse, Text2ImageProvider, Text2ImageRequest,
   },
 };
 use async_trait::async_trait;
@@ -221,6 +221,43 @@ impl ImageEditProvider for OpenAIImageProvider {
     }
 
     parse_image_response(&response.text().await?)
+  }
+}
+
+/// Largest source image accepted for `/images/edits` (OpenAI's limit for
+/// GPT image models is 50 MB per image).
+const MAX_SOURCE_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Y6.6: image-to-image is `/images/edits` with the source image and no
+/// mask (the whole image may change). `source_weight`, `steps` and
+/// `cfg_scale` have no OpenAI counterpart and are not sent.
+#[async_trait]
+impl Image2ImageProvider for OpenAIImageProvider {
+  fn name(&self) -> &str {
+    "openai"
+  }
+
+  async fn transform(&self, request: Image2ImageRequest) -> Result<ImageGenerationResponse> {
+    let (image_data, mime) =
+      super::modality::source_image_bytes(&request.source_url, MAX_SOURCE_IMAGE_BYTES).await?;
+    let extension = match mime.as_str() {
+      "image/jpeg" => "jpg",
+      "image/webp" => "webp",
+      _ => "png",
+    };
+    self
+      .edit(ImageEditRequest {
+        model: request.model,
+        image_data,
+        image_filename: format!("source.{extension}"),
+        prompt: request.prompt,
+        seed: None,
+        steps: None,
+        cfg_scale: None,
+        size: request.size,
+        response_format: request.response_format,
+      })
+      .await
   }
 }
 

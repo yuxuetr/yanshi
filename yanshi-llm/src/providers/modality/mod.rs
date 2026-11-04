@@ -177,3 +177,47 @@ pub struct GeneratedImage {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub seed: Option<i32>,
 }
+
+/// Y6.6: the bytes and MIME type of an image given as a `data:` URI or an
+/// HTTP(S) URL, for vendors that take image bytes rather than a URL
+/// (OpenAI `/images/edits`). URLs are fetched with a `max_bytes` cap.
+pub async fn source_image_bytes(source: &str, max_bytes: u64) -> crate::Result<(Vec<u8>, String)> {
+  use base64::{Engine as _, engine::general_purpose::STANDARD};
+  if let Some(rest) = source.strip_prefix("data:") {
+    let (meta, data) =
+      rest
+        .split_once(',')
+        .ok_or_else(|| crate::LLMError::ResponseParsingError {
+          message: "source image data URI has no ','".to_string(),
+        })?;
+    let mime = meta.split(';').next().unwrap_or_default();
+    if !meta.ends_with(";base64") || !mime.starts_with("image/") {
+      return Err(crate::LLMError::ResponseParsingError {
+        message: format!("source image data URI must be base64 image data, got '{meta}'"),
+      });
+    }
+    let bytes =
+      STANDARD
+        .decode(data.trim())
+        .map_err(|e| crate::LLMError::ResponseParsingError {
+          message: format!("source image data URI is not valid base64: {e}"),
+        })?;
+    if bytes.len() as u64 > max_bytes {
+      return Err(crate::LLMError::ResponseParsingError {
+        message: format!("source image exceeds {max_bytes} bytes"),
+      });
+    }
+    return Ok((bytes, mime.to_string()));
+  }
+  if source.starts_with("http://") || source.starts_with("https://") {
+    let (bytes, content_type) = download_with_cap_default(source, max_bytes).await?;
+    let mime = content_type
+      .and_then(|c| c.split(';').next().map(str::trim).map(str::to_string))
+      .filter(|c| c.starts_with("image/"))
+      .unwrap_or_else(|| "image/png".to_string());
+    return Ok((bytes, mime));
+  }
+  Err(crate::LLMError::ResponseParsingError {
+    message: "source image must be a data: URI or an http(s) URL".to_string(),
+  })
+}

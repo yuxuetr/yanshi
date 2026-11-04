@@ -116,7 +116,7 @@ impl AsyncNode for TTSNode {
 
     // P-LLM.3: route through the modality dispatcher. The registry
     // entry for `self.model` decides which vendor handles the call
-    // (today only StepFun; future vendors plug in transparently).
+    // (StepFun, OpenAI, Google, DashScope, MiniMax or the mock).
     let provider = Yanshi::tts(&model)
       .await
       .map_err(|e| YanshiError::ConfigurationError {

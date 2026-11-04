@@ -353,6 +353,15 @@ documented wire shape.
 | MiniMax | Hailuo (`MiniMax-Hailuo-2.3`, `-02`) | `POST /video_generation`, `GET /query/video_generation`, `GET /files/retrieve` → `file.download_url` |
 | Kling | `kling-v2-6`, `kling-v2-5-turbo`, `kling-v2-1-master` | `POST /v1/videos/text2video`, `GET …/{task_id}` → `data.task_result.videos[].url` |
 
+Image-to-image (Y6.6) adds OpenAI (`gpt-image-1-mini` through
+`/images/edits` with the source image and no mask) and DashScope
+(`wan2.5-i2i-preview`, async `image2image/image-synthesis`; the source
+goes as a URL or a data URI). Their live cases are
+`openai_image_to_image_live` and `dashscope_wan_image_to_image_live`
+under `YANSHI_LIVE_IMAGE_TESTS`; `tests/image2image_providers.rs` covers
+both offline. A registry name has one `type`, which is why the OpenAI
+entry is a separate model from `gpt-image-1` (`image_edit`).
+
 StepFun modality smoke tests are enabled by those gates:
 
 ```bash

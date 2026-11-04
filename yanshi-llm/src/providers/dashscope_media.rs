@@ -1,4 +1,5 @@
-//! DashScope text-to-image (Wan) + text-to-video (Wan, Y6.6) + TTS
+//! DashScope text-to-image, image-to-image and text-to-video (Wan; the
+//! last two Y6.6) + TTS
 //! (Qwen-TTS) provider.
 //!
 //! Unlike every other modality provider in this crate, DashScope's media
@@ -30,9 +31,9 @@
 //! them into a URL first, so this modality can't be implemented here.
 
 use super::modality::{
-  GeneratedImage, GeneratedVideo, ImageGenerationResponse, Text2ImageProvider, Text2ImageRequest,
-  Text2VideoProvider, Text2VideoRequest, TtsProvider, TtsRequest, TtsResponse,
-  VideoGenerationResponse, VideoGenerationStatus, VideoGenerationTask,
+  GeneratedImage, GeneratedVideo, Image2ImageProvider, Image2ImageRequest, ImageGenerationResponse,
+  Text2ImageProvider, Text2ImageRequest, Text2VideoProvider, Text2VideoRequest, TtsProvider,
+  TtsRequest, TtsResponse, VideoGenerationResponse, VideoGenerationStatus, VideoGenerationTask,
 };
 use crate::{LLMError, Result};
 use async_trait::async_trait;
@@ -157,7 +158,10 @@ struct TaskPollOutput {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TaskResult {
-  pub(crate) url: String,
+  /// Absent on an entry that failed while others succeeded (`code` /
+  /// `message` instead); such entries are skipped.
+  #[serde(default)]
+  pub(crate) url: Option<String>,
 }
 
 #[derive(Debug)]
@@ -407,20 +411,82 @@ impl Text2ImageProvider for DashScopeMediaProvider {
     let task_id = parse_task_submission_response(&response.text().await?)?;
     let results = self.poll_until_done(&task_id).await?;
 
-    let images = results
-      .into_iter()
-      .map(|result| GeneratedImage {
-        url: Some(result.url),
-        b64_json: None,
-        seed: None,
-      })
-      .collect();
+    images_from_results(results)
+  }
+}
 
-    Ok(ImageGenerationResponse {
-      created: 0,
-      images,
-      metadata: None,
+/// The successful images of a finished task; an error when none is.
+fn images_from_results(results: Vec<TaskResult>) -> Result<ImageGenerationResponse> {
+  let images: Vec<GeneratedImage> = results
+    .into_iter()
+    .filter_map(|result| result.url)
+    .map(|url| GeneratedImage {
+      url: Some(url),
+      b64_json: None,
+      seed: None,
     })
+    .collect();
+  if images.is_empty() {
+    return Err(LLMError::ResponseParsingError {
+      message: "DashScope task succeeded without any image".to_string(),
+    });
+  }
+  Ok(ImageGenerationResponse {
+    created: 0,
+    images,
+    metadata: None,
+  })
+}
+
+/// The Wan image-to-image (`wan2.5-i2i-preview`) request body. The source
+/// goes in `input.images` as given: DashScope takes a public URL or a
+/// `data:image/...;base64,` URI. `n` defaults to 1 (the API's default is
+/// 4, each billed); `size` `1024x1024` is sent as DashScope's `1024*1024`.
+pub(crate) fn image2image_request_body(request: &Image2ImageRequest) -> Value {
+  let mut parameters = serde_json::Map::new();
+  parameters.insert("n".to_string(), json!(request.n.unwrap_or(1)));
+  if let Some(size) = &request.size {
+    parameters.insert("size".to_string(), json!(size.replace('x', "*")));
+  }
+  if let Some(seed) = request.seed {
+    parameters.insert("seed".to_string(), json!(seed));
+  }
+  json!({
+    "model": request.model,
+    "input": { "prompt": request.prompt, "images": [request.source_url] },
+    "parameters": Value::Object(parameters),
+  })
+}
+
+#[async_trait]
+impl Image2ImageProvider for DashScopeMediaProvider {
+  fn name(&self) -> &str {
+    "dashscope"
+  }
+
+  async fn transform(&self, request: Image2ImageRequest) -> Result<ImageGenerationResponse> {
+    let url = format!(
+      "{}/api/v1/services/aigc/image2image/image-synthesis",
+      self.base_url
+    );
+    let response = self
+      .client
+      .post(&url)
+      .bearer_auth(&self.api_key)
+      .header("X-DashScope-Async", "enable")
+      .json(&image2image_request_body(&request))
+      .send()
+      .await?;
+    if !response.status().is_success() {
+      let status_code = response.status().as_u16();
+      let message = response.text().await.unwrap_or_default();
+      return Err(LLMError::HttpError {
+        status_code,
+        message,
+      });
+    }
+    let task_id = parse_task_submission_response(&response.text().await?)?;
+    images_from_results(self.poll_until_done(&task_id).await?)
   }
 }
 
@@ -560,7 +626,7 @@ mod tests {
     match parse_task_poll_response(&succeeded).unwrap() {
       TaskPollOutcome::Succeeded(results) => {
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].url, "https://example.com/img.png");
+        assert_eq!(results[0].url.as_deref(), Some("https://example.com/img.png"));
       }
       _ => panic!("expected Succeeded"),
     }
