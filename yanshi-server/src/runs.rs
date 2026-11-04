@@ -102,6 +102,22 @@ pub struct CreateRunRequest {
   /// `cost_limit_usd`, the tighter of the two applies. Must be > 0.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub cost_limit_usd: Option<f64>,
+  /// Y5.4: values for the workflow's declared `inputs` (T3.2's missing
+  /// per-run inputs). Undeclared names are a 400.
+  #[serde(default)]
+  pub inputs: serde_json::Map<String, serde_json::Value>,
+  /// Y5.4: model override for the workflow's llm / agent nodes, including
+  /// those inside map and while bodies.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub model: Option<String>,
+}
+
+/// Y5.4: a run started for a notebook; its registered artifacts are
+/// linked to the notebook under `kind` when it finishes.
+#[derive(Debug, Clone)]
+pub struct NotebookLink {
+  pub notebook_id: Uuid,
+  pub kind: String,
 }
 
 /// Body shape for `retention_overrides:` on `POST /v1/runs`
@@ -222,6 +238,12 @@ pub struct RunContext {
   /// Y2.4: continue this run from its checkpoint (`POST
   /// /v1/runs/{id}:resume`) instead of starting it fresh.
   pub resume: bool,
+  /// Y5.4: values for the workflow's declared inputs.
+  pub inputs: serde_json::Map<String, serde_json::Value>,
+  /// Y5.4: model override for llm / agent nodes.
+  pub model: Option<String>,
+  /// Y5.4: link the run's artifacts to this notebook when it finishes.
+  pub notebook: Option<NotebookLink>,
 }
 
 /// Postgres NOTIFY channel carrying cross-replica cancellation intents
@@ -675,14 +697,20 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
 
   let run_id = ctx.run_id.to_string();
   let flow_def = yanshi_config::executor::parse_workflow_definition(&ctx.workflow)?;
-  let mut flow = yanshi_config::executor::build_flow_from_definition(&flow_def, None)?;
+  let mut flow =
+    yanshi_config::executor::build_flow_from_definition(&flow_def, ctx.model.as_deref())?;
   // T3.2: the gateway doesn't accept ad-hoc per-run inputs yet (`--input`
   // isn't wired to `POST /v1/runs`), so `default`-filling is the only way
   // a server-submitted run can ever populate a declared input; a
   // `required` input with no `default` always fails the run here rather
   // than an in-flight node's `input_mapping` resolution failing later
   // with a far less direct error.
-  let mut initial_inputs = HashMap::new();
+  // Y5.4: request inputs first, then declared defaults for the rest.
+  let mut initial_inputs: HashMap<String, yanshi_core::value::FlowValue> = ctx
+    .inputs
+    .iter()
+    .map(|(k, v)| (k.clone(), yanshi_core::value::FlowValue::Json(v.clone())))
+    .collect();
   yanshi_config::executor::apply_declared_inputs(&flow_def, &mut initial_inputs)?;
   // The gateway always streams workflow events into Postgres + the SSE
   // broker. `YANSHI_TRACE_DIR` opts in to *additionally* writing a
@@ -792,6 +820,16 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
     &artifact_base,
   )
   .await?;
+  if let Some(link) = &ctx.notebook {
+    use yanshi_db::{ArtifactRepo as _, NotebookRepo as _};
+    for artifact in ctx.repos.artifacts.list_for_run(ctx.run_id).await? {
+      ctx
+        .repos
+        .notebooks
+        .attach_artifact(&ctx.tenant_id, link.notebook_id, artifact.id, &link.kind)
+        .await?;
+    }
+  }
 
   if let Some(error) = first_state_error(&state) {
     ctx
@@ -1432,6 +1470,15 @@ pub async fn submit_run(
   // the workflow's own sandbox settings are capped by the gateway policy.
   // Parse failures fall through to the executor's existing error path.
   if let Ok(flow_def) = yanshi_config::executor::parse_workflow_definition(&workflow) {
+    if let Some(unknown) = req
+      .inputs
+      .keys()
+      .find(|k| !flow_def.inputs.contains_key(*k))
+    {
+      return Err(ApiError::BadRequest(format!(
+        "input '{unknown}' is not declared by the workflow"
+      )));
+    }
     state
       .gateway_policy
       .check_workflow(&flow_def)
@@ -1492,6 +1539,54 @@ pub async fn submit_run(
   // inside one transaction serialized per tenant via an advisory lock,
   // so the combined count across every replica never exceeds the
   // configured limit.
+  let run = admit_and_dispatch(
+    &state,
+    executor,
+    tenant_id,
+    workflow,
+    RunOptions {
+      cost_limit_usd,
+      inputs: req.inputs,
+      model: req.model,
+      notebook: None,
+      events_retention_days,
+      artifacts_retention_days,
+    },
+  )
+  .await?;
+
+  Ok(Json(CreateRunResponse {
+    run_id: run.id,
+    status: "queued",
+  }))
+}
+
+/// Per-run options for [`admit_and_dispatch`].
+#[derive(Debug, Default)]
+pub(crate) struct RunOptions {
+  pub cost_limit_usd: Option<f64>,
+  pub inputs: serde_json::Map<String, serde_json::Value>,
+  pub model: Option<String>,
+  pub notebook: Option<NotebookLink>,
+  pub events_retention_days: Option<i32>,
+  pub artifacts_retention_days: Option<i32>,
+}
+
+/// Admission (the replica-local pre-check, then `create_if_admitted`'s
+/// cluster-wide count and rate window), the queued run row, and the
+/// background dispatch. Shared by `POST /v1/runs` and the notebook
+/// generate route.
+pub(crate) async fn admit_and_dispatch(
+  state: &AppState,
+  executor: Arc<dyn RunExecutor>,
+  tenant_id: String,
+  workflow: String,
+  options: RunOptions,
+) -> Result<Run, ApiError> {
+  // V3.4 / W4.2f: `try_admit` is a process-local pre-check only;
+  // `create_if_admitted` re-derives the count from `runs.status` and the
+  // rate window from Postgres, serialized per tenant, so the limit holds
+  // across replicas.
   let local_admission_guard = state
     .run_admission_registry
     .try_admit(&tenant_id)
@@ -1511,8 +1606,8 @@ pub async fn submit_run(
         status: RunStatus::Queued,
         run_dir: Some(run_dir.display().to_string()),
         tenant_id: tenant_id.clone(),
-        events_retention_days,
-        artifacts_retention_days,
+        events_retention_days: options.events_retention_days,
+        artifacts_retention_days: options.artifacts_retention_days,
       },
       state.run_admission_registry.max_concurrent_per_tenant() as i64,
       state.run_admission_registry.max_submissions_per_minute() as i64,
@@ -1537,23 +1632,22 @@ pub async fn submit_run(
   };
 
   dispatch_run(
-    &state,
+    state,
     executor,
     DispatchedRun {
       run_id,
       workflow,
       tenant_id,
       run_base_dir,
-      cost_limit_usd,
+      cost_limit_usd: options.cost_limit_usd,
       resume: false,
+      inputs: options.inputs,
+      model: options.model,
+      notebook: options.notebook,
     },
     local_admission_guard,
   );
-
-  Ok(Json(CreateRunResponse {
-    run_id: run.id,
-    status: "queued",
-  }))
+  Ok(run)
 }
 
 /// What [`dispatch_run`] needs to start (or resume) one run.
@@ -1564,6 +1658,9 @@ struct DispatchedRun {
   run_base_dir: PathBuf,
   cost_limit_usd: Option<f64>,
   resume: bool,
+  inputs: serde_json::Map<String, serde_json::Value>,
+  model: Option<String>,
+  notebook: Option<NotebookLink>,
 }
 
 /// Execute a run in the background so the HTTP request returns
@@ -1606,6 +1703,9 @@ fn dispatch_run<G: Send + 'static>(
         run_max_concurrency,
         cost_limit_usd: run.cost_limit_usd,
         resume: run.resume,
+        inputs: run.inputs,
+        model: run.model,
+        notebook: run.notebook,
       })
       .await;
     cancellation_registry.complete(run_id);
@@ -1703,6 +1803,9 @@ async fn resume_run(
       run_base_dir,
       cost_limit_usd: None,
       resume: true,
+      inputs: serde_json::Map::new(),
+      model: None,
+      notebook: None,
     },
     admission_guard,
   );

@@ -6,6 +6,8 @@
 //! GET  /v1/notebooks/{id}                                      → {notebook, sources}
 //! POST /v1/notebooks/{id}/sources         {kind, ...}          → source (pending; ingests in the background)
 //! GET  /v1/notebooks/{id}/search?q=&top_k=                     → {chunks}
+//! POST /v1/notebooks/{id}/generate        {kind, params, model} → {run_id, kind}
+//! GET  /v1/notebooks/{id}/artifacts                            → {artifacts}
 //! ```
 //!
 //! Ingestion: fetch (`url`, through the http tool's SSRF filter: the URL
@@ -445,6 +447,149 @@ pub async fn search_notebook(
   Ok(Json(json!({ "chunks": hits })))
 }
 
+// ── generate (Y5.4) ─────────────────────────────────────────────────────
+
+/// The generator catalogue (RFC §3), compiled in so the gateway serves
+/// the same templates the CLI runs from `examples/generators/`.
+const GENERATORS: &[(&str, &str)] = &[
+  (
+    "report",
+    include_str!("../../examples/generators/report.yml"),
+  ),
+  (
+    "mindmap",
+    include_str!("../../examples/generators/mindmap.yml"),
+  ),
+  (
+    "audio_overview",
+    include_str!("../../examples/generators/audio_overview.yml"),
+  ),
+];
+
+/// How much notebook text a generator gets, in characters (the
+/// templates' own source budget).
+const GENERATE_CHUNK_BUDGET: usize = 24_000;
+
+#[derive(Debug, Deserialize)]
+pub struct GenerateRequest {
+  pub kind: String,
+  /// Values for the generator's declared inputs (`focus`, `sections`,
+  /// `pdf`, ...). `chunks`, `url` and `text` are set from the notebook.
+  #[serde(default)]
+  pub params: serde_json::Map<String, Value>,
+  /// Model for the generator's llm steps; falls back to
+  /// `YANSHI_GENERATE_MODEL`.
+  #[serde(default)]
+  pub model: Option<String>,
+}
+
+pub async fn generate(
+  State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
+  Path(id): Path<Uuid>,
+  Json(req): Json<GenerateRequest>,
+) -> Result<Json<Value>, ApiError> {
+  own_notebook(&state, &tenant, id).await?;
+  let (_, template) = GENERATORS
+    .iter()
+    .find(|(kind, _)| *kind == req.kind)
+    .ok_or_else(|| {
+      ApiError::BadRequest(format!(
+        "unknown kind '{}': expected one of {}",
+        req.kind,
+        GENERATORS
+          .iter()
+          .map(|(k, _)| *k)
+          .collect::<Vec<_>>()
+          .join(", ")
+      ))
+    })?;
+  let model = req
+    .model
+    .clone()
+    .or_else(|| {
+      std::env::var("YANSHI_GENERATE_MODEL")
+        .ok()
+        .filter(|m| !m.trim().is_empty())
+    })
+    .ok_or_else(|| {
+      ApiError::BadRequest("set `model`, or YANSHI_GENERATE_MODEL on the gateway".into())
+    })?;
+  let definition = yanshi_config::executor::parse_workflow_definition(template)
+    .map_err(|e| ApiError::Internal(format!("generator template: {e:#}")))?;
+  for key in req.params.keys() {
+    if matches!(key.as_str(), "chunks" | "url" | "text") {
+      return Err(ApiError::BadRequest(format!(
+        "'{key}' comes from the notebook and cannot be set"
+      )));
+    }
+    if !definition.inputs.contains_key(key) {
+      return Err(ApiError::BadRequest(format!(
+        "'{key}' is not a parameter of '{}'",
+        req.kind
+      )));
+    }
+  }
+
+  let mut budget = GENERATE_CHUNK_BUDGET;
+  let chunks: Vec<Value> = state
+    .repos
+    .chunks
+    .list_ready_for_notebook(tenant.as_str(), id)
+    .await?
+    .into_iter()
+    .take_while(|chunk| {
+      let fits = chunk.content.len() <= budget;
+      budget = budget.saturating_sub(chunk.content.len());
+      fits
+    })
+    .map(|chunk| {
+      json!({ "chunk_id": chunk.chunk_id, "source_id": chunk.source_id, "content": chunk.content })
+    })
+    .collect();
+  if chunks.is_empty() {
+    return Err(ApiError::BadRequest(format!(
+      "notebook {id} has no ready sources to generate from"
+    )));
+  }
+  let mut inputs = req.params;
+  inputs.insert("chunks".to_string(), Value::Array(chunks));
+
+  let run = crate::runs::admit_and_dispatch(
+    &state,
+    state.executor.clone(),
+    tenant.as_str().to_string(),
+    template.to_string(),
+    crate::runs::RunOptions {
+      inputs,
+      model: Some(model),
+      notebook: Some(crate::runs::NotebookLink {
+        notebook_id: id,
+        kind: req.kind.clone(),
+      }),
+      ..Default::default()
+    },
+  )
+  .await?;
+  Ok(Json(
+    json!({ "run_id": run.id, "kind": req.kind, "status": run.status }),
+  ))
+}
+
+pub async fn list_notebook_artifacts(
+  State(state): State<AppState>,
+  Extension(tenant): Extension<TenantId>,
+  Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+  own_notebook(&state, &tenant, id).await?;
+  let artifacts = state
+    .repos
+    .notebooks
+    .list_artifacts(tenant.as_str(), id)
+    .await?;
+  Ok(Json(json!({ "notebook_id": id, "artifacts": artifacts })))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -464,6 +609,22 @@ mod tests {
       chunks[1].1["start_line"].as_u64() > chunks[0].1["start_line"].as_u64(),
       "later chunks start on later lines"
     );
+  }
+
+  #[test]
+  fn every_compiled_in_generator_parses() {
+    for (kind, template) in GENERATORS {
+      let definition = yanshi_config::executor::parse_workflow_definition(template)
+        .unwrap_or_else(|e| panic!("{kind}: {e:#}"));
+      assert!(
+        definition.inputs.contains_key("chunks"),
+        "{kind} takes notebook chunks"
+      );
+      assert!(
+        definition.nodes.iter().any(|n| n.id == "deliverable"),
+        "{kind}"
+      );
+    }
   }
 
   #[tokio::test]

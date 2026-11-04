@@ -663,6 +663,11 @@ pub fn create_router(state: AppState) -> Router {
       post(notebooks::add_source).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
     )
     .route("/v1/notebooks/:id/search", get(notebooks::search_notebook))
+    .route("/v1/notebooks/:id/generate", post(notebooks::generate))
+    .route(
+      "/v1/notebooks/:id/artifacts",
+      get(notebooks::list_notebook_artifacts),
+    )
     // Y1.3: what a run produced, and the bytes themselves.
     .route("/v1/runs/:id/artifacts", get(artifacts::list_run_artifacts))
     .route(

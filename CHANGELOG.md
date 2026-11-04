@@ -338,6 +338,17 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **Generate deliverables from a notebook (Y5.4).**
+  `POST /v1/notebooks/{id}/generate {kind, params, model}` runs the
+  report, mindmap or audio_overview generator (compiled into the
+  gateway from `examples/generators/`) on the notebook's ready chunks.
+  It goes through the normal run path, with admission, cost limit and
+  artifact registration, and links the run's files to the notebook.
+  `GET /v1/notebooks/{id}/artifacts` lists them, labelled by kind. The
+  model comes from the request or `YANSHI_GENERATE_MODEL`. `POST
+  /v1/runs` also gains `inputs` (values for declared inputs; undeclared
+  names are a 400) and `model`, which applies inside map and while
+  bodies too.
 - **Citations point at notebook chunks (Y5.3).** The three generators
   take an optional `chunks` input
   (`[{chunk_id, source_id, content}]`, what a notebook provides).

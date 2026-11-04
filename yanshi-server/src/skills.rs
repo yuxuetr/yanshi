@@ -257,6 +257,9 @@ pub async fn run_skill(
         run_max_concurrency,
         cost_limit_usd: None,
         resume: false,
+        inputs: serde_json::Map::new(),
+        model: None,
+        notebook: None,
       })
       .await;
     cancellation_registry.complete(run_id);
