@@ -66,7 +66,8 @@ pub use event::{
 pub use flow_run::{FlowRunOutcome, HarnessFlowRunOptions, HarnessFlowRunResult};
 pub use hooks::{CompletedToolCall, PendingToolCall, PostToolHook, PreToolDecision, PreToolHook};
 pub use hooks_runtime::{
-  DEFAULT_APPROVAL_TIMEOUT, DEFAULT_HOOK_TIMEOUT, HookConfig, HookedTool, wrap_registry,
+  CostEstimator, DEFAULT_APPROVAL_TIMEOUT, DEFAULT_HOOK_TIMEOUT, HookConfig, HookedTool,
+  wrap_registry,
 };
 pub use persistence::{
   HarnessEventSink, InMemoryEventSink, JsonlEventSink, SinkChain, StdoutEventSink,

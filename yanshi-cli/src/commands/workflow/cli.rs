@@ -236,6 +236,15 @@ enum WorkflowCommands {
     /// available to an adversarial-by-construction plan.
     #[arg(long = "allow-modalities")]
     allow_modalities: bool,
+    /// Y7.1: approve modality calls by budget instead of one by one. A
+    /// call priced by the pricing table (`~/.yanshi/pricing.yml` or
+    /// `YANSHI_PRICING_TABLE`) runs unprompted while the session's spend
+    /// stays within this many USD, and asks for approval once it would
+    /// cross it. Unpriced calls are approved one by one as before.
+    /// Defaults to `YANSHI_APPROVAL_BUDGET_USD`; needs an `--approve`
+    /// provider.
+    #[arg(long = "approval-budget-usd")]
+    approval_budget_usd: Option<f64>,
     /// Approval pipeline for tool calls: none, cli (interactive),
     /// auto-allow, or auto-deny. Unset defaults to `cli` under
     /// `local`/`production` `--profile` (an LLM-authored plan is
@@ -506,6 +515,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
       allow_path,
       allow_domain,
       allow_modalities,
+      approval_budget_usd,
       approve,
       profile,
       dry_run,
@@ -519,6 +529,7 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
         allow_path,
         allow_domain,
         allow_modalities,
+        approval_budget_usd,
         approve,
         profile,
         dry_run,

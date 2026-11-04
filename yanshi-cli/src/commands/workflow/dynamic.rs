@@ -56,7 +56,7 @@ use yanshi_core::async_node::AsyncNodeResult;
 use yanshi_core::{FlowExecutionConfig, FlowExt, FlowValue};
 use yanshi_harness::{
   ApprovalProvider, ApprovalRisk, AutoAllowApprovalProvider, AutoDenyApprovalProvider,
-  CliApprovalProvider, HarnessError, HarnessEventSink, HookConfig, PendingToolCall,
+  CliApprovalProvider, CostEstimator, HarnessError, HarnessEventSink, HookConfig, PendingToolCall,
   PreToolDecision, PreToolHook, SinkChain, StdoutEventSink, wrap_registry,
 };
 use yanshi_llm::Yanshi;
@@ -73,6 +73,7 @@ pub async fn execute(
   allow_path: Vec<String>,
   allow_domain: Vec<String>,
   allow_modalities: bool,
+  approval_budget_usd: Option<f64>,
   approve: Option<String>,
   profile: String,
   dry_run: bool,
@@ -127,10 +128,25 @@ pub async fn execute(
       // "every call is actually gated" mean the same thing on every profile,
       // matching this module's own doc claim that `--approve` "routes every
       // call through the Harness approval pipeline."
-      let hook_config = HookConfig::new(session_id, provider, sinks)
+      // Y7.1: with a budget, a priced call is approved by the budget
+      // instead of one by one; unpriced calls still always ask.
+      let budget = approval_budget(approval_budget_usd)?;
+      let estimator: Option<CostEstimator> = budget.map(|_| {
+        Arc::new(|tool: &str, params: &Value| {
+          yanshi_llm::pricing::PricingTable::shared()
+            .ok()
+            .and_then(|table| yanshi_tools_ai::estimate_cost_usd(table, tool, params))
+        }) as CostEstimator
+      });
+      let mut hook_config = HookConfig::new(session_id, provider, sinks)
         .with_profile(profile)
-        .with_pre_hook(Arc::new(RequireApprovalForEveryCall))
+        .with_pre_hook(Arc::new(RequireApprovalForEveryCall {
+          budgeted: estimator.clone(),
+        }))
         .with_seq_counter(Arc::new(AtomicU64::new(0)));
+      if let (Some(threshold), Some(estimator)) = (budget, estimator) {
+        hook_config = hook_config.with_cost_budget(threshold, estimator);
+      }
       wrap_registry(registry, hook_config)
     }
   };
@@ -251,7 +267,10 @@ fn build_policy(allow_path: &[String], allow_domain: &[String]) -> SandboxPolicy
 /// one is configured. See the wiring comment at the `wrap_registry` call
 /// site for why `HookConfig`'s own profile-based escalation isn't enough
 /// on its own.
-struct RequireApprovalForEveryCall;
+struct RequireApprovalForEveryCall {
+  /// Y7.1: with a budget, calls this prices are left to the budget.
+  budgeted: Option<CostEstimator>,
+}
 
 #[async_trait]
 impl PreToolHook for RequireApprovalForEveryCall {
@@ -260,6 +279,11 @@ impl PreToolHook for RequireApprovalForEveryCall {
   }
 
   async fn before_tool(&self, call: &PendingToolCall) -> Result<PreToolDecision, HarnessError> {
+    if let Some(estimate) = &self.budgeted
+      && estimate(&call.tool, &call.params).is_some()
+    {
+      return Ok(PreToolDecision::Allow);
+    }
     Ok(PreToolDecision::RequireApproval {
       risk: ApprovalRisk::High,
       reason: format!(
@@ -267,6 +291,28 @@ impl PreToolHook for RequireApprovalForEveryCall {
         call.tool
       ),
     })
+  }
+}
+
+/// Y7.1: `--approval-budget-usd`, else `YANSHI_APPROVAL_BUDGET_USD`.
+fn approval_budget(flag: Option<f64>) -> Result<Option<f64>> {
+  let raw = match flag {
+    Some(value) => Some(value),
+    None => match std::env::var("YANSHI_APPROVAL_BUDGET_USD") {
+      Ok(text) if !text.trim().is_empty() => Some(
+        text
+          .trim()
+          .parse::<f64>()
+          .with_context(|| format!("YANSHI_APPROVAL_BUDGET_USD is not a number: '{text}'"))?,
+      ),
+      _ => None,
+    },
+  };
+  match raw {
+    Some(value) if !value.is_finite() || value < 0.0 => {
+      anyhow::bail!("the approval budget must be a non-negative number of USD, got {value}")
+    }
+    other => Ok(other),
   }
 }
 
@@ -369,6 +415,14 @@ fn results_to_json(state: &HashMap<String, AsyncNodeResult>) -> Value {
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn approval_budget_flag_wins_and_must_be_non_negative() {
+    assert_eq!(super::approval_budget(Some(1.5)).expect("ok"), Some(1.5));
+    assert_eq!(super::approval_budget(Some(0.0)).expect("ok"), Some(0.0));
+    assert!(super::approval_budget(Some(-1.0)).is_err());
+    assert!(super::approval_budget(Some(f64::NAN)).is_err());
+  }
+
   use super::*;
   use serde_json::json;
   use yanshi_core::YanshiError;

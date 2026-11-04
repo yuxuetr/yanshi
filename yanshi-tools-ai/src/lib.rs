@@ -61,6 +61,7 @@
 
 mod asr;
 mod common;
+mod cost;
 mod image_edit;
 mod image_to_image;
 mod image_understand;
@@ -69,6 +70,7 @@ mod text_to_video;
 mod tts;
 
 pub use asr::AsrTool;
+pub use cost::estimate_cost_usd;
 pub use image_edit::ImageEditTool;
 pub use image_to_image::Image2ImageTool;
 pub use image_understand::ImageUnderstandTool;

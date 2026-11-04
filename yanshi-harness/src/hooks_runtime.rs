@@ -69,7 +69,42 @@ pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Configuration shared by every [`HookedTool`] wrapped from one
 /// registry call. Built with `HookConfig::new(...)` + chained setters.
+/// Y7.1: the estimated USD price of one call, from the tool name and its
+/// raw parameters; `None` when the call has no price (or its model is
+/// unpriced), which leaves it to the ordinary approval rules.
+pub type CostEstimator = Arc<dyn Fn(&str, &serde_json::Value) -> Option<f64> + Send + Sync>;
+
+/// Y7.1: approval by budget. A priced call runs without a prompt while the
+/// session's spend plus its price stays within `threshold_usd`, overriding
+/// the production profile's escalation; past that it requires approval.
+/// An explicit pre-hook `Deny` / `RequireApproval` still wins. The price
+/// is reserved when the call is allowed and refunded if the tool fails.
+struct CostBudget {
+  threshold_usd: f64,
+  estimate: CostEstimator,
+  spent_usd: std::sync::Mutex<f64>,
+}
+
+impl CostBudget {
+  /// Reserve `price` if it fits; the spend so far when it does not.
+  fn try_reserve(&self, price: f64) -> Result<(), f64> {
+    let mut spent = self.spent_usd.lock().unwrap_or_else(|e| e.into_inner());
+    if *spent + price <= self.threshold_usd + 1e-9 {
+      *spent += price;
+      Ok(())
+    } else {
+      Err(*spent)
+    }
+  }
+
+  fn adjust(&self, delta: f64) {
+    let mut spent = self.spent_usd.lock().unwrap_or_else(|e| e.into_inner());
+    *spent = (*spent + delta).max(0.0);
+  }
+}
+
 pub struct HookConfig {
+  cost_budget: Option<(f64, CostEstimator)>,
   session_id: String,
   profile: HarnessProfile,
   pre_hooks: Vec<Arc<dyn PreToolHook>>,
@@ -142,7 +177,16 @@ impl HookConfig {
       approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
       seq_allocator: SeqAllocator::new(),
       step_index_counter: Arc::new(AtomicU64::new(0)),
+      cost_budget: None,
     }
+  }
+
+  /// Y7.1: approve by budget instead of per call; see [`CostBudget`].
+  /// `estimate` prices a call (e.g. `yanshi_tools_ai::estimate_cost_usd`
+  /// over the operator's pricing table).
+  pub fn with_cost_budget(mut self, threshold_usd: f64, estimate: CostEstimator) -> Self {
+    self.cost_budget = Some((threshold_usd.max(0.0), estimate));
+    self
   }
 
   /// Set the security profile used by the approval-escalation rules
@@ -230,6 +274,13 @@ pub fn wrap_registry(mut registry: ToolRegistry, config: HookConfig) -> Arc<Tool
     seq_allocator: config.seq_allocator,
     step_index_counter: config.step_index_counter,
     approval_cache: Arc::new(Mutex::new(ApprovalCache::default())),
+    budget: config
+      .cost_budget
+      .map(|(threshold_usd, estimate)| CostBudget {
+        threshold_usd,
+        estimate,
+        spent_usd: std::sync::Mutex::new(0.0),
+      }),
   });
   let tools = registry.list();
   for tool in tools {
@@ -256,6 +307,7 @@ struct SharedHookConfig {
   /// [`HookConfig::step_index_counter`] for the rationale.
   step_index_counter: Arc<AtomicU64>,
   approval_cache: Arc<Mutex<ApprovalCache>>,
+  budget: Option<CostBudget>,
 }
 
 #[derive(Default)]
@@ -385,16 +437,34 @@ impl Tool for HookedTool {
   async fn execute(&self, params: serde_json::Value) -> Result<ToolOutput, ToolError> {
     let started_at = Utc::now();
     let pending = self.build_pending(&params, started_at);
+    // Y7.1: priced from the raw parameters (the hook-facing copy is
+    // redacted).
+    let price = self
+      .config
+      .budget
+      .as_ref()
+      .and_then(|budget| (budget.estimate)(self.inner.name(), &params))
+      .filter(|price| price.is_finite() && *price >= 0.0);
 
     let pre_decision = self
       .run_pre_hooks(&pending)
       .await
       .map_err(hook_to_policy_denied)?;
 
-    let proceed = self
-      .resolve_proceed_decision(&pending, pre_decision)
+    let (proceed, reserved) = self
+      .resolve_proceed_decision(&pending, pre_decision, price)
       .await
       .map_err(hook_to_policy_denied)?;
+    // An over-budget call that was approved still counts toward the spend.
+    let charged = match (&proceed, price, &self.config.budget) {
+      (Proceed::Allow, Some(price), Some(budget)) => {
+        if !reserved {
+          budget.adjust(price);
+        }
+        Some(price)
+      }
+      _ => None,
+    };
 
     let tool_started = std::time::Instant::now();
     let result = match proceed {
@@ -406,6 +476,9 @@ impl Tool for HookedTool {
       Proceed::DenyAndStop { reason } => Err(ToolError::PolicyDeniedAndStop { message: reason }),
     };
     let duration_ms = tool_started.elapsed().as_millis() as u64;
+    if let (Some(price), Err(_), Some(budget)) = (charged, &result, &self.config.budget) {
+      budget.adjust(-price);
+    }
 
     // Post hooks observe both success and failure outcomes.
     let completed = CompletedToolCall {
@@ -541,7 +614,8 @@ impl HookedTool {
     &self,
     pending: &PendingToolCall,
     pre_decision: PreToolDecision,
-  ) -> Result<Proceed, HarnessError> {
+    price: Option<f64>,
+  ) -> Result<(Proceed, bool), HarnessError> {
     // Fail-closed escalation: production profile demands explicit
     // approval for any call not *declared* Idempotent, regardless of what
     // the pre-hooks said. `Unknown` is the default for MCP / agent /
@@ -551,24 +625,32 @@ impl HookedTool {
       && !matches!(pending.idempotency, ToolIdempotency::Idempotent);
 
     let need_approval = match pre_decision {
-      PreToolDecision::Allow => {
-        if escalation {
-          Some((
-            ApprovalRisk::Critical,
-            "production profile: mutating tool requires explicit approval".to_string(),
-          ))
-        } else {
-          None
-        }
-      }
+      // Y7.1: a priced call under a budget is decided by the budget.
+      PreToolDecision::Allow => match (price, self.config.budget.as_ref()) {
+        (Some(price), Some(budget)) => match budget.try_reserve(price) {
+          Ok(()) => return Ok((Proceed::Allow, true)),
+          Err(spent) => Some((
+            ApprovalRisk::High,
+            format!(
+              "cost budget: ${spent:.2} spent + about ${price:.2} for this call exceeds ${:.2}",
+              budget.threshold_usd
+            ),
+          )),
+        },
+        _ if escalation => Some((
+          ApprovalRisk::Critical,
+          "production profile: mutating tool requires explicit approval".to_string(),
+        )),
+        _ => None,
+      },
       PreToolDecision::Deny { reason } => {
-        return Ok(Proceed::Deny { reason });
+        return Ok((Proceed::Deny { reason }, false));
       }
       PreToolDecision::RequireApproval { risk, reason } => Some((risk, reason)),
     };
 
     let Some((risk, reason)) = need_approval else {
-      return Ok(Proceed::Allow);
+      return Ok((Proceed::Allow, false));
     };
 
     // Cached decision wins when scope is Session/Run.
@@ -592,16 +674,19 @@ impl HookedTool {
         // W0.5: this gate exists *because* an earlier call tripped
         // `DenyAndStop` — every call it intercepts must carry the same
         // stop semantics, not the plain `Deny` this used to return.
-        return Ok(Proceed::DenyAndStop {
-          reason: stop_reason,
-        });
+        return Ok((
+          Proceed::DenyAndStop {
+            reason: stop_reason,
+          },
+          false,
+        ));
       }
       cache.lookup(&pending.tool, digest.as_deref())
     } {
       self
         .emit_cached_decision(pending, scope, outcome, risk, &reason)
         .await?;
-      return Ok(decide_from_outcome(outcome));
+      return Ok((decide_from_outcome(outcome), false));
     }
 
     // Build a fresh ApprovalRequest.
@@ -659,7 +744,7 @@ impl HookedTool {
       }
     }
 
-    Ok(decide_from_outcome(decision.decision))
+    Ok((decide_from_outcome(decision.decision), false))
   }
 
   /// Q3.10.3: emit BOTH halves of the approval pair when reusing a
@@ -898,7 +983,13 @@ mod tests {
     }
     async fn execute(&self, params: serde_json::Value) -> Result<ToolOutput, ToolError> {
       *self.invocations.lock().unwrap() += 1;
+      let fail = params["fail"] == serde_json::json!(true);
       *self.last_params.lock().unwrap() = Some(params);
+      if fail {
+        return Err(ToolError::ExecutionFailed {
+          message: "probe failed".to_string(),
+        });
+      }
       Ok(ToolOutput::success("ok"))
     }
   }
@@ -971,6 +1062,76 @@ mod tests {
   }
 
   // ── Tests ────────────────────────────────────────────────────────
+
+  fn approvals_requested(events: &[crate::event::HarnessEvent]) -> usize {
+    events
+      .iter()
+      .filter(|event| matches!(event.body, HarnessEventBody::ApprovalRequested(_)))
+      .count()
+  }
+
+  /// Y7.1 acceptance: threshold 1.00, each call 0.40 → calls 1 and 2 run
+  /// unprompted (0.40, 0.80), call 3 (1.20) raises `approval_requested`.
+  /// The approved over-budget call still counts, so call 4 asks again.
+  #[tokio::test]
+  async fn budget_approval_prompts_once_the_threshold_would_be_crossed() {
+    let (tool, counter) = ProbeTool::new("paid", ToolIdempotency::NonIdempotent);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let config = HookConfig::new("sess-1", Arc::new(AutoAllowApprovalProvider::new()), sinks)
+      .with_profile(HarnessProfile::Production)
+      .with_cost_budget(1.0, Arc::new(|tool, _| (tool == "paid").then_some(0.40)));
+    let registry = wrap_registry(build_registry(tool), config);
+    for (call, expected) in [(1, 0), (2, 0), (3, 1), (4, 2)] {
+      registry
+        .execute("paid", serde_json::json!({ "call": call }))
+        .await
+        .expect("allowed or approved");
+      assert_eq!(
+        approvals_requested(&sink.snapshot().await),
+        expected,
+        "after call {call}"
+      );
+    }
+    assert_eq!(*counter.lock().unwrap(), 4);
+  }
+
+  #[tokio::test]
+  async fn a_failed_call_refunds_its_budget_and_unpriced_calls_keep_escalating() {
+    let (tool, _) = ProbeTool::new("paid", ToolIdempotency::NonIdempotent);
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let config = HookConfig::new("sess-1", Arc::new(AutoDenyApprovalProvider::new()), sinks)
+      .with_profile(HarnessProfile::Production)
+      .with_cost_budget(
+        0.5,
+        Arc::new(|_, params: &serde_json::Value| {
+          (params["priced"] != serde_json::json!(false)).then_some(0.40)
+        }),
+      );
+    let registry = wrap_registry(build_registry(tool), config);
+    // Fails: its 0.40 is refunded, so the next 0.40 still fits under 0.50.
+    assert!(
+      registry
+        .execute("paid", serde_json::json!({ "fail": true }))
+        .await
+        .is_err()
+    );
+    registry
+      .execute("paid", serde_json::json!({}))
+      .await
+      .expect("fits after the refund");
+    assert_eq!(approvals_requested(&sink.snapshot().await), 0);
+    // An unpriced call falls back to production escalation (denied here).
+    let result = registry
+      .execute("paid", serde_json::json!({ "priced": false }))
+      .await;
+    assert!(
+      matches!(result, Err(ToolError::PolicyDenied { .. })),
+      "{result:?}"
+    );
+    assert_eq!(approvals_requested(&sink.snapshot().await), 1);
+  }
 
   #[tokio::test]
   async fn allow_path_invokes_inner_tool() {

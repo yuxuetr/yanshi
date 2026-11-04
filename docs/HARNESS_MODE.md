@@ -332,6 +332,32 @@ lifecycle events (`tool_call_requested` / `tool_call_completed`)
 keep flowing from the `HarnessRuntime` post-hoc translation, so
 existing consumers do not see duplicates when hooks are wired.
 
+### Approval by budget (Y7.1)
+
+`HookConfig::with_cost_budget(threshold_usd, estimator)` decides priced
+calls by spend instead of one at a time. `estimator(tool, params)`
+returns a call's estimated USD price, or `None` when the call has no
+price.
+
+- A priced call that fits (session spend + price ≤ threshold) runs
+  without a prompt. Under the `production` profile this replaces the
+  usual escalation for non-idempotent calls.
+- A priced call that would cross the threshold raises
+  `approval_requested` (risk `high`, the reason names the spend). If it
+  is approved, its price is added to the spend, so the next priced call
+  asks again.
+- The price is reserved when the call is allowed and refunded if the
+  tool fails.
+- Unpriced calls, and explicit pre-hook `Deny` / `RequireApproval`
+  decisions, follow the ordinary rules.
+
+`yanshi_tools_ai::estimate_cost_usd` prices the modality tools from the
+pricing table. A model with no row has no price, so it never looks free.
+`yanshi workflow dynamic --allow-modalities --approve cli
+--approval-budget-usd 1.00` turns this on (the default comes from
+`YANSHI_APPROVAL_BUDGET_USD`). With a threshold of 1.00 and calls at 0.40,
+the first two run unprompted and the third asks.
+
 ## Session context
 
 ```rust
