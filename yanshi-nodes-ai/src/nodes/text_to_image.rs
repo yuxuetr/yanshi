@@ -9,6 +9,8 @@ use yanshi_core::{
 };
 use yanshi_llm::{Yanshi, providers::modality::Text2ImageRequest as ModalityText2ImageRequest};
 
+use crate::artifacts::{self, ArtifactOutputFormat};
+
 // ... (rest of the file is the same until the AsyncNode implementation)
 
 /// Text-to-Image generation node
@@ -34,6 +36,9 @@ pub struct TextToImageNode {
   pub dependencies: Vec<String>,
   pub condition: Option<String>,
   pub timeout_ms: Option<u64>,
+  /// Y1.1: see [`ArtifactOutputFormat`]. Orthogonal to `response_format`,
+  /// which is what we *ask the vendor for*; this is what the node emits.
+  pub output_format: ArtifactOutputFormat,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,11 +76,17 @@ impl TextToImageNode {
       dependencies: Vec::new(),
       condition: None,
       timeout_ms: None,
+      output_format: ArtifactOutputFormat::default(),
     }
   }
 
   pub fn with_prompt(mut self, template: &str) -> Self {
     self.prompt_template = template.to_string();
+    self
+  }
+
+  pub fn with_output_format(mut self, format: ArtifactOutputFormat) -> Self {
+    self.output_format = format;
     self
   }
 
@@ -254,7 +265,7 @@ impl TextToImageNode {
   async fn execute_real_image_generation(
     &self,
     config: &serde_json::Map<String, Value>,
-  ) -> Result<String, YanshiError> {
+  ) -> Result<FlowValue, YanshiError> {
     let prompt = config
       .get("prompt")
       .and_then(|v| v.as_str())
@@ -319,26 +330,7 @@ impl TextToImageNode {
           message: "No images returned from text-to-image provider".to_string(),
         })?;
 
-    let result = match response_format {
-      "b64_json" => first_image
-        .b64_json
-        .as_ref()
-        .map(|b| format!("data:image/png;base64,{}", b))
-        .ok_or_else(|| YanshiError::AsyncExecutionError {
-          message: "No base64 image data returned from provider".to_string(),
-        })?,
-      "url" => first_image
-        .url
-        .clone()
-        .ok_or_else(|| YanshiError::AsyncExecutionError {
-          message: "No image URL returned from provider".to_string(),
-        })?,
-      other => {
-        return Err(YanshiError::AsyncExecutionError {
-          message: format!("Unsupported response format: {}", other),
-        });
-      }
-    };
+    let result = artifacts::image_output(&self.name, first_image, self.output_format).await?;
 
     tracing::debug!(
       provider = %provider.name(),
@@ -422,10 +414,7 @@ impl AsyncNode for TextToImageNode {
     };
 
     let mut outputs = HashMap::new();
-    outputs.insert(
-      self.output_key.clone(),
-      FlowValue::Json(Value::String(response)),
-    );
+    outputs.insert(self.output_key.clone(), response);
 
     Ok(outputs)
   }

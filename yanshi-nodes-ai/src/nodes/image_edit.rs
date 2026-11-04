@@ -2,15 +2,15 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use yanshi_core::{
   async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
   error::YanshiError,
-  value::FlowValue,
 };
 use yanshi_llm::{Yanshi, providers::modality::ImageEditRequest as ModalityImageEditRequest};
 use yanshi_nodes::common::utils::{flow_value_to_string, load_bytes_from_source};
+
+use crate::artifacts::{self, ArtifactOutputFormat};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageEditNode {
@@ -25,6 +25,9 @@ pub struct ImageEditNode {
   pub cfg_scale: Option<f32>,
   pub output_key: String,
   pub input_keys: Vec<String>,
+  /// Y1.1: see [`ArtifactOutputFormat`].
+  #[serde(default)]
+  pub output_format: ArtifactOutputFormat,
 }
 
 impl ImageEditNode {
@@ -41,7 +44,13 @@ impl ImageEditNode {
       cfg_scale: None,
       output_key: format!("{}_output", name),
       input_keys: vec![],
+      output_format: ArtifactOutputFormat::default(),
     }
+  }
+
+  pub fn with_output_format(mut self, format: ArtifactOutputFormat) -> Self {
+    self.output_format = format;
+    self
   }
 }
 
@@ -97,22 +106,11 @@ impl AsyncNode for ImageEditNode {
       .ok_or_else(|| YanshiError::AsyncExecutionError {
         message: "No images returned in response".to_string(),
       })?;
-    let output_data = if let Some(b64) = &first_image.b64_json {
-      format!("data:image/png;base64,{}", b64)
-    } else if let Some(url) = &first_image.url {
-      url.clone()
-    } else {
-      return Err(YanshiError::AsyncExecutionError {
-        message: "No image data in response".to_string(),
-      });
-    };
+    let value = artifacts::image_output(&self.name, first_image, self.output_format).await?;
 
     tracing::debug!("ImageEditNode execution successful");
     let mut outputs = HashMap::new();
-    outputs.insert(
-      self.output_key.clone(),
-      FlowValue::Json(Value::String(output_data)),
-    );
+    outputs.insert(self.output_key.clone(), value);
 
     Ok(outputs)
   }
@@ -121,6 +119,8 @@ impl AsyncNode for ImageEditNode {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::Value;
+  use yanshi_core::value::FlowValue;
 
   #[tokio::test]
   #[ignore] // Requires STEPFUN_API_KEY environment variable

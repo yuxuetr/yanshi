@@ -9,6 +9,8 @@ use yanshi_core::{
 };
 use yanshi_llm::{Yanshi, providers::modality::Text2VideoRequest as ModalityText2VideoRequest};
 
+use crate::artifacts::{self, ArtifactOutputFormat};
+
 /// Default poll interval while waiting on a submitted video job.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// Default max wait, used when the node has no `timeout_ms` configured.
@@ -41,6 +43,13 @@ pub struct TextToVideoNode {
   /// Doubles as the provider's `max_wait` — see
   /// `execute_real_video_generation`.
   pub timeout_ms: Option<u64>,
+  /// Y1.1: see [`ArtifactOutputFormat`]. Under `file` the vendor's
+  /// time-limited URL is fetched (through the provider, which knows what
+  /// credentials the URL needs) and persisted; under `data_uri` the URL
+  /// string is passed through as before.
+  pub output_format: ArtifactOutputFormat,
+  /// Cap on the fetched video size under `file`.
+  pub max_download_bytes: u64,
 }
 
 impl TextToVideoNode {
@@ -58,11 +67,23 @@ impl TextToVideoNode {
       dependencies: Vec::new(),
       condition: None,
       timeout_ms: None,
+      output_format: ArtifactOutputFormat::default(),
+      max_download_bytes: artifacts::MAX_VIDEO_DOWNLOAD_BYTES,
     }
   }
 
   pub fn with_prompt(mut self, template: &str) -> Self {
     self.prompt_template = template.to_string();
+    self
+  }
+
+  pub fn with_output_format(mut self, format: ArtifactOutputFormat) -> Self {
+    self.output_format = format;
+    self
+  }
+
+  pub fn with_max_download_bytes(mut self, max_bytes: u64) -> Self {
+    self.max_download_bytes = max_bytes;
     self
   }
 
@@ -120,7 +141,7 @@ impl TextToVideoNode {
 
   /// Execute real video generation through the modality dispatcher,
   /// submitting the job and polling until it completes.
-  async fn execute_real_video_generation(&self, prompt: &str) -> Result<String, YanshiError> {
+  async fn execute_real_video_generation(&self, prompt: &str) -> Result<FlowValue, YanshiError> {
     tracing::debug!(
       model = %self.model,
       prompt = %prompt,
@@ -167,12 +188,26 @@ impl TextToVideoNode {
           message: "No videos returned from text-to-video provider".to_string(),
         })?;
 
-    let result = first_video
-      .url
-      .clone()
-      .ok_or_else(|| YanshiError::AsyncExecutionError {
-        message: "No video URL returned from provider".to_string(),
-      })?;
+    let result = match self.output_format {
+      ArtifactOutputFormat::File => {
+        let bytes = provider
+          .fetch_video_bytes(first_video, self.max_download_bytes)
+          .await
+          .map_err(|e| YanshiError::AsyncExecutionError {
+            message: format!("Failed to fetch generated video: {}", e),
+          })?;
+        artifacts::write_artifact(&self.name, &bytes, "video/mp4").await?
+      }
+      ArtifactOutputFormat::DataUri => match (&first_video.b64_data, &first_video.url) {
+        (Some(b64), _) => FlowValue::Json(Value::String(format!("data:video/mp4;base64,{b64}"))),
+        (None, Some(url)) => FlowValue::Json(Value::String(url.clone())),
+        (None, None) => {
+          return Err(YanshiError::AsyncExecutionError {
+            message: "No video URL returned from provider".to_string(),
+          });
+        }
+      },
+    };
 
     tracing::debug!(
       provider = %provider.name(),
@@ -219,10 +254,7 @@ impl AsyncNode for TextToVideoNode {
       })?;
 
     let mut outputs = HashMap::new();
-    outputs.insert(
-      self.output_key.clone(),
-      FlowValue::Json(Value::String(response)),
-    );
+    outputs.insert(self.output_key.clone(), response);
 
     Ok(outputs)
   }

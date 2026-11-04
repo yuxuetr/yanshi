@@ -52,6 +52,8 @@ pub mod checkpoint;
 // `FlowExecutionConfig::resource_limits`, `flow.rs::notify_state_size`).
 pub mod resource_limits;
 pub mod resume;
+// Y1.1: per-run artifact root visible to nodes via a task-local.
+pub mod run_context;
 pub mod scheduler;
 
 // `state_size` (StateSizeObserver) and `events` (EventListener / WorkflowEvent)

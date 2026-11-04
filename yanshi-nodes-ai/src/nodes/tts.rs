@@ -6,7 +6,6 @@
 //! right vendor implementation (today StepFun; P-LLM.5 will add others).
 
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -16,6 +15,8 @@ use yanshi_core::{
   value::FlowValue,
 };
 use yanshi_llm::{TtsRequest, Yanshi};
+
+use crate::artifacts::{self, ArtifactOutputFormat};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum AudioResponseFormat {
@@ -47,6 +48,11 @@ pub struct TTSNode {
   pub speed: Option<f32>,
   pub output_key: String,
   pub input_keys: Vec<String>,
+  /// Y1.1: `file` (default) writes the audio under the run's artifact
+  /// root and returns `FlowValue::File`; `data_uri` keeps the pre-Y1.1
+  /// base64 string.
+  #[serde(default)]
+  pub output_format: ArtifactOutputFormat,
 }
 
 impl TTSNode {
@@ -60,7 +66,13 @@ impl TTSNode {
       speed: None,
       output_key: format!("{}_output", name),
       input_keys: vec![],
+      output_format: ArtifactOutputFormat::default(),
     }
+  }
+
+  pub fn with_output_format(mut self, format: ArtifactOutputFormat) -> Self {
+    self.output_format = format;
+    self
   }
 
   fn flow_value_to_string(value: &FlowValue) -> String {
@@ -124,15 +136,18 @@ impl AsyncNode for TTSNode {
           message: format!("TTS synthesis failed: {}", e),
         })?;
 
-    let base64_data = STANDARD.encode(&tts_response.audio);
-    let data_uri = format!("data:{};base64,{}", tts_response.mime_type, base64_data);
+    let value = match self.output_format {
+      ArtifactOutputFormat::File => {
+        artifacts::write_artifact(&self.name, &tts_response.audio, &tts_response.mime_type).await?
+      }
+      ArtifactOutputFormat::DataUri => {
+        artifacts::data_uri_value(&tts_response.audio, &tts_response.mime_type)
+      }
+    };
 
     tracing::debug!("TTSNode execution successful");
     let mut outputs = HashMap::new();
-    outputs.insert(
-      self.output_key.clone(),
-      FlowValue::Json(Value::String(data_uri)),
-    );
+    outputs.insert(self.output_key.clone(), value);
 
     Ok(outputs)
   }
@@ -163,6 +178,7 @@ mod tests {
       speed: Some(1.0),
       output_key: "audio_output".to_string(),
       input_keys: vec![],
+      output_format: ArtifactOutputFormat::DataUri,
     };
 
     let inputs = AsyncNodeInputs::new();

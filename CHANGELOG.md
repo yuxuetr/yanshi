@@ -242,6 +242,19 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Modality nodes emit `FlowValue::File` artifacts (Y1.1,
+  `docs/RFC_CONTENT_STUDIO.md` §4.1).** `tts` / `text_to_image` /
+  `image_to_image` / `image_edit` / `text_to_video` write their bytes to
+  `<run_dir>/artifacts/<node_id>/<n>.<ext>` and put only the path in the
+  state pool; the executor installs the run directory as a task-local
+  artifact root (`yanshi_core::run_context`) that Map items inherit from
+  the parent run. `text_to_video` fetches the vendor's URL through a new
+  `Text2VideoProvider::fetch_video_bytes` (Veo attaches its API key) with
+  a 512 MiB cap. YAML `output_format: data_uri` keeps the old base64
+  string. `vendor: mock` now serves every modality
+  (`yanshi_llm::providers::MockMediaProvider`: valid WAV, 1×1 PNG, stub
+  video), so modality success paths run in tests and CI without keys.
+
 - **`cargo xtask refresh-live-models` now calls each default model.**
   A model listed in `/models` can still be retired: Google lists
   `gemini-2.5-flash` but answers 404 "no longer available to new

@@ -45,16 +45,19 @@ yanshi workflow validate path/to/workflow.yml --strict
 | `template` | `template` | - | `output_key`, `output_format` |
 | `arxiv` | `url` | - | `fetch_source`, `simplify_latex` |
 | `asr` | `model` | `audio_source` | - |
-| `image_edit` | `model` | `prompt`, `image_source` | - |
-| `image_to_image` | `model` | `prompt`, `source_image` | - |
+| `image_edit` | `model` | `prompt`, `image_source` | `output_format` |
+| `image_to_image` | `model` | `prompt`, `source_image` | `output_format` |
 | `image_understand` | `model` | `text_prompt`, `image_source` | - |
 | `markmap` | - | - | `markdown`, `save_to_file` |
-| `text_to_image` | `model` | `prompt` | - |
-| `tts` | `model`, `voice` | `input_template` | - |
+| `text_to_image` | `model` | `prompt` | `output_format` |
+| `text_to_video` | `model` | `prompt` | `output_format` |
+| `tts` | `model`, `voice` | `input_template` | `output_format` |
 | `map` | `template` | - | `parallel` |
 | `while` | `condition`, `max_iterations`, `do` | - | `continue_on_error`, `fail_on_exhausted` |
 | `mcp` | `server_command`, `tool_name` | - | `tool_params`, `parameters.timeout_ms`/`parameters.max_retries` (MCP-client-only, see note above) |
 | `rag` | `operation`, `collection` | - | `qdrant_url`, `embedding_model`, `query`, `documents`, `top_k`, `search_type`, `alpha`, `rerank`, `lambda`, `vector_size`, `distance` |
+
+媒体节点（`tts` / `text_to_image` / `image_to_image` / `image_edit` / `text_to_video`）的 `output_format` 取 `file`（默认）或 `data_uri`。`file` 把字节写到运行目录下的 `artifacts/<node_id>/<n>.<ext>`，输出 `FlowValue::File { path, mime_type }`，状态池里只有路径；`data_uri` 保留旧的 base64 `data:` 字符串（`text_to_video` 则是厂商的临时 URL）。`file` 模式下 `text_to_video` 会经厂商下载视频落盘，默认上限 512 MiB。
 
 `http` 输出 `status`（真实的 2xx 状态码）和 `body`；非 2xx 响应会让节点失败，错误信息为 `HTTP <code>: <body 摘要>`。5xx 和 429 可重试，其余状态码不可重试。
 

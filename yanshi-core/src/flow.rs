@@ -478,6 +478,7 @@ impl<'f> FlowExecutor<'f> {
               let result = self
                 .execute_node_with_reliability(
                   &run_id,
+                  &run_dir,
                   node_id,
                   &graph_node.node_type,
                   &inputs,
@@ -972,12 +973,14 @@ impl<'f> FlowExecutor<'f> {
         });
 
         let run_id_for_task = run_id.clone();
+        let run_dir_for_task = run_dir.clone();
         let config_for_task = config.clone();
         running.push(
           async move {
             let result = self
               .execute_node_with_reliability(
                 &run_id_for_task,
+                &run_dir_for_task,
                 &node_id,
                 &graph_node.node_type,
                 &inputs,
@@ -1147,30 +1150,34 @@ impl<'f> FlowExecutor<'f> {
   /// event stream). Every attempt made here runs inside the executor
   /// itself, where `self.emit_event` is available, so every retry is
   /// observable.
+  ///
+  /// Y1.1: `run_dir` is also installed as the node's artifact root
+  /// (`crate::run_context`) for the duration of the call, so file-producing
+  /// nodes can write under `<run_dir>/artifacts/<node_id>/`.
   async fn execute_node_with_reliability(
     &self,
     run_id: &str,
+    run_dir: &Path,
     node_id: &str,
     node_type: &NodeType,
     inputs: &AsyncNodeInputs,
     config: &FlowExecutionConfig,
   ) -> AsyncNodeResult {
     let run_once = || async {
+      let execute = crate::run_context::with_artifact_root(
+        run_dir.to_path_buf(),
+        self.execute_node_type(node_type, inputs, config),
+      );
       match config.node_timeout_ms {
         Some(timeout_ms) => {
-          match tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            self.execute_node_type(node_type, inputs, config),
-          )
-          .await
-          {
+          match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), execute).await {
             Ok(result) => result,
             Err(_elapsed) => Err(YanshiError::TimeoutExceeded {
               duration_ms: timeout_ms,
             }),
           }
         }
-        None => self.execute_node_type(node_type, inputs, config).await,
+        None => execute.await,
       }
     };
 
@@ -1467,26 +1474,34 @@ impl<'f> FlowExecutor<'f> {
         initial_inputs.insert("item".to_string(), FlowValue::Json(item.clone()));
 
         let permit_holder = semaphore.clone();
-        let handle = tokio::spawn(async move {
-          // Hold the permit for the entire sub-flow execution so the
-          // concurrent count is a tight upper bound, not just a
-          // start-rate cap. Acquired permits drop on task end (any
-          // exit path) so cancellation / errors release them.
-          let _permit = match permit_holder.as_ref() {
-            Some(sem) => match sem.clone().acquire_owned().await {
-              Ok(p) => Some(p),
-              Err(_) => {
-                return Err(YanshiError::FlowExecutionFailed {
-                  message: "Map semaphore closed before sub-flow could acquire permit".to_string(),
-                });
-              }
-            },
-            None => None,
-          };
-          FlowExecutor::new(&sub_flow)
-            .execute_from_inputs_with_config(initial_inputs, sub_config)
-            .await
-        });
+        // Y1.1: task-locals don't cross `tokio::spawn`; carry the parent
+        // run's artifact root into the sub-flow task so Map items file
+        // their artifacts under the parent run, not their own uuid dir.
+        let artifact_root = crate::run_context::current_artifact_root();
+        let handle = tokio::spawn(crate::run_context::with_inherited_artifact_root(
+          artifact_root,
+          async move {
+            // Hold the permit for the entire sub-flow execution so the
+            // concurrent count is a tight upper bound, not just a
+            // start-rate cap. Acquired permits drop on task end (any
+            // exit path) so cancellation / errors release them.
+            let _permit = match permit_holder.as_ref() {
+              Some(sem) => match sem.clone().acquire_owned().await {
+                Ok(p) => Some(p),
+                Err(_) => {
+                  return Err(YanshiError::FlowExecutionFailed {
+                    message: "Map semaphore closed before sub-flow could acquire permit"
+                      .to_string(),
+                  });
+                }
+              },
+              None => None,
+            };
+            FlowExecutor::new(&sub_flow)
+              .execute_from_inputs_with_config(initial_inputs, sub_config)
+              .await
+          },
+        ));
         abort_on_drop.0.push(handle.abort_handle());
         handles.push(handle);
       }
@@ -5335,5 +5350,106 @@ mod tests {
       "topological_sort must be deterministic; observed {} distinct orders",
       seen_orders.len()
     );
+  }
+  /// Y1.1: every node sees its run's directory as the artifact root,
+  /// and Map items (which run in spawned sub-flow tasks with their own
+  /// run dirs) inherit the *parent* run's root rather than their own.
+  #[tokio::test]
+  async fn nodes_see_the_run_dir_as_artifact_root_and_map_items_inherit_it() {
+    use_writable_home();
+
+    struct RootReporter;
+    #[async_trait]
+    impl AsyncNode for RootReporter {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let root = crate::run_context::current_artifact_root()
+          .map(|p| p.to_string_lossy().to_string())
+          .unwrap_or_default();
+        let mut outputs = HashMap::new();
+        outputs.insert("root".to_string(), FlowValue::Json(json!(root)));
+        Ok(outputs)
+      }
+    }
+
+    let top = GraphNode {
+      id: "top".to_string(),
+      node_type: NodeType::Standard(Arc::new(RootReporter)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let item = GraphNode {
+      id: "item".to_string(),
+      node_type: NodeType::Standard(Arc::new(RootReporter)),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let map_node = GraphNode {
+      id: "map_node".to_string(),
+      node_type: NodeType::Map {
+        template: vec![item],
+        parallel: true,
+        max_concurrent: Some(2),
+      },
+      dependencies: vec!["top".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("input_list".to_string(), FlowValue::Json(json!([1, 2, 3])));
+        inputs
+      },
+    };
+
+    let temp_dir = TempDir::new().unwrap();
+    let state = Flow::new(vec![top, map_node])
+      .execute_from_inputs_with_config(
+        HashMap::new(),
+        FlowExecutionConfig::serial().with_run_base_dir(temp_dir.path()),
+      )
+      .await
+      .unwrap();
+
+    let top_root = match state.get("top").unwrap().as_ref().unwrap().get("root") {
+      Some(FlowValue::Json(Value::String(s))) => s.clone(),
+      other => panic!("unexpected root output: {other:?}"),
+    };
+    assert!(
+      std::path::Path::new(&top_root).starts_with(temp_dir.path()),
+      "root {top_root} must be under the run base dir"
+    );
+    assert!(
+      std::path::Path::new(&top_root)
+        .join("top_outputs.json")
+        .exists(),
+      "root must be the run dir itself (where per-step outputs land)"
+    );
+
+    let results = match state
+      .get("map_node")
+      .unwrap()
+      .as_ref()
+      .unwrap()
+      .get("results")
+    {
+      Some(FlowValue::Json(Value::Array(arr))) => arr.clone(),
+      other => panic!("unexpected map results: {other:?}"),
+    };
+    assert_eq!(results.len(), 3);
+    for result in results {
+      // Sub-flow state pools serialise each node's `AsyncNodeResult`
+      // as `{"Ok": {...}}` and each `FlowValue` as `{"type", "value"}`.
+      let item_root = result["item"]["Ok"]["root"]["value"]
+        .as_str()
+        .unwrap_or_else(|| panic!("unexpected item shape: {result}"))
+        .to_string();
+      assert_eq!(
+        item_root, top_root,
+        "a Map item must inherit the parent run's artifact root"
+      );
+    }
   }
 }

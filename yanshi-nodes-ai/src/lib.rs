@@ -7,7 +7,10 @@
 //! crate is the adapter layer that depends on `yanshi-llm` / `yanshi-rag`
 //! / `yanshi-mcp`.
 
+pub mod artifacts;
 pub mod nodes;
+
+pub use artifacts::ArtifactOutputFormat;
 
 pub use nodes::asr::ASRNode;
 pub use nodes::image_edit::ImageEditNode;

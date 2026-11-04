@@ -34,6 +34,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 // Helper to get a string parameter from the node definition, returning a default if not found.
+/// Y1.1: `output_format: file | data_uri` on the five media-producing
+/// node types (`tts` / `text_to_image` / `image_to_image` / `image_edit` /
+/// `text_to_video`). Absent means `file`.
+fn get_output_format(
+  params: &HashMap<String, serde_yaml::Value>,
+) -> Result<yanshi_nodes_ai::ArtifactOutputFormat> {
+  let raw = params.get("output_format").and_then(|v| v.as_str());
+  yanshi_nodes_ai::ArtifactOutputFormat::parse(raw).map_err(|e| anyhow!("{e}"))
+}
+
 fn get_string_param_optional(params: &HashMap<String, serde_yaml::Value>, key: &str) -> String {
   params
     .get(key)
@@ -171,14 +181,16 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       let model = get_string_param_optional(&node_def.parameters, "model");
       let prompt = get_string_param_optional(&node_def.parameters, "prompt");
       let image_source = get_string_param_optional(&node_def.parameters, "image_source");
-      let node = ImageEditNode::new(&node_def.id, &model, &prompt, &image_source);
+      let node = ImageEditNode::new(&node_def.id, &model, &prompt, &image_source)
+        .with_output_format(get_output_format(&node_def.parameters)?);
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "image_to_image" => {
       let model = get_string_param_optional(&node_def.parameters, "model");
       let prompt = get_string_param_optional(&node_def.parameters, "prompt");
       let source_image = get_string_param_optional(&node_def.parameters, "source_image");
-      let node = ImageToImageNode::new(&node_def.id, &model, &prompt, &source_image);
+      let node = ImageToImageNode::new(&node_def.id, &model, &prompt, &source_image)
+        .with_output_format(get_output_format(&node_def.parameters)?);
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "image_understand" => {
@@ -206,19 +218,22 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     }
     "text_to_image" => {
       let model = get_string_param_optional(&node_def.parameters, "model");
-      let node = TextToImageNode::new(&node_def.id, &model);
+      let node = TextToImageNode::new(&node_def.id, &model)
+        .with_output_format(get_output_format(&node_def.parameters)?);
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "text_to_video" => {
       let model = get_string_param_optional(&node_def.parameters, "model");
-      let node = TextToVideoNode::new(&node_def.id, &model);
+      let node = TextToVideoNode::new(&node_def.id, &model)
+        .with_output_format(get_output_format(&node_def.parameters)?);
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "tts" => {
       let model = get_string_param_optional(&node_def.parameters, "model");
       let voice = get_string_param_optional(&node_def.parameters, "voice");
       let input_template = get_string_param_optional(&node_def.parameters, "input_template");
-      let node = TTSNode::new(&node_def.id, &model, &voice, &input_template);
+      let node = TTSNode::new(&node_def.id, &model, &voice, &input_template)
+        .with_output_format(get_output_format(&node_def.parameters)?);
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "while" => {

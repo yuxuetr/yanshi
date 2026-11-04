@@ -30,3 +30,7 @@ tokio = { workspace = true, features = ["full"] }
 # V1.7: structured logging for node execution — see yanshi-nodes'
 # Cargo.toml for why this is a plain, unconditional dependency here.
 tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3.8"
+futures = "0.3"
