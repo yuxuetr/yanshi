@@ -25,7 +25,9 @@ use crate::{
     glm_images::GlmImageProvider,
     google_media::GoogleMediaProvider,
     google_veo::GoogleVeoClient,
+    kling_video::KlingVideoProvider,
     minimax_tts::MiniMaxTtsProvider,
+    minimax_video::MiniMaxVideoProvider,
     mock_media::MockMediaProvider,
     modality::{
       AsrProvider, Image2ImageProvider, ImageEditProvider, Text2ImageProvider, Text2VideoProvider,
@@ -152,6 +154,25 @@ fn build_glm_text2image(
 fn build_minimax_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
   Ok(Box::new(MiniMaxTtsProvider::new(api_key, base_url)?))
 }
+// Y6.6: three more text-to-video vendors (async submit + poll jobs).
+fn build_dashscope_text2video(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2VideoProvider>> {
+  Ok(Box::new(DashScopeMediaProvider::new(api_key, base_url)?))
+}
+fn build_minimax_text2video(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2VideoProvider>> {
+  Ok(Box::new(MiniMaxVideoProvider::new(api_key, base_url)?))
+}
+fn build_kling_text2video(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2VideoProvider>> {
+  Ok(Box::new(KlingVideoProvider::new(api_key, base_url)?))
+}
 // Y1.1: `vendor: mock` for every modality, mirroring the chat path's
 // `MockProvider` — lets nodes, generator templates and CLI tests run a
 // modality success path with no vendor key. See `providers::mock_media`.
@@ -223,6 +244,9 @@ const IMAGE_EDIT_PROVIDERS: &[(&str, Ctor<dyn ImageEditProvider>)] = &[
 ];
 const TEXT2VIDEO_PROVIDERS: &[(&str, Ctor<dyn Text2VideoProvider>)] = &[
   ("google", build_google_text2video),
+  ("dashscope", build_dashscope_text2video),
+  ("minimax", build_minimax_text2video),
+  ("kling", build_kling_text2video),
   ("mock", build_mock_text2video),
 ];
 

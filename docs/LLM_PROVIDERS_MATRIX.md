@@ -335,6 +335,24 @@ YANSHI_LIVE_AUDIO_TESTS=1
 YANSHI_LIVE_VIDEO_TESTS=1
 ```
 
+Text-to-video (Y6.6) has one billed job per vendor under
+`YANSHI_LIVE_VIDEO_TESTS`: `dashscope_wan_text_to_video_live` (`wan2.7-t2v`,
+2 s at 720P), `minimax_hailuo_text_to_video_live` (`MiniMax-Hailuo-02`,
+6 s at 768P; set `MINIMAX_VIDEO_BASE_URL=https://api.minimax.io/v1` for an
+international account) and `kling_text_to_video_live` (`kling-v2-5-turbo`,
+5 s; `KLING_API_KEY` is an API key or `ACCESS_KEY:SECRET_KEY`). Nightly CI
+never sets the gate; the `llm-live.yml` manual run has a `video` checkbox.
+Offline, `tests/video_providers.rs` drives each vendor's submit → poll
+(→ MiniMax file retrieve) flow against a local server speaking its
+documented wire shape.
+
+| Vendor | Text-to-video | Endpoint shape |
+|---|---|---|
+| Google | Veo | `predictLongRunning` + operation poll |
+| DashScope | Wan (`wan2.7-t2v`, `wan2.5-t2v-preview`) | `video-synthesis` with `X-DashScope-Async`, `GET /api/v1/tasks/{id}` → `output.video_url` |
+| MiniMax | Hailuo (`MiniMax-Hailuo-2.3`, `-02`) | `POST /video_generation`, `GET /query/video_generation`, `GET /files/retrieve` → `file.download_url` |
+| Kling | `kling-v2-6`, `kling-v2-5-turbo`, `kling-v2-1-master` | `POST /v1/videos/text2video`, `GET …/{task_id}` → `data.task_result.videos[].url` |
+
 StepFun modality smoke tests are enabled by those gates:
 
 ```bash

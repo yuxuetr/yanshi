@@ -52,6 +52,9 @@ uuid = { workspace = true, features = ["serde"] }
 # output — no other provider needs to decode base64 in production code
 # today, since StepFun/OpenAI return raw bytes or a URL directly).
 base64 = "0.21"
+# Y6.6: Kling signs a short-lived HS256 JWT from an access/secret key pair.
+hmac = "0.12"
+sha2 = "0.10"
 
 # Environment and configuration
 dotenvy = "0.15"

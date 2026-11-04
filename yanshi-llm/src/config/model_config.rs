@@ -677,6 +677,7 @@ impl LLMConfig {
       "dashscope" => vec!["DASHSCOPE_API_KEY"],
       "deepseek" => vec!["DEEPSEEK_API_KEY"],
       "minimax" => vec!["MINIMAX_API_KEY"],
+      "kling" => vec!["KLING_API_KEY"],
       _ => vec![],
     };
 
@@ -751,6 +752,7 @@ impl LLMConfig {
         "zhipu",
         "deepseek",
         "minimax",
+        "kling",
         "mock",
       ]
       .contains(&model_config.vendor.as_str())

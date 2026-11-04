@@ -108,6 +108,7 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
       LiveCapability::Llm,
       LiveCapability::Image,
       LiveCapability::Audio,
+      LiveCapability::Video,
     ],
   },
   LiveProviderProfile {
@@ -116,7 +117,16 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
   },
   LiveProviderProfile {
     name: "minimax",
-    capabilities: &[LiveCapability::Llm, LiveCapability::Audio],
+    capabilities: &[
+      LiveCapability::Llm,
+      LiveCapability::Audio,
+      LiveCapability::Video,
+    ],
+  },
+  // Y6.6: video only (Kling has no chat API).
+  LiveProviderProfile {
+    name: "kling",
+    capabilities: &[LiveCapability::Video],
   },
 ];
 
@@ -2086,4 +2096,127 @@ fn silent_wav_one_second() -> Vec<u8> {
   wav.extend_from_slice(&(8000u32 * 2).to_le_bytes());
   wav.extend(std::iter::repeat_n(0u8, 8000 * 2));
   wav
+}
+
+// ── Y6.6: text-to-video, one billed job per vendor ──────────────────────
+//
+// Gated by YANSHI_LIVE_VIDEO_TESTS (off in the nightly run: each job costs
+// real money and takes minutes). Each submits the shortest, lowest
+// resolution clip the vendor offers and waits for its URL.
+
+async fn live_video(
+  vendor: &str,
+  key_env: &str,
+  provider: impl FnOnce(&str) -> Box<dyn yanshi_llm::providers::modality::Text2VideoProvider>,
+  request: yanshi_llm::providers::modality::Text2VideoRequest,
+) {
+  if !prepare_live_provider(vendor, LiveCapability::Video).await {
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&[key_env]) else {
+    eprintln!("[live] {vendor} video: skipped ({key_env} not set)");
+    return;
+  };
+  let provider = provider(&api_key);
+  let done = provider
+    .generate_and_wait(request, Duration::from_secs(10), Duration::from_secs(600))
+    .await
+    .unwrap_or_else(|e| panic!("{vendor} video generation failed: {e}"));
+  let url = done
+    .videos
+    .first()
+    .and_then(|v| v.url.as_deref())
+    .unwrap_or_default();
+  assert!(
+    url.starts_with("http"),
+    "{vendor}: no video url in {done:?}"
+  );
+}
+
+fn live_video_request(model: &str) -> yanshi_llm::providers::modality::Text2VideoRequest {
+  yanshi_llm::providers::modality::Text2VideoRequest {
+    model: model.to_string(),
+    prompt: "A paper boat drifting on a calm pond, soft morning light".to_string(),
+    aspect_ratio: None,
+    duration_seconds: None,
+    resolution: None,
+    seed: None,
+    extra: None,
+  }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashscope_wan_text_to_video_live() {
+  let mut request = live_video_request("wan2.7-t2v");
+  request.resolution = Some("720P".to_string());
+  request.duration_seconds = Some(2);
+  live_video(
+    "dashscope",
+    "DASHSCOPE_API_KEY",
+    |key| {
+      Box::new(
+        yanshi_llm::providers::dashscope_media::DashScopeMediaProvider::with_client(
+          no_proxy_client(),
+          key,
+          None,
+        )
+        .expect("provider"),
+      )
+    },
+    request,
+  )
+  .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minimax_hailuo_text_to_video_live() {
+  let mut request = live_video_request("MiniMax-Hailuo-02");
+  request.resolution = Some("768P".to_string());
+  request.duration_seconds = Some(6);
+  live_video(
+    "minimax",
+    "MINIMAX_API_KEY",
+    |key| {
+      Box::new(
+        yanshi_llm::providers::minimax_video::MiniMaxVideoProvider::with_client(
+          no_proxy_client(),
+          key,
+          minimax_base_url_sync(),
+        )
+        .expect("provider"),
+      )
+    },
+    request,
+  )
+  .await;
+}
+
+/// `MINIMAX_VIDEO_BASE_URL` for international accounts
+/// (`https://api.minimax.io/v1`); the mainland host otherwise.
+fn minimax_base_url_sync() -> Option<String> {
+  std::env::var("MINIMAX_VIDEO_BASE_URL")
+    .ok()
+    .filter(|v| !v.trim().is_empty())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kling_text_to_video_live() {
+  let mut request = live_video_request("kling-v2-5-turbo");
+  request.duration_seconds = Some(5);
+  live_video(
+    "kling",
+    "KLING_API_KEY",
+    |key| {
+      Box::new(
+        yanshi_llm::providers::kling_video::KlingVideoProvider::with_client(
+          no_proxy_client(),
+          key,
+          None,
+        )
+        .expect("provider"),
+      )
+    },
+    request,
+  )
+  .await;
 }

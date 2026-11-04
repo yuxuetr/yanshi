@@ -196,6 +196,7 @@ fn env_var_hint(provider: &str) -> &'static str {
     "glm" | "bigmodel" | "zhipu" => "GLM_API_KEY (or BIGMODEL_API_KEY, ZHIPU_API_KEY)",
     "deepseek" => "DEEPSEEK_API_KEY",
     "minimax" => "MINIMAX_API_KEY",
+    "kling" => "KLING_API_KEY (an API key or ACCESS_KEY:SECRET_KEY)",
     _ => "the provider's *_API_KEY env var",
   }
 }

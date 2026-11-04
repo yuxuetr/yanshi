@@ -1,4 +1,5 @@
-//! DashScope text-to-image (Wan) + TTS (Qwen-TTS) provider.
+//! DashScope text-to-image (Wan) + text-to-video (Wan, Y6.6) + TTS
+//! (Qwen-TTS) provider.
 //!
 //! Unlike every other modality provider in this crate, DashScope's media
 //! APIs are natively async-task-shaped for image generation: submit with
@@ -29,8 +30,9 @@
 //! them into a URL first, so this modality can't be implemented here.
 
 use super::modality::{
-  GeneratedImage, ImageGenerationResponse, Text2ImageProvider, Text2ImageRequest, TtsProvider,
-  TtsRequest, TtsResponse,
+  GeneratedImage, GeneratedVideo, ImageGenerationResponse, Text2ImageProvider, Text2ImageRequest,
+  Text2VideoProvider, Text2VideoRequest, TtsProvider, TtsRequest, TtsResponse,
+  VideoGenerationResponse, VideoGenerationStatus, VideoGenerationTask,
 };
 use crate::{LLMError, Result};
 use async_trait::async_trait;
@@ -176,13 +178,136 @@ pub(crate) fn parse_task_poll_response(body: &str) -> Result<TaskPollOutcome> {
 
   match parsed.output.task_status.as_str() {
     "SUCCEEDED" => Ok(TaskPollOutcome::Succeeded(parsed.output.results)),
-    "FAILED" => Ok(TaskPollOutcome::Failed(
+    // CANCELED / UNKNOWN (expired or never existed) never finish either.
+    "FAILED" | "CANCELED" | "UNKNOWN" => Ok(TaskPollOutcome::Failed(
       parsed
         .output
         .message
         .unwrap_or_else(|| "no error message provided".to_string()),
     )),
     _ => Ok(TaskPollOutcome::InProgress),
+  }
+}
+
+/// Parse a Wan video task poll (`GET /api/v1/tasks/{id}`): on
+/// `SUCCEEDED` the MP4 is at `output.video_url` (signed, 24 h) and its
+/// length at `usage.output_video_duration` (or `usage.duration`).
+pub(crate) fn parse_video_poll_response(body: &str) -> Result<VideoGenerationStatus> {
+  let parsed: Value = serde_json::from_str(body).map_err(|e| LLMError::ResponseParsingError {
+    message: format!("DashScope video task poll JSON parse failed: {e}"),
+  })?;
+  let output = &parsed["output"];
+  match output["task_status"].as_str().unwrap_or_default() {
+    "SUCCEEDED" => {
+      let url = output["video_url"]
+        .as_str()
+        .ok_or_else(|| LLMError::ResponseParsingError {
+          message: "DashScope video task succeeded without output.video_url".to_string(),
+        })?;
+      let usage = &parsed["usage"];
+      let seconds = usage["output_video_duration"]
+        .as_u64()
+        .or_else(|| usage["duration"].as_u64())
+        .and_then(|s| u32::try_from(s).ok());
+      Ok(VideoGenerationStatus::Completed(VideoGenerationResponse {
+        created: 0,
+        videos: vec![GeneratedVideo {
+          url: Some(url.to_string()),
+          b64_data: None,
+          duration_seconds: seconds,
+        }],
+        metadata: Some(json!({ "request_id": parsed["request_id"], "usage": usage })),
+      }))
+    }
+    status @ ("FAILED" | "CANCELED" | "UNKNOWN") => Ok(VideoGenerationStatus::Failed {
+      message: format!(
+        "{status}: {}",
+        output["message"]
+          .as_str()
+          .unwrap_or("no error message provided")
+      ),
+    }),
+    _ => Ok(VideoGenerationStatus::Pending),
+  }
+}
+
+/// The Wan text-to-video request body. `resolution` (`720P` / `1080P`),
+/// `aspect_ratio` (as `ratio`), `duration_seconds` and `seed` map onto
+/// `parameters`; `extra` (an object) is merged into it last.
+pub(crate) fn video_request_body(request: &Text2VideoRequest) -> Value {
+  let mut parameters = serde_json::Map::new();
+  if let Some(resolution) = &request.resolution {
+    parameters.insert("resolution".to_string(), json!(resolution.to_uppercase()));
+  }
+  if let Some(ratio) = &request.aspect_ratio {
+    parameters.insert("ratio".to_string(), json!(ratio));
+  }
+  if let Some(duration) = request.duration_seconds {
+    parameters.insert("duration".to_string(), json!(duration));
+  }
+  if let Some(seed) = request.seed {
+    parameters.insert("seed".to_string(), json!(seed));
+  }
+  if let Some(Value::Object(extra)) = &request.extra {
+    parameters.extend(extra.clone());
+  }
+  json!({
+    "model": request.model,
+    "input": { "prompt": request.prompt },
+    "parameters": Value::Object(parameters),
+  })
+}
+
+#[async_trait]
+impl Text2VideoProvider for DashScopeMediaProvider {
+  fn name(&self) -> &str {
+    "dashscope"
+  }
+
+  async fn submit(&self, request: Text2VideoRequest) -> Result<VideoGenerationTask> {
+    let url = format!(
+      "{}/api/v1/services/aigc/video-generation/video-synthesis",
+      self.base_url
+    );
+    let response = self
+      .client
+      .post(&url)
+      .bearer_auth(&self.api_key)
+      .header("X-DashScope-Async", "enable")
+      .json(&video_request_body(&request))
+      .send()
+      .await?;
+    if !response.status().is_success() {
+      let status_code = response.status().as_u16();
+      let message = response.text().await.unwrap_or_default();
+      return Err(LLMError::HttpError {
+        status_code,
+        message,
+      });
+    }
+    Ok(VideoGenerationTask {
+      task_id: parse_task_submission_response(&response.text().await?)?,
+      metadata: None,
+    })
+  }
+
+  async fn poll(&self, task: &VideoGenerationTask) -> Result<VideoGenerationStatus> {
+    let url = format!("{}/api/v1/tasks/{}", self.base_url, task.task_id);
+    let response = self
+      .client
+      .get(&url)
+      .bearer_auth(&self.api_key)
+      .send()
+      .await?;
+    if !response.status().is_success() {
+      let status_code = response.status().as_u16();
+      let message = response.text().await.unwrap_or_default();
+      return Err(LLMError::HttpError {
+        status_code,
+        message,
+      });
+    }
+    parse_video_poll_response(&response.text().await?)
   }
 }
 
@@ -351,6 +476,47 @@ impl TtsProvider for DashScopeMediaProvider {
 
 #[cfg(test)]
 mod tests {
+  use crate::providers::modality::Text2VideoRequest;
+
+  #[test]
+  fn wan_video_poll_and_request_shape() {
+    assert!(matches!(
+      parse_video_poll_response(r#"{"output":{"task_id":"t","task_status":"RUNNING"}}"#)
+        .expect("ok"),
+      VideoGenerationStatus::Pending
+    ));
+    assert!(matches!(
+      parse_video_poll_response(r#"{"output":{"task_id":"t","task_status":"UNKNOWN"}}"#)
+        .expect("ok"),
+      VideoGenerationStatus::Failed { .. }
+    ));
+    match parse_video_poll_response(
+      r#"{"request_id":"r","output":{"task_id":"t","task_status":"SUCCEEDED","video_url":"https://oss/v.mp4"},"usage":{"duration":5,"output_video_duration":5,"video_count":1}}"#,
+    )
+    .expect("ok")
+    {
+      VideoGenerationStatus::Completed(done) => {
+        assert_eq!(done.videos[0].url.as_deref(), Some("https://oss/v.mp4"));
+        assert_eq!(done.videos[0].duration_seconds, Some(5));
+      }
+      other => panic!("{other:?}"),
+    }
+    let body = video_request_body(&Text2VideoRequest {
+      model: "wan2.7-t2v".to_string(),
+      prompt: "a fox".to_string(),
+      aspect_ratio: Some("16:9".to_string()),
+      duration_seconds: Some(5),
+      resolution: Some("720p".to_string()),
+      seed: Some(7),
+      extra: Some(serde_json::json!({"prompt_extend": false})),
+    });
+    assert_eq!(
+      body,
+      serde_json::json!({"model": "wan2.7-t2v", "input": {"prompt": "a fox"},
+        "parameters": {"resolution": "720P", "ratio": "16:9", "duration": 5, "seed": 7, "prompt_extend": false}})
+    );
+  }
+
   use super::*;
 
   #[test]

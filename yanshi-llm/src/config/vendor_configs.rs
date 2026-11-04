@@ -285,7 +285,7 @@ pub(crate) fn parse_vendor_models_yaml(content: &str) -> Result<HashMap<String, 
 /// The registry's built-in vendor model files, bundled into the binary at
 /// compile time (T-split, see `docs/` model registry restructuring).
 ///
-/// `include_str!` can't glob a directory, so this is nine hardcoded calls
+/// `include_str!` can't glob a directory, so this is ten hardcoded calls
 /// — fine and idiomatic, since the vendor list is fixed at compile time.
 /// Filenames use each vendor's actual name (`stepfun`, not the `vendor:
 /// step` value used inside the YAML — the vendor field and the filename
@@ -318,6 +318,7 @@ const BUILTIN_VENDOR_FILES: &[(&str, &str)] = &[
     "minimax",
     include_str!("../../templates/models/minimax.yml"),
   ),
+  ("kling", include_str!("../../templates/models/kling.yml")),
 ];
 
 /// Merge every bundled vendor file into one models map. Sync/compile-time

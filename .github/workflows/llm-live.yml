@@ -22,6 +22,11 @@ on:
         description: "Comma-separated subset (openai,anthropic,google,moonshot,stepfun,glm); empty = all"
         required: false
         default: ""
+      video:
+        description: "Also run the billed text-to-video jobs (DashScope Wan, MiniMax Hailuo, Kling); minutes each"
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   live-smoke:
@@ -29,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     # Avoid stalling the runner if a provider hangs — each test also has its
     # own 30s timeout in code.
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       YANSHI_LIVE_LLM_TESTS: "1"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -58,6 +63,11 @@ jobs:
       # (note the `i` in `minimaxi`, this is 海螺 AI's official host).
       # Default cheap model: `MiniMax-M2`.
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      # Y6.6 text-to-video: only on a manual run with `video` ticked —
+      # each job is billed and takes minutes, so never nightly.
+      YANSHI_LIVE_VIDEO_TESTS: ${{ inputs.video && '1' || '' }}
+      KLING_API_KEY: ${{ secrets.KLING_API_KEY }}
+      MINIMAX_VIDEO_BASE_URL: ${{ secrets.MINIMAX_VIDEO_BASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

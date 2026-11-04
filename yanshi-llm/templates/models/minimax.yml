@@ -79,3 +79,36 @@ models:
     supports_tools: false
     supports_multimodal: false
     response_format: null
+  # Y6.6: Hailuo text-to-video (6 or 10 s, 768P / 1080P).
+  MiniMax-Hailuo-2.3:
+    vendor: minimax
+    type: text_to_video
+    accepts: [text]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  MiniMax-Hailuo-02:
+    vendor: minimax
+    type: text_to_video
+    accepts: [text]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null

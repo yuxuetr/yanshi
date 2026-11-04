@@ -1385,3 +1385,36 @@ models:
     supports_tools: false
     supports_multimodal: false
     response_format: null
+  # Y6.6: Wan text-to-video (async task API; 2-15 s, 720P / 1080P).
+  wan2.7-t2v:
+    vendor: dashscope
+    type: text_to_video
+    accepts: [text]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  wan2.5-t2v-preview:
+    vendor: dashscope
+    type: text_to_video
+    accepts: [text]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null

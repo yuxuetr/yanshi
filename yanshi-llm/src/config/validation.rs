@@ -73,6 +73,7 @@ impl ConfigValidator {
       "zhipu",
       "deepseek",
       "minimax",
+      "kling",
     ];
     if !supported_vendors.contains(&model_config.vendor.as_str()) {
       return Err(LLMError::UnsupportedProvider {
