@@ -22,6 +22,10 @@
 //!   dna_features_viewer, biopython, networkx. `YANSHI_FIGURE_PYTHON_IMAGE`
 //!   overrides the tag.
 //!
+//! Domains (`domain`, Y6.5): `circuit` (tikz only) adds circuitikz
+//! conventions to the prompt and, with a `spec` parts list, checks the
+//! source before rendering; see [`circuit`].
+//!
 //! The external renderers run under the OS sandbox
 //! (`yanshi_nodes::common::sandboxed`), writing only inside a per-call
 //! work directory. Outputs: `<id>_svg` (File), `<id>_png` (File, when
@@ -42,6 +46,8 @@ use yanshi_core::{
 };
 use yanshi_llm::Yanshi;
 use yanshi_nodes::common::{artifacts, sandboxed};
+
+mod circuit;
 
 const DEFAULT_MAX_ATTEMPTS: u64 = 3;
 /// Image for `language: python`; see `scripts/figure_python/Containerfile`.
@@ -390,12 +396,17 @@ impl FigureNode {
     model: &str,
     prompt: String,
     language: Language,
+    domain: Option<&str>,
   ) -> Result<String, YanshiError> {
-    let system = format!(
+    let mut system = format!(
       "You draw figures by writing source code. {} Reply with exactly one fenced code block \
        containing the complete source and nothing else.",
       language.instructions()
     );
+    if let Some(domain) = domain {
+      system.push_str("\n\n");
+      system.push_str(domain);
+    }
     let reply = Yanshi::model(model)
       .system(&system)
       .prompt(&prompt)
@@ -425,6 +436,27 @@ impl AsyncNode for FigureNode {
       _ => DEFAULT_MAX_ATTEMPTS,
     }
     .clamp(1, 10);
+    // Y6.5: a domain's parts list, checked before every render.
+    let circuit = match string_input(inputs, "domain").map(str::trim) {
+      None => None,
+      Some("circuit") if language == Language::Tikz => {
+        let spec = match inputs.get("spec") {
+          Some(FlowValue::Json(Value::String(text))) if !text.trim().is_empty() => Some(
+            serde_json::from_str::<Value>(text)
+              .map_err(|e| self.input_error(format!("spec is not JSON: {e}")))?,
+          ),
+          Some(FlowValue::Json(Value::String(_))) | None => None,
+          Some(FlowValue::Json(value)) => Some(value.clone()),
+          Some(_) => return Err(self.input_error("spec must be JSON")),
+        };
+        Some(circuit::parse_spec(spec.as_ref()).map_err(|e| self.input_error(e))?)
+      }
+      Some("circuit") => return Err(self.input_error("domain circuit needs language tikz")),
+      Some(other) => {
+        return Err(self.input_error(format!("unknown domain '{other}': expected circuit")));
+      }
+    };
+    let domain_text = circuit.as_deref().map(circuit::instructions);
     let can_generate = description.is_some() && model.is_some();
     if string_input(inputs, "source").is_none() && !can_generate {
       return Err(self.input_error("give 'source', or 'description' and 'model'"));
@@ -435,13 +467,25 @@ impl AsyncNode for FigureNode {
       None => {
         let prompt = prompt_for(language, description.unwrap_or_default(), None);
         self
-          .generate(model.unwrap_or_default(), prompt, language)
+          .generate(
+            model.unwrap_or_default(),
+            prompt,
+            language,
+            domain_text.as_deref(),
+          )
           .await?
       }
     };
     let mut attempt: u64 = 1;
     let svg = loop {
-      match self.render(language, &source).await? {
+      let rendered = match circuit
+        .as_deref()
+        .map(|parts| circuit::check(&source, parts))
+      {
+        Some(Err(violations)) => Err(violations),
+        _ => self.render(language, &source).await?,
+      };
+      match rendered {
         Ok(svg) => break svg,
         Err(error) if attempt < max_attempts && can_generate => {
           run_context::report_progress(
@@ -454,7 +498,12 @@ impl AsyncNode for FigureNode {
             Some((&source, &error)),
           );
           source = self
-            .generate(model.unwrap_or_default(), prompt, language)
+            .generate(
+              model.unwrap_or_default(),
+              prompt,
+              language,
+              domain_text.as_deref(),
+            )
             .await?;
           attempt += 1;
         }

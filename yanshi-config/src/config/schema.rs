@@ -524,6 +524,8 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("max_attempts", ParamType::Integer),
       ParamSpec::optional("png", ParamType::Bool),
       ParamSpec::optional("png_width", ParamType::Integer),
+      ParamSpec::optional("domain", ParamType::String),
+      ParamSpec::optional("spec", ParamType::Any),
     ]),
     "render_document" => Some(vec![
       ParamSpec::required_input("markdown", ParamType::String),

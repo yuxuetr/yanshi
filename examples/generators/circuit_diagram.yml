@@ -1,0 +1,110 @@
+# Y6.5 — domain engineering diagram: an electrical schematic
+# (docs/RFC_CONTENT_STUDIO.md §5.3).
+#
+# A circuit described in words → a parts list (llm, json_schema: id,
+# kind, value per component) → `figure` with `domain: circuit`: the
+# model writes circuitikz, the source is checked against the parts list
+# (every component drawn as its kind and labelled with its id) and then
+# compiled (lualatex → pdftocairo); a missing part or a compile error is
+# fed back for another attempt → SVG + PNG → a `Deliverable`.
+#
+#   yanshi workflow run examples/generators/circuit_diagram.yml \
+#     --input description "an RC low-pass filter driven by a 5 V source" \
+#     --output-dir out
+#
+# Needs TeX Live (with circuitikz) and poppler (`yanshi doctor`).
+name: circuit_diagram
+description: "An electrical schematic from a description, checked against its parts list, as SVG and PNG"
+
+inputs:
+  description:
+    description: "The circuit, in words: what it does and which parts it has"
+  text:
+    description: "Optional source text the circuit is described in"
+    default: ""
+
+nodes:
+  - id: parts_prompt
+    type: template
+    parameters:
+      template: |
+        List the components of this circuit.
+        {{ description }}
+        {% if text %}
+        Source:
+        {{ text | truncate(length=12000) }}
+        {% endif %}
+        Give every component an id of a letter and a number (R1, C1, V1,
+        D1, ...), its kind, and its value when one is known. Add one
+        `ground` entry when the circuit is grounded. `brief` describes the
+        topology: what connects to what.
+
+  - id: parts
+    type: llm
+    dependencies: ["parts_prompt"]
+    input_mapping:
+      prompt: "{{ nodes.parts_prompt.outputs.output }}"
+    parameters:
+      system: "You are an electrical engineer. Answer with JSON only."
+      json_schema:
+        type: object
+        required: [title, brief, components]
+        properties:
+          title: { type: string }
+          brief: { type: string }
+          components:
+            type: array
+            minItems: 1
+            items:
+              type: object
+              required: [kind]
+              properties:
+                id: { type: string }
+                kind:
+                  type: string
+                  enum: [resistor, capacitor, inductor, voltage_source, current_source, diode, led, switch, lamp, ammeter, voltmeter, ground]
+                value: { type: string }
+
+  - id: plan
+    type: template
+    dependencies: ["parts"]
+    input_mapping:
+      p: "{{ nodes.parts.outputs.output }}"
+    parameters:
+      output_format: json
+      template: '{"spec": {{ p.components | json_encode() }}, "brief": {{ p.brief | json_encode() }}}'
+
+  - id: schematic
+    type: figure
+    dependencies: ["plan"]
+    input_mapping:
+      spec: "{{ nodes.plan.outputs.spec }}"
+      description: "{{ nodes.plan.outputs.brief }}"
+    parameters:
+      language: tikz
+      domain: circuit
+      png: true
+      png_width: 1600
+
+  - id: deliverable
+    type: template
+    dependencies: ["schematic"]
+    input_mapping:
+      p: "{{ nodes.parts.outputs.output }}"
+      svg: "{{ nodes.schematic.outputs.schematic_svg }}"
+      png: "{{ nodes.schematic.outputs.schematic_png }}"
+      source: "{{ nodes.schematic.outputs.schematic_source }}"
+      attempts: "{{ nodes.schematic.outputs.schematic_attempts }}"
+    parameters:
+      output_format: json
+      template: |
+        {"deliverable": {
+          "kind": "figure",
+          "title": {{ p.title | json_encode() }},
+          "content": {"domain": "circuit", "components": {{ p.components | json_encode() }}, "source": {{ source | json_encode() }}, "attempts": {{ attempts }}},
+          "citations": [],
+          "files": [
+            {"node_id": "schematic", "name": {{ svg | split(pat="/") | last | json_encode() }}, "mime_type": "image/svg+xml", "role": "primary"},
+            {"node_id": "schematic", "name": {{ png | split(pat="/") | last | json_encode() }}, "mime_type": "image/png", "role": "preview"}
+          ]
+        }}

@@ -208,6 +208,15 @@ re-planning from the L track.
 | `mermaid`, `d2` | `mmdc`, `d2` | software and structure diagrams | — |
 | `python` (Y3.5) | `code_exec` container image with matplotlib, RDKit, dna_features_viewer, ete3, networkx | data-driven science figures: molecules, plasmid and gene maps, phylogenetic trees | — |
 
+Domains (Y6.5) add a second check before the compile. With `domain:
+circuit` (tikz only), the prompt carries circuitikz conventions and a
+skeleton. A `spec` parts list (`[{id, kind, value}]`) is also checked
+against the source: every part must be drawn as a bipole of its kind and
+labelled with its id. A missing or wrongly drawn part is fed back like a
+compile error. `examples/generators/circuit_diagram.yml` is the sample
+domain template. Other domains (chemfig molecules, block diagrams) follow
+the same shape when there is a generator that needs them.
+
 Sandbox notes that follow from the experiments: TeX Live installs outside
 `PATH` on macOS (`/Library/TeX/texbin`), so the allowlist names full paths
 and `TEXMFVAR` is pointed inside the run dir; typst packages are fetched
