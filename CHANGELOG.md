@@ -338,6 +338,18 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`figure` language `python`: scientific drawing in a container
+  (Y3.5).** The script must save `figure.svg`. It runs in the
+  `code_exec` container tier: no network, read-only rootfs, only the
+  work dir writable, 1 GiB / 120 CPU-s / 64 pids, and a 180 s timeout
+  that kills the container. The image is built from
+  `scripts/figure_python/Containerfile` (matplotlib, RDKit,
+  dna_features_viewer, biopython for `Bio.Phylo` trees, networkx); the
+  build fails if a drawing module cannot be imported.
+  `YANSHI_FIGURE_PYTHON_IMAGE` overrides the tag. With no container
+  engine the node refuses to run. A Python traceback is fed back to the
+  model like any other render error. `docs/CONFIGURATION.md` gains a
+  "Rendering Deliverables" section covering every render node.
 - **`figure`: LLM-written diagrams, rendered and repaired (Y3.4).** A
   model writes figure source and a real renderer compiles it. A compile
   error goes back to the model in the next prompt, up to `max_attempts`

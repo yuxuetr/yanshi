@@ -1,0 +1,36 @@
+# Y3.5: the image the `figure` node's `language: python` runs scientific
+# drawing code in (through the code_exec container tier: no network,
+# read-only rootfs, only /workspace writable). Everything a figure needs
+# must be baked in here, because nothing can be installed at run time.
+#
+#   container build -t yanshi-figure-python:latest scripts/figure_python
+#   (or: podman build -t yanshi-figure-python:latest scripts/figure_python)
+#
+# Override the tag the node uses with YANSHI_FIGURE_PYTHON_IMAGE.
+FROM python:3.12-slim
+
+# RDKit's drawing module links libXrender / libXext / libexpat even when only SVG is
+# produced.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libxrender1 libxext6 libexpat1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# matplotlib: charts. rdkit: molecules. dna_features_viewer (+ biopython):
+# plasmid / gene maps. biopython's Bio.Phylo: phylogenetic trees drawn with
+# matplotlib (in place of ete3, whose renderer needs Qt). networkx: graphs.
+RUN pip install --no-cache-dir \
+      "matplotlib==3.10.*" \
+      "rdkit==2025.9.*" \
+      "dna_features_viewer==3.1.*" \
+      "biopython==1.86" \
+      "networkx==3.5.*" \
+ && python -c "import matplotlib, rdkit, dna_features_viewer, Bio, networkx" \
+ && python -c "from rdkit.Chem.Draw import rdMolDraw2D; from Bio import Phylo" \
+ && MPLCONFIGDIR=/tmp/mpl python -c "import matplotlib.pyplot"
+
+# Headless backend; font cache built at image time (the rootfs is
+# read-only at run time, and /workspace is per call).
+ENV MPLBACKEND=Agg \
+    MPLCONFIGDIR=/tmp/mpl
+RUN mkdir -p /tmp/mpl && python -c "import matplotlib.font_manager as f; f._load_fontmanager(try_read_cache=False)"
+WORKDIR /workspace

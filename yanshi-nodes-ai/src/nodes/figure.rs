@@ -15,6 +15,12 @@
 //!   font cache (`TEXMFVAR`) lives in the run directory.
 //! - `typst`: `typst compile` straight to SVG; packages must already be
 //!   in typst's cache (the sandbox has no network).
+//! - `python` (Y3.5): a script that saves `figure.svg`, run in the
+//!   `code_exec` container tier (no network, read-only rootfs, only the
+//!   work directory writable) on the image built from
+//!   `scripts/figure_python/Containerfile`: matplotlib, RDKit,
+//!   dna_features_viewer, biopython, networkx. `YANSHI_FIGURE_PYTHON_IMAGE`
+//!   overrides the tag.
 //!
 //! The external renderers run under the OS sandbox
 //! (`yanshi_nodes::common::sandboxed`), writing only inside a per-call
@@ -38,6 +44,9 @@ use yanshi_llm::Yanshi;
 use yanshi_nodes::common::{artifacts, sandboxed};
 
 const DEFAULT_MAX_ATTEMPTS: u64 = 3;
+/// Image for `language: python`; see `scripts/figure_python/Containerfile`.
+const DEFAULT_PYTHON_IMAGE: &str = "yanshi-figure-python:latest";
+const PYTHON_TIMEOUT: Duration = Duration::from_secs(180);
 const RENDER_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The figure languages this node renders.
@@ -46,6 +55,7 @@ enum Language {
   Svg,
   Tikz,
   Typst,
+  Python,
 }
 
 impl Language {
@@ -54,6 +64,7 @@ impl Language {
       "svg" => Some(Self::Svg),
       "tikz" => Some(Self::Tikz),
       "typst" => Some(Self::Typst),
+      "python" => Some(Self::Python),
       _ => None,
     }
   }
@@ -63,6 +74,7 @@ impl Language {
       Self::Svg => "svg",
       Self::Tikz => "tikz",
       Self::Typst => "typst",
+      Self::Python => "python",
     }
   }
 
@@ -83,6 +95,13 @@ impl Language {
         "Write one complete Typst document that starts with \
          #set page(width: auto, height: auto, margin: 4pt) and produces exactly one page. \
          There is no network: only packages already cached (such as @preview/cetz) can be imported."
+      }
+      Self::Python => {
+        "Write one complete Python 3 script that draws the figure and saves it as SVG to \
+         ./figure.svg. matplotlib (Agg backend: plt.savefig(\"figure.svg\")), rdkit (use \
+         rdkit.Chem.Draw.rdMolDraw2D.MolDraw2DSVG and write GetDrawingText()), \
+         dna_features_viewer, biopython (Bio.Phylo trees drawn with matplotlib) and networkx \
+         are installed; nothing else is, and there is no network."
       }
     }
   }
@@ -183,6 +202,7 @@ impl FigureNode {
     let result = match language {
       Language::Tikz => self.render_tikz(&node_dir, &workdir, source).await,
       Language::Typst => self.render_typst(&workdir, source).await,
+      Language::Python => self.render_python(&workdir, source).await,
       Language::Svg => unreachable!("handled before the work directory is created"),
     };
     let _ = tokio::fs::remove_dir_all(&workdir).await;
@@ -285,6 +305,78 @@ impl FigureNode {
     self.read_svg(workdir).await
   }
 
+  /// Run the script in the code_exec container tier. Unlike the other
+  /// renderers there is no degraded mode: without a container engine the
+  /// node fails rather than running model-written code on the host.
+  async fn render_python(&self, workdir: &Path, source: &str) -> Result<Rendered, YanshiError> {
+    use yanshi_tools::{
+      Capability,
+      sandbox::{ContainerBackend, SandboxBackend, SandboxScope},
+    };
+    let image = std::env::var("YANSHI_FIGURE_PYTHON_IMAGE")
+      .ok()
+      .filter(|v| !v.trim().is_empty())
+      .unwrap_or_else(|| DEFAULT_PYTHON_IMAGE.to_string());
+    let backend = ContainerBackend::new(image);
+    if !backend.is_enforcing() {
+      return Err(YanshiError::NodeExecutionFailed {
+        message: format!(
+          "{}: language python needs a container engine (Apple `container` or rootless Podman); \
+           `yanshi doctor` reports it",
+          self.id
+        ),
+      });
+    }
+    tokio::fs::write(workdir.join("fig.py"), source)
+      .await
+      .map_err(|e| self.input_error(format!("cannot stage the script: {e}")))?;
+    let canonical = workdir
+      .canonicalize()
+      .map_err(|e| self.input_error(format!("cannot resolve {}: {e}", workdir.display())))?;
+    let scope = SandboxScope::new()
+      .with_working_directory(&canonical)
+      .with_max_memory_bytes(1024 * 1024 * 1024)
+      .with_max_cpu_secs(120)
+      .with_max_pids(64)
+      .with_container_name(format!("yanshi-figure-{}", uuid::Uuid::new_v4()));
+    let mut command = tokio::process::Command::new("python3");
+    command
+      .arg("fig.py")
+      .current_dir(&canonical)
+      .kill_on_drop(true);
+    backend
+      .wrap_command(
+        &mut command,
+        &[Capability::FsRead, Capability::FsWrite, Capability::Exec],
+        &scope,
+      )
+      .map_err(|e| YanshiError::NodeExecutionFailed {
+        message: format!("{}: preparing the container failed: {e}", self.id),
+      })?;
+    let output = match tokio::time::timeout(PYTHON_TIMEOUT, command.output()).await {
+      Ok(output) => output.map_err(|e| YanshiError::NodeExecutionFailed {
+        message: format!("{}: starting the container failed: {e}", self.id),
+      })?,
+      Err(_) => {
+        backend.terminate(&scope);
+        return Ok(Err(format!(
+          "the script ran longer than {}s",
+          PYTHON_TIMEOUT.as_secs()
+        )));
+      }
+    };
+    if !output.status.success() {
+      return Ok(Err(sandboxed::output_tail(&output, 25)));
+    }
+    match tokio::fs::read_to_string(canonical.join("figure.svg")).await {
+      Ok(svg) if !svg.trim().is_empty() => Ok(Ok(svg)),
+      Ok(_) => Ok(Err("the script wrote an empty figure.svg".to_string())),
+      Err(_) => Ok(Err(
+        "the script finished but wrote no ./figure.svg".to_string(),
+      )),
+    }
+  }
+
   async fn read_svg(&self, workdir: &Path) -> Result<Rendered, YanshiError> {
     match tokio::fs::read_to_string(workdir.join("fig.svg")).await {
       Ok(svg) if !svg.trim().is_empty() => Ok(Ok(svg)),
@@ -323,7 +415,7 @@ impl AsyncNode for FigureNode {
       .ok_or_else(|| self.input_error("missing input 'language' (svg, tikz or typst)"))?;
     let language = Language::parse(language.trim()).ok_or_else(|| {
       self.input_error(format!(
-        "unsupported language '{language}': expected svg, tikz or typst"
+        "unsupported language '{language}': expected svg, tikz, typst or python"
       ))
     })?;
     let description = string_input(inputs, "description");

@@ -175,6 +175,36 @@ async fn cetz_source_renders_to_svg() {
   assert!(svg.contains("<svg") && svg.contains("<path"), "{svg}");
 }
 
+/// Y3.5 acceptance: RDKit draws caffeine inside the code_exec container
+/// tier. Needs a container engine and the image from
+/// `scripts/figure_python/Containerfile`:
+/// `container build -t yanshi-figure-python:latest scripts/figure_python`.
+#[tokio::test]
+#[ignore = "needs a container engine and the yanshi-figure-python image"]
+async fn rdkit_draws_caffeine_in_the_container() {
+  let source = r#"from rdkit import Chem
+from rdkit.Chem.Draw import rdMolDraw2D
+
+caffeine = Chem.MolFromSmiles("CN1C=NC2=C1C(=O)N(C(=O)N2C)C")
+drawer = rdMolDraw2D.MolDraw2DSVG(400, 300)
+drawer.DrawMolecule(caffeine)
+drawer.FinishDrawing()
+with open("figure.svg", "w") as out:
+    out.write(drawer.GetDrawingText())
+"#;
+  let (outputs, events, _runs) = run_figure(vec![
+    ("language", json!("python")),
+    ("source", json!(source)),
+  ])
+  .await;
+  let svg = svg_of(&outputs);
+  assert!(
+    svg.contains("<svg") && svg.matches("<path").count() > 10,
+    "{svg}"
+  );
+  assert!(events.is_empty());
+}
+
 fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
   let mut found = Vec::new();
   if let Ok(entries) = std::fs::read_dir(dir) {

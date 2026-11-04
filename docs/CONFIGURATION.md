@@ -264,6 +264,49 @@ yanshi trace replay <run_id>
 yanshi trace tui <run_id>
 ```
 
+## Rendering Deliverables
+
+Render nodes turn content into files (`FlowValue::File` artifacts under
+the run directory). All read their inputs at execute time, so content
+can come from `parameters` or from an upstream node via `input_mapping`.
+
+| node | input → output | needs |
+| --- | --- | --- |
+| `render_table` | `rows` (+ `format: csv\|xlsx`, `columns`) → CSV / XLSX | — |
+| `render_svg` | `svg` (+ `width`) → PNG | — |
+| `render_markdown` | `markdown` (+ `title`) → one self-contained HTML page | — |
+| `render_document` | `markdown`, `format: docx\|pptx\|html\|epub\|pdf` (+ `title`, `toc`) | `pandoc`; `typst` for PDF |
+| `figure` | `language`, `description` + `model` (or `source`) → SVG (+ `png: true`) | per language, below |
+
+`figure` asks the model for source in `language`, renders it, and feeds
+render errors back for up to `max_attempts` (default 3); each retry is a
+`node.progress` event with `kind: figure_retry`.
+
+| `language` | renderer |
+| --- | --- |
+| `svg` | in-process (resvg) |
+| `tikz` | `lualatex` + `pdftocairo` (TeX Live: circuitikz, chemfig, pgfplots, tikz-cd) |
+| `typst` | `typst`, cached packages only (e.g. `@preview/cetz`) |
+| `python` | container engine + the image from `scripts/figure_python/Containerfile` (matplotlib, RDKit, dna_features_viewer, biopython, networkx) |
+
+```yaml
+- id: circuit
+  type: figure
+  parameters:
+    language: tikz
+    model: claude-sonnet
+    description: "An RC low-pass filter with labelled R1, C1 and Vin"
+    png: true
+```
+
+External renderers run under the OS sandbox: read-only access to their
+install trees and fonts, writes only to the node's work directory, no
+network. `python` runs in the `code_exec` container tier and refuses to
+run without a container engine. `yanshi doctor` lists which renderer
+binaries are installed. Build the Python image once with
+`container build -t yanshi-figure-python:latest scripts/figure_python`
+(or `podman build`), or point `YANSHI_FIGURE_PYTHON_IMAGE` at your own.
+
 ## Cost Limits
 
 Billed modality nodes (`tts`, `text_to_image`, `image_to_image`,

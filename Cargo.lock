@@ -7556,6 +7556,7 @@ dependencies = [
  "yanshi-mcp",
  "yanshi-nodes",
  "yanshi-rag",
+ "yanshi-tools",
 ]
 
 [[package]]
