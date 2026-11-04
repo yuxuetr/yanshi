@@ -254,6 +254,17 @@ _New entries go here. Will roll into the next tag (likely
   string. `vendor: mock` now serves every modality
   (`yanshi_llm::providers::MockMediaProvider`: valid WAV, 1×1 PNG, stub
   video), so modality success paths run in tests and CI without keys.
+- **Consumers accept `FlowValue::File` (Y1.2).** The `file` node gains
+  `copy` / `move` (source = the `content` input as a `File` value or
+  path, destination = `path`, both under the sandbox policy) and
+  `read_bytes` (hand an existing file downstream as a `File` value);
+  `write` with a `File` as `content` copies the bytes. `copy` / `move` /
+  `read_bytes` output `FlowValue::File` with a guessed MIME. Tera gains
+  `{{ x | mime }}` and `{{ x | file_size }}` (a `File` still renders as
+  its path). `image_understand` already read `File` inputs; it is now
+  covered end to end: `text_to_image → image_understand` and
+  `tts → file(copy)` run as config-first workflows under `vendor: mock`
+  (`yanshi-config/tests/media_flow.rs`).
 
 - **`cargo xtask refresh-live-models` now calls each default model.**
   A model listed in `/models` can still be retired: Google lists

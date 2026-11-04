@@ -71,6 +71,39 @@ pub fn register_custom_filters(tera: &mut Tera) {
     },
   );
 
+  // Y1.2: a `FlowValue::File` renders as its path string (see
+  // `flow_value_to_tera_value`); these two filters expose the rest of
+  // what a template needs to describe an artifact without reading it
+  // into the prompt. `{{ audio | mime }}` → "audio/wav" (by extension,
+  // which is how artifacts are named); `{{ audio | file_size }}` → bytes.
+  tera.register_filter(
+    "mime",
+    |value: &TeraValue, _args: &HashMap<String, TeraValue>| -> TeraResult<TeraValue> {
+      let TeraValue::String(path) = value else {
+        return Err(tera::Error::msg("`mime` filter expects a file path string"));
+      };
+      let mime = mime_guess::from_path(path)
+        .first()
+        .map(|m| m.essence_str().to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+      Ok(TeraValue::String(mime))
+    },
+  );
+  tera.register_filter(
+    "file_size",
+    |value: &TeraValue, _args: &HashMap<String, TeraValue>| -> TeraResult<TeraValue> {
+      let TeraValue::String(path) = value else {
+        return Err(tera::Error::msg(
+          "`file_size` filter expects a file path string",
+        ));
+      };
+      let len = std::fs::metadata(path)
+        .map_err(|e| tera::Error::msg(format!("`file_size`: cannot stat '{path}': {e}")))?
+        .len();
+      Ok(TeraValue::Number(len.into()))
+    },
+  );
+
   // Filter to convert to JSON string
   tera.register_filter(
     "to_json",
@@ -182,5 +215,29 @@ mod tests {
     // Test that functions are registered
     assert!(tera.get_function("now").is_ok());
     assert!(tera.get_function("uuid").is_ok());
+  }
+  #[test]
+  fn file_values_render_as_paths_and_expose_mime_and_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let audio = dir.path().join("1.wav");
+    std::fs::write(&audio, vec![0u8; 44]).unwrap();
+
+    let mut tera = Tera::default();
+    register_custom_filters(&mut tera);
+    let mut ctx = tera::Context::new();
+    ctx.insert(
+      "audio",
+      &flow_value_to_tera_value(&FlowValue::File {
+        path: audio.clone(),
+        mime_type: Some("audio/wav".to_string()),
+      }),
+    );
+    let rendered = tera
+      .render_str(
+        "{{ audio }}|{{ audio | mime }}|{{ audio | file_size }}",
+        &ctx,
+      )
+      .unwrap();
+    assert_eq!(rendered, format!("{}|audio/wav|44", audio.display()));
   }
 }

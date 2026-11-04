@@ -13,6 +13,15 @@ use yanshi_tools::SandboxPolicy;
 
 /// Workflow node that reads or writes files on the local filesystem.
 ///
+/// Y1.2 (`docs/RFC_CONTENT_STUDIO.md` §4.1): media arrives as
+/// `FlowValue::File`, so besides `read` / `write` the node offers
+/// `copy` and `move` (source = the `content` input, a `File` value or a
+/// path string; destination = `path`) and `read_bytes` (hand an existing
+/// file downstream as a `File` value without loading it). `write` with a
+/// `File` as `content` copies the bytes instead of writing the path
+/// string. `copy` / `move` / `read_bytes` output `FlowValue::File`;
+/// `read` / `write` keep their string outputs.
+///
 /// `FileNode` defers to [`yanshi_tools::SandboxPolicy`] for path
 /// validation (Q1.3.1). The default policy is **deny-by-default**
 /// (V0.2): `SandboxPolicy::default()` has an empty `allowed_paths`, so
@@ -116,28 +125,96 @@ impl AsyncNode for FileNode {
         Ok(outputs)
       }
       "write" => {
-        let content = get_string_input(inputs, "content")?;
-        if let Some(parent) = path.parent()
-          && !parent.as_os_str().is_empty()
-        {
-          // Parent validation is what stops `..` escapes when the
-          // target file doesn't exist yet — the canonicalization in
-          // `path_denial_reason` walks up to the nearest existing
-          // ancestor.
-          self.validate_path(parent)?;
-          tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            YanshiError::AsyncExecutionError {
-              message: format!("Failed to create directory '{}': {}", parent.display(), e),
-            }
-          })?;
+        self.prepare_destination(path).await?;
+        match inputs.get("content") {
+          Some(FlowValue::File { path: source, .. }) => {
+            self.guard_source(source).await?;
+            tokio::fs::copy(source, path)
+              .await
+              .map_err(|e| YanshiError::AsyncExecutionError {
+                message: format!(
+                  "Failed to copy '{}' to '{}': {}",
+                  source.display(),
+                  path.display(),
+                  e
+                ),
+              })?;
+          }
+          Some(FlowValue::Json(serde_json::Value::String(content))) => {
+            tokio::fs::write(path, content).await.map_err(|e| {
+              YanshiError::AsyncExecutionError {
+                message: format!("Failed to write file '{}': {}", path.display(), e),
+              }
+            })?;
+          }
+          _ => {
+            return Err(YanshiError::NodeInputError {
+              message: "Required input 'content' must be a string or a File value".to_string(),
+            });
+          }
         }
-        tokio::fs::write(path, content)
-          .await
-          .map_err(|e| YanshiError::AsyncExecutionError {
-            message: format!("Failed to write file '{}': {}", path.display(), e),
-          })?;
         let mut outputs = HashMap::new();
         outputs.insert("path".to_string(), FlowValue::Json(json!(path_str)));
+        Ok(outputs)
+      }
+      "copy" | "move" => {
+        let source = source_input(inputs)?;
+        self.validate_path(&source)?;
+        self.guard_source(&source).await?;
+        self.prepare_destination(path).await?;
+        if operation == "copy" {
+          tokio::fs::copy(&source, path)
+            .await
+            .map_err(|e| YanshiError::AsyncExecutionError {
+              message: format!(
+                "Failed to copy '{}' to '{}': {}",
+                source.display(),
+                path.display(),
+                e
+              ),
+            })?;
+        } else if tokio::fs::rename(&source, path).await.is_err() {
+          // Cross-device moves cannot rename; fall back to copy + unlink.
+          tokio::fs::copy(&source, path)
+            .await
+            .map_err(|e| YanshiError::AsyncExecutionError {
+              message: format!(
+                "Failed to move '{}' to '{}': {}",
+                source.display(),
+                path.display(),
+                e
+              ),
+            })?;
+          tokio::fs::remove_file(&source)
+            .await
+            .map_err(|e| YanshiError::AsyncExecutionError {
+              message: format!(
+                "Moved '{}' but could not remove the source: {}",
+                source.display(),
+                e
+              ),
+            })?;
+        }
+        let mut outputs = HashMap::new();
+        outputs.insert(
+          "path".to_string(),
+          FlowValue::File {
+            path: path.to_path_buf(),
+            mime_type: guess_mime(path),
+          },
+        );
+        Ok(outputs)
+      }
+      "read_bytes" => {
+        self.guard_source(path).await?;
+        let mut outputs = HashMap::new();
+        outputs.insert(
+          "content".to_string(),
+          FlowValue::File {
+            path: path.to_path_buf(),
+            mime_type: guess_mime(path),
+          },
+        );
         Ok(outputs)
       }
       _ => Err(YanshiError::NodeInputError {
@@ -148,6 +225,58 @@ impl AsyncNode for FileNode {
 }
 
 impl FileNode {
+  /// Validate the destination's parent and create it. Parent validation
+  /// is what stops `..` escapes when the target file doesn't exist yet —
+  /// the canonicalization in `path_denial_reason` walks up to the nearest
+  /// existing ancestor.
+  async fn prepare_destination(&self, path: &Path) -> Result<(), YanshiError> {
+    if let Some(parent) = path.parent()
+      && !parent.as_os_str().is_empty()
+    {
+      self.validate_path(parent)?;
+      tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| YanshiError::AsyncExecutionError {
+          message: format!("Failed to create directory '{}': {}", parent.display(), e),
+        })?;
+    }
+    Ok(())
+  }
+
+  /// The symlink / hardlink guard `read` applies, for any path whose
+  /// bytes are about to leave the sandbox as a copy or a `File` value.
+  async fn guard_source(&self, source: &Path) -> Result<(), YanshiError> {
+    let meta =
+      tokio::fs::symlink_metadata(source)
+        .await
+        .map_err(|e| YanshiError::AsyncExecutionError {
+          message: format!("Failed to stat '{}': {}", source.display(), e),
+        })?;
+    if meta.file_type().is_symlink() {
+      return Err(YanshiError::AsyncExecutionError {
+        message: format!(
+          "Refusing '{}': path is a symlink and could escape the policy",
+          source.display()
+        ),
+      });
+    }
+    if !meta.file_type().is_file() {
+      return Err(YanshiError::AsyncExecutionError {
+        message: format!("Refusing '{}': not a regular file", source.display()),
+      });
+    }
+    if meta.nlink_or_zero() > 1 && !self.policy.allow_hardlinked_files {
+      return Err(YanshiError::AsyncExecutionError {
+        message: format!(
+          "Refusing '{}': file has multiple hardlinks ({}); set policy.allow_hardlinked_files = true if intentional",
+          source.display(),
+          meta.nlink_or_zero()
+        ),
+      });
+    }
+    Ok(())
+  }
+
   /// Defense-in-depth path validation: always reject traversal, then
   /// defer to [`SandboxPolicy::path_denial_reason`] for allowlist
   /// enforcement. The traversal arm runs even when the policy is
@@ -189,6 +318,25 @@ impl MetadataExt for std::fs::Metadata {
     // fall back to 0 (skip the check) rather than blocking writes.
     0
   }
+}
+
+/// `copy` / `move` take their source from `content` (the key `write`
+/// already uses, so a producer's `File` output maps the same way for
+/// either operation), accepting a `File` value or a path string.
+fn source_input(inputs: &AsyncNodeInputs) -> Result<std::path::PathBuf, YanshiError> {
+  match inputs.get("content") {
+    Some(FlowValue::File { path, .. }) => Ok(path.clone()),
+    Some(FlowValue::Json(serde_json::Value::String(s))) => Ok(std::path::PathBuf::from(s)),
+    _ => Err(YanshiError::NodeInputError {
+      message: "copy/move need 'content' as a File value or a source path string".to_string(),
+    }),
+  }
+}
+
+fn guess_mime(path: &Path) -> Option<String> {
+  mime_guess::from_path(path)
+    .first()
+    .map(|m| m.essence_str().to_string())
 }
 
 fn get_string_input<'a>(inputs: &'a AsyncNodeInputs, key: &str) -> Result<&'a str, YanshiError> {
@@ -351,5 +499,150 @@ mod tests {
 
     let err = node.execute(&inputs).await.unwrap_err();
     assert!(err.to_string().contains("symlink"));
+  }
+  // ── Y1.2: File-valued content, copy / move / read_bytes ─────────────
+
+  fn policy_for(dir: &Path) -> Arc<SandboxPolicy> {
+    Arc::new(SandboxPolicy {
+      allowed_paths: vec![dir.to_path_buf()],
+      ..SandboxPolicy::default()
+    })
+  }
+
+  fn file_input(path: &Path, mime: &str) -> FlowValue {
+    FlowValue::File {
+      path: path.to_path_buf(),
+      mime_type: Some(mime.to_string()),
+    }
+  }
+
+  #[tokio::test]
+  async fn write_with_a_file_value_copies_the_bytes() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("in.wav");
+    std::fs::write(&source, b"RIFFdata").unwrap();
+    let dest = dir.path().join("out.wav");
+
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert("operation".to_string(), FlowValue::Json(json!("write")));
+    inputs.insert(
+      "path".to_string(),
+      FlowValue::Json(json!(dest.to_str().unwrap())),
+    );
+    inputs.insert("content".to_string(), file_input(&source, "audio/wav"));
+    FileNode::new(policy_for(dir.path()))
+      .execute(&inputs)
+      .await
+      .unwrap();
+
+    assert_eq!(std::fs::read(&dest).unwrap(), b"RIFFdata");
+    assert!(source.exists(), "write must not consume the source");
+  }
+
+  #[tokio::test]
+  async fn copy_outputs_a_file_value_with_a_guessed_mime() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("in.wav");
+    std::fs::write(&source, b"RIFFdata").unwrap();
+    let dest = dir.path().join("nested").join("out.wav");
+
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert("operation".to_string(), FlowValue::Json(json!("copy")));
+    inputs.insert(
+      "path".to_string(),
+      FlowValue::Json(json!(dest.to_str().unwrap())),
+    );
+    inputs.insert("content".to_string(), file_input(&source, "audio/wav"));
+    let outputs = FileNode::new(policy_for(dir.path()))
+      .execute(&inputs)
+      .await
+      .unwrap();
+
+    match outputs.get("path") {
+      Some(FlowValue::File { path, mime_type }) => {
+        assert_eq!(path, &dest);
+        assert_eq!(mime_type.as_deref(), Some("audio/wav"));
+      }
+      other => panic!("copy must output a File value, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&dest).unwrap(), b"RIFFdata");
+    assert!(source.exists());
+  }
+
+  #[tokio::test]
+  async fn move_removes_the_source() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("in.png");
+    std::fs::write(&source, b"png").unwrap();
+    let dest = dir.path().join("out.png");
+
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert("operation".to_string(), FlowValue::Json(json!("move")));
+    inputs.insert(
+      "path".to_string(),
+      FlowValue::Json(json!(dest.to_str().unwrap())),
+    );
+    inputs.insert(
+      "content".to_string(),
+      FlowValue::Json(json!(source.to_str().unwrap())),
+    );
+    FileNode::new(policy_for(dir.path()))
+      .execute(&inputs)
+      .await
+      .unwrap();
+
+    assert!(!source.exists(), "move must consume the source");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"png");
+  }
+
+  #[tokio::test]
+  async fn copy_refuses_a_source_outside_the_policy() {
+    let allowed = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let source = outside.path().join("secret.txt");
+    std::fs::write(&source, b"secret").unwrap();
+    let dest = allowed.path().join("leak.txt");
+
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert("operation".to_string(), FlowValue::Json(json!("copy")));
+    inputs.insert(
+      "path".to_string(),
+      FlowValue::Json(json!(dest.to_str().unwrap())),
+    );
+    inputs.insert("content".to_string(), file_input(&source, "text/plain"));
+    let err = FileNode::new(policy_for(allowed.path()))
+      .execute(&inputs)
+      .await
+      .unwrap_err();
+    assert!(err.to_string().contains("sandbox policy denied"), "{err}");
+    assert!(!dest.exists());
+  }
+
+  #[tokio::test]
+  async fn read_bytes_hands_the_file_downstream_without_loading_it() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("deck.pdf");
+    std::fs::write(&source, b"%PDF-1.7").unwrap();
+
+    let mut inputs = AsyncNodeInputs::new();
+    inputs.insert(
+      "operation".to_string(),
+      FlowValue::Json(json!("read_bytes")),
+    );
+    inputs.insert(
+      "path".to_string(),
+      FlowValue::Json(json!(source.to_str().unwrap())),
+    );
+    let outputs = FileNode::new(policy_for(dir.path()))
+      .execute(&inputs)
+      .await
+      .unwrap();
+    match outputs.get("content") {
+      Some(FlowValue::File { path, mime_type }) => {
+        assert_eq!(path, &source);
+        assert_eq!(mime_type.as_deref(), Some("application/pdf"));
+      }
+      other => panic!("read_bytes must output a File value, got {other:?}"),
+    }
   }
 }

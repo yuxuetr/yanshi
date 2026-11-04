@@ -41,7 +41,7 @@ yanshi workflow validate path/to/workflow.yml --strict
 | `llm` | - | `prompt` | `model`, `system`, `temperature`, `max_tokens` |
 | `skill_agent`, `agent` | - | `skill`, `message` | `model` |
 | `http` | - | `url` | `method`, `headers`, `body` |
-| `file` | - | `operation`, `path` | `content` |
+| `file` | - | `operation`（`read` / `write` / `copy` / `move` / `read_bytes`）, `path` | `content`（`write` 时为字符串或 `File` 值；`copy` / `move` 时为来源 `File` 值或路径） |
 | `template` | `template` | - | `output_key`, `output_format` |
 | `arxiv` | `url` | - | `fetch_source`, `simplify_latex` |
 | `asr` | `model` | `audio_source` | - |
@@ -56,6 +56,8 @@ yanshi workflow validate path/to/workflow.yml --strict
 | `while` | `condition`, `max_iterations`, `do` | - | `continue_on_error`, `fail_on_exhausted` |
 | `mcp` | `server_command`, `tool_name` | - | `tool_params`, `parameters.timeout_ms`/`parameters.max_retries` (MCP-client-only, see note above) |
 | `rag` | `operation`, `collection` | - | `qdrant_url`, `embedding_model`, `query`, `documents`, `top_k`, `search_type`, `alpha`, `rerank`, `lambda`, `vector_size`, `distance` |
+
+`file` 节点的 `copy` / `move` / `read_bytes` 输出 `FlowValue::File`，`read` / `write` 保持字符串输出；`write` 的 `content` 若是 `File` 值则复制字节。Tera 模板里 `File` 值渲染为路径，`{{ x | mime }}` 与 `{{ x | file_size }}` 给出 MIME 与字节数。
 
 媒体节点（`tts` / `text_to_image` / `image_to_image` / `image_edit` / `text_to_video`）的 `output_format` 取 `file`（默认）或 `data_uri`。`file` 把字节写到运行目录下的 `artifacts/<node_id>/<n>.<ext>`，输出 `FlowValue::File { path, mime_type }`，状态池里只有路径；`data_uri` 保留旧的 base64 `data:` 字符串（`text_to_video` 则是厂商的临时 URL）。`file` 模式下 `text_to_video` 会经厂商下载视频落盘，默认上限 512 MiB。
 
