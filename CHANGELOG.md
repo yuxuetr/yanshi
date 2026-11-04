@@ -110,6 +110,15 @@ _New entries go here. Will roll into the next tag (likely
   field, and GLM documents none. The OpenAI, Moonshot and StepFun
   readers continue to `[DONE]`, and Moonshot's choice-level usage is
   read. Regression fixtures are in `yanshi-llm/tests/sse_buffer_regression.rs`.
+- **Resume replays the original run (Y2.4, D4).** `Flow::resume` used
+  to run with empty inputs, the default (serial) config and no memory of
+  spend. Checkpoints now carry the run's inputs, scheduling mode and
+  concurrency, cost limit, run base dir and spend so far
+  (`Checkpoint::metadata`, `checkpoint::run_metadata`), and the new
+  `FlowExt::resume_with_config` resumes with them, under the concurrent
+  scheduler when the run was concurrent. The resumed run's cost meter
+  starts from the recorded spend, so a re-run node is billed once and
+  the limit counts both attempts.
 - **`token_budget` limits spend, not context size (Y2.2, COR-2).** ReAct
   compared the budget with the memory store's token count, which a
   summarising or trimming store keeps below its window. A 20 000-token

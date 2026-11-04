@@ -75,6 +75,97 @@ pub struct Checkpoint {
   pub metadata: HashMap<String, String>,
 }
 
+/// Y2.4: `Checkpoint::metadata` keys the executor writes so a resume
+/// can reproduce the original run: its inputs, how it was scheduled, its
+/// cost limit and what it had already spent.
+pub mod run_metadata {
+  /// JSON object of the run's initial inputs (tagged `FlowValue`s).
+  pub const INPUTS: &str = "yanshi.inputs";
+  /// USD the run had recorded when the checkpoint was written.
+  pub const COST_USD: &str = "yanshi.cost_usd";
+  /// `serial` or `concurrent`.
+  pub const EXECUTION_MODE: &str = "yanshi.execution_mode";
+  pub const MAX_CONCURRENCY: &str = "yanshi.max_concurrency";
+  pub const COST_LIMIT_USD: &str = "yanshi.cost_limit_usd";
+  pub const RUN_BASE_DIR: &str = "yanshi.run_base_dir";
+}
+
+/// Y2.4: the metadata the executor stores with each checkpoint.
+pub fn run_metadata_for(
+  inputs: &crate::async_node::AsyncNodeInputs,
+  config: &crate::FlowExecutionConfig,
+  cost_usd: f64,
+) -> HashMap<String, String> {
+  let mut metadata = HashMap::new();
+  if let Ok(json) = serde_json::to_string(inputs) {
+    metadata.insert(run_metadata::INPUTS.to_string(), json);
+  }
+  metadata.insert(run_metadata::COST_USD.to_string(), cost_usd.to_string());
+  let mode = match config.mode {
+    crate::FlowExecutionMode::Serial => "serial",
+    crate::FlowExecutionMode::Concurrent => "concurrent",
+  };
+  metadata.insert(run_metadata::EXECUTION_MODE.to_string(), mode.to_string());
+  metadata.insert(
+    run_metadata::MAX_CONCURRENCY.to_string(),
+    config.max_concurrency.to_string(),
+  );
+  if let Some(limit) = config.cost_limit_usd {
+    metadata.insert(run_metadata::COST_LIMIT_USD.to_string(), limit.to_string());
+  }
+  if let Some(dir) = &config.run_base_dir {
+    metadata.insert(
+      run_metadata::RUN_BASE_DIR.to_string(),
+      dir.to_string_lossy().into_owned(),
+    );
+  }
+  metadata
+}
+
+impl Checkpoint {
+  /// Y2.4: the run's initial inputs. Empty for checkpoints written
+  /// before Y2.4; an unreadable value is an error rather than a silent
+  /// resume with missing inputs.
+  pub fn recorded_inputs(&self) -> Result<crate::async_node::AsyncNodeInputs> {
+    match self.metadata.get(run_metadata::INPUTS) {
+      Some(json) => serde_json::from_str(json).map_err(|e| {
+        YanshiError::SerializationError(format!("checkpoint inputs are unreadable: {e}"))
+      }),
+      None => Ok(HashMap::new()),
+    }
+  }
+
+  /// Y2.4: USD the run had spent when this checkpoint was written.
+  pub fn recorded_cost_usd(&self) -> f64 {
+    self
+      .metadata
+      .get(run_metadata::COST_USD)
+      .and_then(|v| v.parse::<f64>().ok())
+      .filter(|v| v.is_finite() && *v > 0.0)
+      .unwrap_or(0.0)
+  }
+
+  /// Y2.4: the original run's scheduling, cost limit and run base dir;
+  /// serial with the defaults for checkpoints written before Y2.4.
+  pub fn recorded_execution_config(&self) -> crate::FlowExecutionConfig {
+    let get = |key: &str| self.metadata.get(key);
+    let max_concurrency = get(run_metadata::MAX_CONCURRENCY)
+      .and_then(|v| v.parse::<usize>().ok())
+      .unwrap_or(1);
+    let mut config = match get(run_metadata::EXECUTION_MODE).map(String::as_str) {
+      Some("concurrent") => crate::FlowExecutionConfig::concurrent(max_concurrency),
+      _ => crate::FlowExecutionConfig::serial(),
+    };
+    if let Some(limit) = get(run_metadata::COST_LIMIT_USD).and_then(|v| v.parse::<f64>().ok()) {
+      config = config.with_cost_limit_usd(limit);
+    }
+    if let Some(dir) = get(run_metadata::RUN_BASE_DIR) {
+      config = config.with_run_base_dir(PathBuf::from(dir));
+    }
+    config
+  }
+}
+
 /// Workflow execution status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkflowStatus {
@@ -157,6 +248,28 @@ impl CheckpointManager {
     };
 
     self.save_checkpoint_struct(&checkpoint).await
+  }
+
+  /// Y2.4: save a checkpoint carrying the run's resume metadata (see
+  /// [`run_metadata_for`]).
+  pub async fn save_checkpoint_with_metadata(
+    &self,
+    workflow_id: &str,
+    last_completed_node: &str,
+    state: &HashMap<String, serde_json::Value>,
+    status: WorkflowStatus,
+    metadata: HashMap<String, String>,
+  ) -> Result<()> {
+    self
+      .save_checkpoint_struct(&Checkpoint {
+        workflow_id: workflow_id.to_string(),
+        last_completed_node: last_completed_node.to_string(),
+        state: state.clone(),
+        created_at: Utc::now(),
+        status,
+        metadata,
+      })
+      .await
   }
 
   /// Save a checkpoint structure

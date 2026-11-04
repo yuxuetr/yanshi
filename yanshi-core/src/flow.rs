@@ -149,6 +149,20 @@ impl<'f> FlowExecutor<'f> {
     workflow_id: &str,
     options: &ResumePlanOptions,
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
+    self
+      .resume_with_config(workflow_id, options, |config| config)
+      .await
+  }
+
+  /// Y2.4: resume with the original run's inputs, scheduling, cost limit
+  /// and run base dir (read from the checkpoint), which `configure` may
+  /// adjust, e.g. to attach a cancellation token.
+  pub async fn resume_with_config(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+    configure: impl FnOnce(FlowExecutionConfig) -> FlowExecutionConfig,
+  ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
     if !self.flow.is_checkpoint_enabled() {
       return Err(YanshiError::ConfigurationError {
         message: "Checkpointing is not enabled. Call with_checkpointing() first.".to_string(),
@@ -185,7 +199,10 @@ impl<'f> FlowExecutor<'f> {
       workflow_id,
       checkpoint.last_completed_node
     );
-    self.execute_from_checkpoint(workflow_id, checkpoint).await
+    let config = configure(checkpoint.recorded_execution_config());
+    self
+      .execute_from_checkpoint(workflow_id, checkpoint, config)
+      .await
   }
 
   /// Load the [`ResumePlan`] for a checkpointed workflow without
@@ -232,7 +249,7 @@ impl<'f> FlowExecutor<'f> {
     initial_inputs: AsyncNodeInputs,
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
     self
-      .execute_with_workflow_id(None, initial_inputs, None, None, None)
+      .execute_with_workflow_id(None, initial_inputs, None, None, None, 0.0)
       .await
   }
 
@@ -242,7 +259,7 @@ impl<'f> FlowExecutor<'f> {
     config: FlowExecutionConfig,
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
     self
-      .execute_with_workflow_id(None, initial_inputs, None, None, Some(config))
+      .execute_with_workflow_id(None, initial_inputs, None, None, Some(config), 0.0)
       .await
   }
 
@@ -257,7 +274,14 @@ impl<'f> FlowExecutor<'f> {
     config: FlowExecutionConfig,
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
     self
-      .execute_with_workflow_id(Some(workflow_id), initial_inputs, None, None, Some(config))
+      .execute_with_workflow_id(
+        Some(workflow_id),
+        initial_inputs,
+        None,
+        None,
+        Some(config),
+        0.0,
+      )
       .await
   }
 
@@ -271,11 +295,15 @@ impl<'f> FlowExecutor<'f> {
     restored_state_pool: Option<HashMap<String, AsyncNodeResult>>,
     restored_last_completed_node: Option<String>,
     execution_config: Option<FlowExecutionConfig>,
+    prior_cost_usd: f64,
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
     let run_meter = match crate::run_context::current_cost_meter() {
       Some(parent) => crate::run_context::CostMeter::child(parent),
       None => crate::run_context::CostMeter::root(),
     };
+    // Y2.4: a resumed run continues the original's spend, so its limit
+    // and its `total_cost_usd` include what the first attempt paid for.
+    run_meter.add(prior_cost_usd);
     Box::pin(crate::run_context::with_cost_meter(
       Some(run_meter),
       self.execute_with_workflow_id_metered(
@@ -336,10 +364,16 @@ impl<'f> FlowExecutor<'f> {
       message: e.to_string(),
     })?;
 
-    if execution_config.mode == FlowExecutionMode::Concurrent
-      && restored_state_pool.is_none()
-      && restored_last_completed_node.is_none()
-    {
+    // Y2.4: a resume keeps the concurrent scheduler, seeded with the
+    // nodes the checkpoint already resolved. A restored partial agent
+    // failure still goes serial: re-injecting its partial outputs is the
+    // serial loop's job.
+    let has_partial_failure = restored_state_pool.as_ref().is_some_and(|pool| {
+      pool
+        .values()
+        .any(|r| matches!(r, Err(YanshiError::NodePartialExecutionFailed { .. })))
+    });
+    if execution_config.mode == FlowExecutionMode::Concurrent && !has_partial_failure {
       return self
         .execute_concurrently(
           run_id,
@@ -347,6 +381,7 @@ impl<'f> FlowExecutor<'f> {
           run_dir,
           initial_inputs,
           execution_config,
+          restored_state_pool.unwrap_or_default(),
         )
         .await;
     }
@@ -534,7 +569,13 @@ impl<'f> FlowExecutor<'f> {
       {
         let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
         if let Err(_e) = manager
-          .save_checkpoint(&run_id, node_id, &checkpoint_state)
+          .save_checkpoint_with_metadata(
+            &run_id,
+            node_id,
+            &checkpoint_state,
+            WorkflowStatus::Running,
+            Self::checkpoint_metadata(&initial_inputs, &execution_config),
+          )
           .await
         {
           tracing::warn!("Failed to save checkpoint after node '{}': {}", node_id, _e);
@@ -586,7 +627,13 @@ impl<'f> FlowExecutor<'f> {
       let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
 
       if let Err(_e) = manager
-        .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
+        .save_checkpoint_with_metadata(
+          &run_id,
+          final_checkpoint_node,
+          &checkpoint_state,
+          status,
+          Self::checkpoint_metadata(&initial_inputs, &execution_config),
+        )
         .await
       {
         tracing::warn!("Failed to save final checkpoint: {}", _e);
@@ -601,7 +648,11 @@ impl<'f> FlowExecutor<'f> {
     &self,
     workflow_id: &str,
     checkpoint: Checkpoint,
+    config: FlowExecutionConfig,
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
+    // Y2.4: replay with the original inputs and continue its spend.
+    let initial_inputs = checkpoint.recorded_inputs()?;
+    let prior_cost_usd = checkpoint.recorded_cost_usd();
     // Restore state pool from checkpoint. V1.2: this now faithfully
     // round-trips `Ok` / `NodeSkipped` / `NodePartialExecutionFailed`
     // (see `checkpoint_state_to_state_pool`), so "does this node hold an
@@ -627,12 +678,25 @@ impl<'f> FlowExecutor<'f> {
     self
       .execute_with_workflow_id(
         Some(workflow_id.to_string()),
-        HashMap::new(),
+        initial_inputs,
         Some(state_pool),
         Some(checkpoint.last_completed_node),
-        None,
+        Some(config),
+        prior_cost_usd,
       )
       .await
+  }
+
+  /// Y2.4: checkpoint metadata for the run in progress (see
+  /// [`crate::checkpoint::run_metadata_for`]), with the spend so far.
+  fn checkpoint_metadata(
+    inputs: &AsyncNodeInputs,
+    config: &FlowExecutionConfig,
+  ) -> HashMap<String, String> {
+    let cost_usd = crate::run_context::current_cost_meter()
+      .map(|meter| meter.total())
+      .unwrap_or(0.0);
+    crate::checkpoint::run_metadata_for(inputs, config, cost_usd)
   }
 
   /// Convert state pool to checkpoint-compatible format.
@@ -847,10 +911,20 @@ impl<'f> FlowExecutor<'f> {
     run_dir: PathBuf,
     initial_inputs: AsyncNodeInputs,
     config: FlowExecutionConfig,
+    restored_state_pool: HashMap<String, AsyncNodeResult>,
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
     let sorted_nodes = self.topological_sort()?;
-    let mut pending: HashSet<String> = sorted_nodes.iter().cloned().collect();
-    let mut state_pool: HashMap<String, AsyncNodeResult> = HashMap::new();
+    // Y2.4: nodes a checkpoint already resolved start out done; restored
+    // failures are dropped so they run again.
+    let mut state_pool: HashMap<String, AsyncNodeResult> = restored_state_pool
+      .into_iter()
+      .filter(|(_, result)| !is_genuine_failure(result))
+      .collect();
+    let mut pending: HashSet<String> = sorted_nodes
+      .iter()
+      .filter(|node_id| !state_pool.contains_key(*node_id))
+      .cloned()
+      .collect();
     let mut running: FuturesUnordered<BoxFuture<'_, (String, Instant, AsyncNodeResult)>> =
       FuturesUnordered::new();
     let mut last_completed_node = None;
@@ -1054,7 +1128,13 @@ impl<'f> FlowExecutor<'f> {
         {
           let checkpoint_state = self.state_pool_to_checkpoint_state(&state_pool);
           if let Err(_e) = manager
-            .save_checkpoint(&run_id, &node_id, &checkpoint_state)
+            .save_checkpoint_with_metadata(
+              &run_id,
+              &node_id,
+              &checkpoint_state,
+              WorkflowStatus::Running,
+              Self::checkpoint_metadata(&initial_inputs, &config),
+            )
             .await
           {
             tracing::warn!("Failed to save checkpoint after node '{}': {}", node_id, _e);
@@ -1091,7 +1171,13 @@ impl<'f> FlowExecutor<'f> {
       };
       let final_checkpoint_node = last_completed_node.as_deref().unwrap_or("");
       if let Err(_e) = manager
-        .save_checkpoint_with_status(&run_id, final_checkpoint_node, &checkpoint_state, status)
+        .save_checkpoint_with_metadata(
+          &run_id,
+          final_checkpoint_node,
+          &checkpoint_state,
+          status,
+          Self::checkpoint_metadata(&initial_inputs, &config),
+        )
         .await
       {
         tracing::warn!("Failed to save final checkpoint: {}", _e);
@@ -1974,6 +2060,16 @@ pub trait FlowExt: Sized {
     workflow_id: &str,
     options: &ResumePlanOptions,
   ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, YanshiError>> + Send;
+  /// Y2.4: resume with the checkpoint's recorded inputs and execution
+  /// settings, adjusted by `configure`.
+  fn resume_with_config<F>(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+    configure: F,
+  ) -> impl std::future::Future<Output = Result<HashMap<String, AsyncNodeResult>, YanshiError>> + Send
+  where
+    F: FnOnce(FlowExecutionConfig) -> FlowExecutionConfig + Send;
   /// Load the resume plan without executing.
   fn load_resume_plan(
     &self,
@@ -2034,6 +2130,20 @@ impl FlowExt for Flow {
   ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
     FlowExecutor::new(self)
       .resume_with_options(workflow_id, options)
+      .await
+  }
+
+  async fn resume_with_config<F>(
+    &self,
+    workflow_id: &str,
+    options: &ResumePlanOptions,
+    configure: F,
+  ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError>
+  where
+    F: FnOnce(FlowExecutionConfig) -> FlowExecutionConfig + Send,
+  {
+    FlowExecutor::new(self)
+      .resume_with_config(workflow_id, options, configure)
       .await
   }
 
@@ -5432,6 +5542,152 @@ mod tests {
       seen_orders.len()
     );
   }
+  /// Y2.4 acceptance: ten chained nodes (nine billed), the ninth fails
+  /// on its first attempt. Resuming re-runs only the ninth and tenth, with
+  /// the original run's inputs and concurrent scheduling, and the spend
+  /// continues from the first attempt's total instead of double-billing.
+  #[tokio::test]
+  async fn resume_reruns_only_unfinished_nodes_with_original_inputs_and_spend() {
+    use_writable_home();
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Step {
+      billed: bool,
+      fail_once: Option<Arc<AtomicBool>>,
+    }
+    #[async_trait]
+    impl AsyncNode for Step {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        if let Some(failed) = &self.fail_once
+          && !failed.swap(true, Ordering::SeqCst)
+        {
+          return Err(YanshiError::AsyncExecutionError {
+            message: "injected failure".to_string(),
+          });
+        }
+        if self.billed {
+          crate::run_context::record_cost_usd(0.01);
+        }
+        let mut outputs = HashMap::new();
+        if let Some(topic) = inputs.get("topic") {
+          outputs.insert("topic".to_string(), topic.clone());
+        }
+        Ok(outputs)
+      }
+    }
+
+    #[derive(Default)]
+    struct Seen(std::sync::Mutex<Vec<(String, String, f64)>>);
+    impl EventListener for Seen {
+      fn on_event(&self, event: &WorkflowEvent) {
+        let row = match event {
+          WorkflowEvent::NodeStarted { node_id, .. } => ("started", node_id.clone(), 0.0),
+          WorkflowEvent::NodeCostRecorded {
+            node_id,
+            total_cost_usd,
+            ..
+          } => ("cost", node_id.clone(), *total_cost_usd),
+          _ => return,
+        };
+        self
+          .0
+          .lock()
+          .unwrap()
+          .push((row.0.to_string(), row.1, row.2));
+      }
+    }
+
+    let failed_once = Arc::new(AtomicBool::new(false));
+    let build = |seen: Arc<Seen>, checkpoints: &std::path::Path| {
+      let nodes: Vec<GraphNode> = (1..=10)
+        .map(|i| GraphNode {
+          id: format!("n{i:02}"),
+          node_type: NodeType::Standard(Arc::new(Step {
+            billed: i <= 9,
+            fail_once: (i == 9).then(|| failed_once.clone()),
+          })),
+          dependencies: if i == 1 {
+            vec![]
+          } else {
+            vec![format!("n{:02}", i - 1)]
+          },
+          input_mapping: None,
+          run_if: None,
+          initial_inputs: HashMap::new(),
+        })
+        .collect();
+      Flow::new(nodes)
+        .with_event_listener(seen)
+        .with_checkpointing(CheckpointConfig::default().with_checkpoint_dir(checkpoints))
+        .unwrap()
+    };
+
+    let checkpoints = TempDir::new().unwrap();
+    let runs = TempDir::new().unwrap();
+    let mut inputs = HashMap::new();
+    inputs.insert("topic".to_string(), FlowValue::Json(json!("tides")));
+
+    let first_seen = Arc::new(Seen::default());
+    let first = build(first_seen.clone(), checkpoints.path())
+      .execute_from_inputs_with_id_and_config(
+        "run-y24".to_string(),
+        inputs,
+        FlowExecutionConfig::concurrent(2)
+          .with_run_base_dir(runs.path())
+          .with_cost_limit_usd(5.0),
+      )
+      .await;
+    if let Ok(state) = &first {
+      assert!(state["n09"].is_err(), "n09 must fail on the first attempt");
+      assert!(!state.contains_key("n10") || state["n10"].is_err());
+    }
+
+    let checkpoint = CheckpointManager::new(
+      CheckpointConfig::default().with_checkpoint_dir(checkpoints.path()),
+    )
+    .unwrap()
+    .load_latest_checkpoint("run-y24")
+    .await
+    .unwrap()
+    .expect("a checkpoint was written");
+    assert!((checkpoint.recorded_cost_usd() - 0.08).abs() < 1e-9);
+    let recorded = checkpoint.recorded_execution_config();
+    assert_eq!(recorded.mode, FlowExecutionMode::Concurrent);
+    assert_eq!(recorded.max_concurrency, 2);
+    assert_eq!(recorded.cost_limit_usd, Some(5.0));
+    assert_eq!(recorded.run_base_dir.as_deref(), Some(runs.path()));
+
+    let resumed_seen = Arc::new(Seen::default());
+    let state = build(resumed_seen.clone(), checkpoints.path())
+      .resume_with_config("run-y24", &ResumePlanOptions::default(), |config| config)
+      .await
+      .unwrap();
+
+    let rows = resumed_seen.0.lock().unwrap().clone();
+    let started: Vec<&str> = rows
+      .iter()
+      .filter(|(kind, _, _)| kind == "started")
+      .map(|(_, id, _)| id.as_str())
+      .collect();
+    assert_eq!(started, vec!["n09", "n10"], "only unfinished nodes re-run");
+    let costs: Vec<(&str, f64)> = rows
+      .iter()
+      .filter(|(kind, _, _)| kind == "cost")
+      .map(|(_, id, total)| (id.as_str(), *total))
+      .collect();
+    assert_eq!(costs.len(), 1, "only n09 is billed again: {costs:?}");
+    assert_eq!(costs[0].0, "n09");
+    assert!(
+      (costs[0].1 - 0.09).abs() < 1e-9,
+      "the run total continues from $0.08: {costs:?}"
+    );
+    let n10 = state["n10"].as_ref().expect("n10 runs on resume");
+    assert!(
+      matches!(&n10["topic"], FlowValue::Json(Value::String(t)) if t == "tides"),
+      "the original inputs are replayed: {n10:?}"
+    );
+  }
+
   /// Y2.3: spend recorded inside parallel Map items (spawned sub-flow
   /// tasks) counts toward the Map node and the run, and the run's limit
   /// then refuses the next node.
