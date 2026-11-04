@@ -26,6 +26,7 @@ use crate::{
     google_media::GoogleMediaProvider,
     google_veo::GoogleVeoClient,
     minimax_tts::MiniMaxTtsProvider,
+    mock_media::MockMediaProvider,
     modality::{
       AsrProvider, Image2ImageProvider, ImageEditProvider, Text2ImageProvider, Text2VideoProvider,
       TtsProvider,
@@ -151,11 +152,45 @@ fn build_glm_text2image(
 fn build_minimax_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
   Ok(Box::new(MiniMaxTtsProvider::new(api_key, base_url)?))
 }
+// Y1.1: `vendor: mock` for every modality, mirroring the chat path's
+// `MockProvider` — lets nodes, generator templates and CLI tests run a
+// modality success path with no vendor key. See `providers::mock_media`.
+fn build_mock_asr(api_key: &str, base_url: Option<String>) -> Result<Box<dyn AsrProvider>> {
+  Ok(Box::new(MockMediaProvider::new(api_key, base_url)?))
+}
+fn build_mock_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
+  Ok(Box::new(MockMediaProvider::new(api_key, base_url)?))
+}
+fn build_mock_text2image(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2ImageProvider>> {
+  Ok(Box::new(MockMediaProvider::new(api_key, base_url)?))
+}
+fn build_mock_image2image(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Image2ImageProvider>> {
+  Ok(Box::new(MockMediaProvider::new(api_key, base_url)?))
+}
+fn build_mock_image_edit(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn ImageEditProvider>> {
+  Ok(Box::new(MockMediaProvider::new(api_key, base_url)?))
+}
+fn build_mock_text2video(
+  api_key: &str,
+  base_url: Option<String>,
+) -> Result<Box<dyn Text2VideoProvider>> {
+  Ok(Box::new(MockMediaProvider::new(api_key, base_url)?))
+}
 
 const ASR_PROVIDERS: &[(&str, Ctor<dyn AsrProvider>)] = &[
   ("stepfun", build_stepfun_asr),
   ("step", build_stepfun_asr),
   ("openai", build_openai_asr),
+  ("mock", build_mock_asr),
 ];
 const TTS_PROVIDERS: &[(&str, Ctor<dyn TtsProvider>)] = &[
   ("stepfun", build_stepfun_tts),
@@ -164,6 +199,7 @@ const TTS_PROVIDERS: &[(&str, Ctor<dyn TtsProvider>)] = &[
   ("google", build_google_tts),
   ("dashscope", build_dashscope_tts),
   ("minimax", build_minimax_tts),
+  ("mock", build_mock_tts),
 ];
 const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
   ("stepfun", build_stepfun_text2image),
@@ -172,18 +208,23 @@ const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
   ("google", build_google_text2image),
   ("dashscope", build_dashscope_text2image),
   ("glm", build_glm_text2image),
+  ("mock", build_mock_text2image),
 ];
 const IMAGE2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Image2ImageProvider>)] = &[
   ("stepfun", build_stepfun_image2image),
   ("step", build_stepfun_image2image),
+  ("mock", build_mock_image2image),
 ];
 const IMAGE_EDIT_PROVIDERS: &[(&str, Ctor<dyn ImageEditProvider>)] = &[
   ("stepfun", build_stepfun_image_edit),
   ("step", build_stepfun_image_edit),
   ("openai", build_openai_image_edit),
+  ("mock", build_mock_image_edit),
 ];
-const TEXT2VIDEO_PROVIDERS: &[(&str, Ctor<dyn Text2VideoProvider>)] =
-  &[("google", build_google_text2video)];
+const TEXT2VIDEO_PROVIDERS: &[(&str, Ctor<dyn Text2VideoProvider>)] = &[
+  ("google", build_google_text2video),
+  ("mock", build_mock_text2video),
+];
 
 /// The modality labels `vendor` already has a provider implementation
 /// for, derived from the same constructor tables the dispatch functions

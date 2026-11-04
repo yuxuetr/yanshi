@@ -245,6 +245,28 @@ impl Text2VideoProvider for GoogleVeoClient {
     let op: OperationResponse = response.json().await?;
     parse_operation_response(op)
   }
+
+  /// Veo's `video.uri` is served by the same API host and needs the
+  /// same `x-goog-api-key` header; a plain GET returns 403.
+  async fn fetch_video_bytes(&self, video: &GeneratedVideo, max_bytes: u64) -> Result<Vec<u8>> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    if let Some(b64) = &video.b64_data {
+      return STANDARD
+        .decode(b64)
+        .map_err(|err| LLMError::ResponseParsingError {
+          message: format!("video b64_data is not valid base64: {err}"),
+        });
+    }
+    let url = video
+      .url
+      .as_deref()
+      .ok_or_else(|| LLMError::ResponseParsingError {
+        message: "generated video carries neither a url nor b64_data".to_string(),
+      })?;
+    let mut headers = self.build_headers()?;
+    headers.remove(reqwest::header::CONTENT_TYPE);
+    super::modality::download_with_cap(&self.client, url, headers, max_bytes).await
+  }
 }
 
 #[cfg(test)]

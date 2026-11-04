@@ -52,6 +52,94 @@ pub use tts::{TtsProvider, TtsRequest, TtsResponse};
 
 use serde::{Deserialize, Serialize};
 
+/// Download `url` into memory, refusing to buffer more than `max_bytes`
+/// (Y1.1). Vendors hand back time-limited URLs for images and videos;
+/// turning those into on-disk artifacts means fetching them inside the
+/// node, and an unbounded fetch of an attacker-chosen or mis-sized body
+/// is the one thing that must not happen there. The cap is checked
+/// against `Content-Length` up front and again while streaming, since
+/// the header is optional and untrusted.
+pub async fn download_with_cap(
+  client: &reqwest::Client,
+  url: &str,
+  headers: reqwest::header::HeaderMap,
+  max_bytes: u64,
+) -> crate::Result<Vec<u8>> {
+  let mut response = client.get(url).headers(headers).send().await?;
+  if !response.status().is_success() {
+    let status_code = response.status().as_u16();
+    let message = response.text().await.unwrap_or_default();
+    return Err(crate::LLMError::HttpError {
+      status_code,
+      message,
+    });
+  }
+  if let Some(declared) = response.content_length()
+    && declared > max_bytes
+  {
+    return Err(crate::LLMError::ResponseParsingError {
+      message: format!(
+        "download of {url} declares {declared} bytes, over the {max_bytes}-byte cap"
+      ),
+    });
+  }
+  let mut body = Vec::new();
+  while let Some(chunk) = response.chunk().await? {
+    if body.len() as u64 + chunk.len() as u64 > max_bytes {
+      return Err(crate::LLMError::ResponseParsingError {
+        message: format!("download of {url} exceeded the {max_bytes}-byte cap"),
+      });
+    }
+    body.extend_from_slice(&chunk);
+  }
+  Ok(body)
+}
+
+/// [`download_with_cap`] with the crate's default HTTP client and no
+/// extra headers, returning the response's `Content-Type` alongside the
+/// bytes so a caller can label what it stores. For callers (nodes) that
+/// do not otherwise depend on `reqwest`.
+pub async fn download_with_cap_default(
+  url: &str,
+  max_bytes: u64,
+) -> crate::Result<(Vec<u8>, Option<String>)> {
+  let client = crate::providers::default_http_client()?;
+  let mut response = client.get(url).send().await?;
+  if !response.status().is_success() {
+    let status_code = response.status().as_u16();
+    let message = response.text().await.unwrap_or_default();
+    return Err(crate::LLMError::HttpError {
+      status_code,
+      message,
+    });
+  }
+  let mime = response
+    .headers()
+    .get(reqwest::header::CONTENT_TYPE)
+    .and_then(|v| v.to_str().ok())
+    .map(|v| v.split(';').next().unwrap_or(v).trim().to_string())
+    .filter(|v| !v.is_empty());
+  if let Some(declared) = response.content_length()
+    && declared > max_bytes
+  {
+    return Err(crate::LLMError::ResponseParsingError {
+      message: format!(
+        "download of {url} declares {declared} bytes, over the {max_bytes}-byte cap"
+      ),
+    });
+  }
+  let mut body = Vec::new();
+  while let Some(chunk) = response.chunk().await? {
+    if body.len() as u64 + chunk.len() as u64 > max_bytes {
+      return Err(crate::LLMError::ResponseParsingError {
+        message: format!("download of {url} exceeded the {max_bytes}-byte cap"),
+      });
+    }
+    body.extend_from_slice(&chunk);
+  }
+  Ok((body, mime))
+}
+
 /// Common response envelope for image-generating endpoints.
 ///
 /// Used by `Text2ImageProvider`, `Image2ImageProvider`, and

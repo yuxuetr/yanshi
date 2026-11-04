@@ -143,4 +143,28 @@ pub trait Text2VideoProvider: Send + Sync {
       }
     }
   }
+
+  /// Y1.1: materialise a finished video's bytes so a node can write it
+  /// as an artifact. The default decodes inline `b64_data` or does a
+  /// plain capped GET of `url`; vendors whose download URL needs the
+  /// same credentials as the API (Google Veo) override this to attach
+  /// them. `max_bytes` bounds the in-memory buffer.
+  async fn fetch_video_bytes(&self, video: &GeneratedVideo, max_bytes: u64) -> Result<Vec<u8>> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    if let Some(b64) = &video.b64_data {
+      return STANDARD
+        .decode(b64)
+        .map_err(|err| LLMError::ResponseParsingError {
+          message: format!("video b64_data is not valid base64: {err}"),
+        });
+    }
+    let url = video
+      .url
+      .as_deref()
+      .ok_or_else(|| LLMError::ResponseParsingError {
+        message: "generated video carries neither a url nor b64_data".to_string(),
+      })?;
+    let client = crate::providers::default_http_client()?;
+    super::download_with_cap(&client, url, reqwest::header::HeaderMap::new(), max_bytes).await
+  }
 }
