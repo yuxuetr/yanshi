@@ -109,6 +109,7 @@
   - [LLM Provider Modules](LLM_PROVIDER_MODULE_PROMOTION.md)
   - [Harness H6](H6_PROMOTION_CRITERIA.md)
 - [RFCs]()
+  - [Content Studio Runtime](RFC_CONTENT_STUDIO.md)
   - [Crate Architecture](RFC_CRATE_ARCHITECTURE.md)
   - [Nodes Decomposition](RFC_NODES_DECOMPOSITION.md)
   - [Tool Contract Split](RFC_TOOL_CONTRACT_SPLIT.md)
