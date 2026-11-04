@@ -651,8 +651,10 @@ const EXTERNAL_TOOLS: &[(&str, &str)] = &[
   ("pandoc", "render_document: docx / pptx / html / epub / pdf"),
   (
     "typst",
-    "render_document: PDF engine (docx / pptx work without it)",
+    "render_document PDF engine; figure language: typst",
   ),
+  ("lualatex", "figure language: tikz (TeX Live)"),
+  ("pdftocairo", "figure language: tikz (PDF to SVG, poppler)"),
 ];
 
 fn external_tools_report() -> Vec<ExternalToolReport> {
@@ -661,28 +663,9 @@ fn external_tools_report() -> Vec<ExternalToolReport> {
     .map(|(name, used_by)| ExternalToolReport {
       name,
       used_by,
-      path: find_on_path(name).map(|p| p.display().to_string()),
+      path: yanshi_nodes::common::sandboxed::find_tool(name).map(|p| p.display().to_string()),
     })
     .collect()
-}
-
-/// First executable named `name` on PATH.
-fn find_on_path(name: &str) -> Option<PathBuf> {
-  let path = std::env::var_os("PATH")?;
-  std::env::split_paths(&path)
-    .map(|dir| dir.join(name))
-    .find(|candidate| is_executable(candidate))
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-  use std::os::unix::fs::PermissionsExt;
-  std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-  path.is_file() || path.with_extension("exe").is_file()
 }
 
 /// Y2.3: where the pricing table comes from and whether it loads.

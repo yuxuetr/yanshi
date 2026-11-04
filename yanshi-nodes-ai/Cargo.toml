@@ -26,6 +26,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.21"
 tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true }
 
 # V1.7: structured logging for node execution — see yanshi-nodes'
 # Cargo.toml for why this is a plain, unconditional dependency here.

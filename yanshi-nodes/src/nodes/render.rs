@@ -255,7 +255,20 @@ impl RenderSvgNode {
   }
 }
 
-fn svg_to_png(svg: &str, width: Option<u32>) -> Result<Vec<u8>, String> {
+/// Parse `svg` the way [`svg_to_png`] would, without rasterising: the
+/// `figure` node's check that LLM-written SVG is renderable.
+pub fn check_svg(svg: &str) -> Result<(), String> {
+  let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default())
+    .map_err(|e| format!("invalid SVG: {e}"))?;
+  let size = tree.size();
+  if size.width() <= 0.0 || size.height() <= 0.0 {
+    return Err("SVG has an empty canvas; set width and height".to_string());
+  }
+  Ok(())
+}
+
+/// SVG text → PNG bytes (also used by `figure`'s optional PNG copy).
+pub fn svg_to_png(svg: &str, width: Option<u32>) -> Result<Vec<u8>, String> {
   use resvg::{tiny_skia, usvg};
   // System fonts, loaded once per process: `<text>` renders nothing
   // without them, and scanning the font directories is slow.
@@ -430,109 +443,43 @@ fn document_format(format: &str) -> Option<(&'static str, &'static str)> {
   })
 }
 
-/// First executable named `name` on PATH.
-fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
-  let path = std::env::var_os("PATH")?;
-  std::env::split_paths(&path)
-    .map(|dir| dir.join(name))
-    .find(|candidate| candidate.is_file())
-}
-
-/// The install prefix a binary loads its libraries from, granted
-/// read-only: `/opt/homebrew/bin/pandoc` → `/opt/homebrew`.
-fn install_prefix(binary: &std::path::Path) -> Option<std::path::PathBuf> {
-  let dir = binary.parent()?;
-  match dir.file_name() {
-    Some(name) if name == "bin" => dir.parent().map(std::path::Path::to_path_buf),
-    _ => Some(dir.to_path_buf()),
-  }
-}
-
-/// Font directories typst searches; read-only.
-fn font_dirs() -> Vec<std::path::PathBuf> {
-  let mut dirs = vec![
-    std::path::PathBuf::from("/Library/Fonts"),
-    std::path::PathBuf::from("/usr/share/fonts"),
-    std::path::PathBuf::from("/usr/local/share/fonts"),
-    std::path::PathBuf::from("/etc/fonts"),
-  ];
-  if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
-    dirs.push(home.join("Library/Fonts"));
-    dirs.push(home.join(".local/share/fonts"));
-    dirs.push(home.join(".fonts"));
-  }
-  dirs
-}
-
-/// Run pandoc under the platform OS sandbox: read-only access to its own
-/// (and, for PDF, typst's) install prefix and the font directories,
-/// write access only to `workdir` and the temp dir, a scrubbed
-/// environment and a timeout. Nothing but `pandoc` is ever executed by
-/// this node, and its arguments are an argv vector, never a shell line.
+/// Run pandoc (and, for PDF, typst under it) through
+/// [`crate::common::sandboxed`]: fonts and typst's install tree readable,
+/// writes confined to `workdir` and the temp dir.
 async fn run_pandoc(
   node: &str,
   workdir: &std::path::Path,
   args: &[std::ffi::OsString],
   needs_typst: bool,
 ) -> Result<(), YanshiError> {
-  use yanshi_tools::sandbox::SandboxScope;
-  use yanshi_tools::{Capability, sandbox::default_backend};
-  const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-  const KEEP_ENV: &[&str] = &[
-    "PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
-  ];
-
+  use crate::common::sandboxed;
   let not_installed = |tool: &str| YanshiError::NodeExecutionFailed {
     message: format!("{node}: {tool} is not on PATH (`yanshi doctor` lists renderer binaries)"),
   };
-  let pandoc = find_on_path("pandoc").ok_or_else(|| not_installed("pandoc"))?;
-  let mut read_paths: Vec<std::path::PathBuf> = font_dirs();
-  read_paths.extend(install_prefix(&pandoc));
+  let pandoc = sandboxed::find_tool("pandoc").ok_or_else(|| not_installed("pandoc"))?;
+  let mut read_paths = sandboxed::font_dirs();
   if needs_typst {
-    let typst = find_on_path("typst").ok_or_else(|| not_installed("typst (the PDF engine)"))?;
-    read_paths.extend(install_prefix(&typst));
+    let typst =
+      sandboxed::find_tool("typst").ok_or_else(|| not_installed("typst (the PDF engine)"))?;
+    read_paths.extend(sandboxed::install_prefixes(&typst));
   }
-  let writable = vec![workdir.to_path_buf(), std::env::temp_dir()];
-  read_paths.extend(writable.iter().cloned());
-  let scope = SandboxScope::new()
-    .with_read_paths(read_paths)
-    .with_write_paths(writable)
-    .with_working_directory(workdir);
-
-  let mut command = tokio::process::Command::new(&pandoc);
-  command.args(args).current_dir(workdir).kill_on_drop(true);
-  default_backend()
-    .wrap_command(
-      &mut command,
-      &[Capability::FsRead, Capability::FsWrite, Capability::Exec],
-      &scope,
-    )
-    .map_err(|e| YanshiError::NodeExecutionFailed {
-      message: format!("{node}: preparing the sandbox failed: {e}"),
-    })?;
-  // After `wrap_command`: the macOS backend rebuilds the command.
-  command.env_clear();
-  for key in KEEP_ENV {
-    if let Some(value) = std::env::var_os(key) {
-      command.env(key, value);
-    }
-  }
-  let output = tokio::time::timeout(TIMEOUT, command.output())
-    .await
-    .map_err(|_| YanshiError::TimeoutExceeded {
-      duration_ms: TIMEOUT.as_millis() as u64,
-    })?
-    .map_err(|e| YanshiError::NodeExecutionFailed {
-      message: format!("{node}: starting pandoc failed: {e}"),
-    })?;
+  let output = sandboxed::run(sandboxed::SandboxedRun {
+    node,
+    program: pandoc,
+    args: args.to_vec(),
+    workdir,
+    read_paths,
+    write_paths: Vec::new(),
+    env: Vec::new(),
+    timeout: std::time::Duration::from_secs(300),
+  })
+  .await?;
   if !output.status.success() {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let tail: Vec<&str> = stderr.trim().lines().rev().take(12).collect();
     return Err(YanshiError::NodeExecutionFailed {
       message: format!(
         "{node}: pandoc exited with {}: {}",
         output.status,
-        tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+        sandboxed::output_tail(&output, 12)
       ),
     });
   }

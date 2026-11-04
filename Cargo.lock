@@ -7550,6 +7550,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
  "yanshi-core",
  "yanshi-llm",
  "yanshi-mcp",

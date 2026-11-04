@@ -487,6 +487,15 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required_input("markdown", ParamType::String),
       ParamSpec::optional("title", ParamType::String),
     ]),
+    "figure" => Some(vec![
+      ParamSpec::required("language", ParamType::String),
+      ParamSpec::optional("model", ParamType::String),
+      ParamSpec::optional("description", ParamType::String),
+      ParamSpec::optional("source", ParamType::String),
+      ParamSpec::optional("max_attempts", ParamType::Integer),
+      ParamSpec::optional("png", ParamType::Bool),
+      ParamSpec::optional("png_width", ParamType::Integer),
+    ]),
     "render_document" => Some(vec![
       ParamSpec::required_input("markdown", ParamType::String),
       ParamSpec::required("format", ParamType::String),

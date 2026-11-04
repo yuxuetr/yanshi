@@ -210,6 +210,11 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
     "render_markdown" => Ok(NodeType::Standard(Arc::new(
       yanshi_nodes::nodes::render::RenderMarkdownNode::new(&node_def.id),
     ))),
+    // Y3.4: LLM-written figure source, rendered (svg / tikz / typst)
+    // with render errors fed back; inputs are read at execute time.
+    "figure" => Ok(NodeType::Standard(Arc::new(
+      yanshi_nodes_ai::nodes::figure::FigureNode::new(&node_def.id),
+    ))),
     // Y3.3: external, pandoc (+ typst for PDF) under the OS sandbox.
     "render_document" => Ok(NodeType::Standard(Arc::new(
       yanshi_nodes::nodes::render::RenderDocumentNode::new(&node_def.id),

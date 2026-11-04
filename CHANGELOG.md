@@ -338,6 +338,25 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`figure`: LLM-written diagrams, rendered and repaired (Y3.4).** A
+  model writes figure source and a real renderer compiles it. A compile
+  error goes back to the model in the next prompt, up to `max_attempts`
+  (default 3). Each retry emits `node.progress` with
+  `kind: "figure_retry"`, the new `WorkflowEvent::NodeProgress` that
+  any node can now emit through `run_context::report_progress`.
+  Languages:
+  - `svg`: checked in-process with resvg.
+  - `tikz`: compiled by `lualatex` with no shell escape, then
+    `pdftocairo -svg`, so circuitikz, chemfig, pgfplots and tikz-cd
+    come from TeX Live. Its font cache lives in the run directory.
+  - `typst`: cached packages only, since there is no network.
+  Outputs are `<id>_svg`, an optional `<id>_png`, `<id>_source` and
+  `<id>_attempts`. The external renderers share
+  `yanshi_nodes::common::sandboxed` with `render_document`, which
+  provides read-only install prefixes and fonts, writes confined to a
+  work dir, an argv vector and a timeout. `yanshi doctor` lists
+  `lualatex` and `pdftocairo`, and also looks in `/Library/TeX/texbin`.
+  Mermaid and d2 are not implemented yet.
 - **`render_document`: Markdown → DOCX / PPTX / HTML / EPUB / PDF (Y3.3).**
   The new node calls pandoc; PDF goes through `--pdf-engine=typst`, a
   single binary with no TeX, and typst's font fallback renders CJK.
