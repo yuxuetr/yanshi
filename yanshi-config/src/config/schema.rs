@@ -503,6 +503,11 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required_input("tree", ParamType::Any),
       ParamSpec::optional("format", ParamType::String),
     ]),
+    "render_study" => Some(vec![
+      ParamSpec::required("kind", ParamType::String),
+      ParamSpec::required_input("items", ParamType::Any),
+      ParamSpec::optional("title", ParamType::String),
+    ]),
     "figure" => Some(vec![
       // Read at execute time, so a Map item may supply it (Y6.1).
       ParamSpec::required_input("language", ParamType::String),

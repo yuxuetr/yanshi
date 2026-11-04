@@ -15,7 +15,7 @@
 [skill]
 name        = "content-studio"
 version     = "0.1.0"
-description = "Turn a source into the deliverables you ask for: report, mind map, audio overview"
+description = "Turn a source into the deliverables you ask for: report, mind map, audio overview, slides, flashcards, quiz"
 
 [persona]
 language = "en"
@@ -28,6 +28,8 @@ Tools, one per deliverable kind:
 - `mindmap`: a mind map (.svg, .png, interactive .html)
 - `audio_overview`: a two-voice audio discussion (.mp3)
 - `slides`: a slide deck with rendered figures (.pptx)
+- `flashcards`: study cards (.html, cards as JSON)
+- `quiz`: a self-checking multiple-choice quiz (.html, questions as JSON)
 
 Rules:
 1. Call each wanted tool exactly once, all in your first turn. Pass the
@@ -35,7 +37,7 @@ Rules:
 2. Choose the parameters from the request: `focus` (what to concentrate
    on), and `sections` (3-6) for a report, `depth` (2-4) for a mind map,
    `minutes` (2-5) and `language` for audio, `slides` (4-10) for a
-  deck. Keep defaults otherwise.
+   deck, `count` for flashcards (5-30) or a quiz (3-20). Keep defaults otherwise.
 3. Never write the content yourself. The tools do that.
 4. When the tools have returned, answer with one line per deliverable:
    its kind, its title, and the file names it produced. If a tool
@@ -66,6 +68,16 @@ description = "Produce a two-voice audio discussion of the source as one loudnes
 name        = "slides"
 path        = "../../generators/slides.yml"
 description = "Build a slide deck of the source, with rendered figures and speaker notes, as .pptx"
+
+[[workflows]]
+name        = "flashcards"
+path        = "../../generators/flashcards.yml"
+description = "Write study flashcards on the source: JSON cards and a click-to-flip .html page"
+
+[[workflows]]
+name        = "quiz"
+path        = "../../generators/quiz.yml"
+description = "Write a multiple-choice quiz on the source: JSON questions and a self-checking .html page"
 
 [memory]
 type          = "session"

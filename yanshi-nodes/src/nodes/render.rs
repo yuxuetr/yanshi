@@ -668,6 +668,134 @@ impl AsyncNode for RenderMindmapNode {
   }
 }
 
+// ── render_study (flashcards / quiz) ────────────────────────────────────
+
+/// `render_study` (Y6.2): `flashcards` (`[{front, back}]`) or a `quiz`
+/// (`[{question, options, answer, explanation}]`, `answer` the 0-based
+/// index of the right option) → one self-contained interactive HTML page.
+/// Every model-written string is HTML-escaped here; the page's only
+/// script is the fixed one below (flip a card / check an answer).
+pub struct RenderStudyNode {
+  id: String,
+}
+
+impl RenderStudyNode {
+  pub fn new(id: impl Into<String>) -> Self {
+    Self { id: id.into() }
+  }
+}
+
+const STUDY_STYLE: &str = "body{max-width:46rem;margin:2rem auto;padding:0 1rem;font:16px/1.5 -apple-system,'Segoe UI','PingFang SC',sans-serif;color:#1f2328}\
+.card{border:1px solid #d0d7de;border-radius:10px;padding:1rem 1.25rem;margin:.75rem 0;cursor:pointer}\
+.card .back{display:none;color:#0b5394;margin-top:.5rem}.card.open .back{display:block}\
+.q{border:1px solid #d0d7de;border-radius:10px;padding:1rem 1.25rem;margin:1rem 0}\
+.q label{display:block;margin:.3rem 0;cursor:pointer}.q .why{display:none;margin-top:.5rem}\
+.q.done .why{display:block}.right{color:#1a7f37;font-weight:600}.wrong{color:#cf222e}";
+
+const STUDY_SCRIPT: &str = "document.querySelectorAll('.card').forEach(c=>c.addEventListener('click',()=>c.classList.toggle('open')));\
+document.querySelectorAll('.q').forEach(q=>q.querySelectorAll('input').forEach(i=>i.addEventListener('change',()=>{\
+q.classList.add('done');q.querySelectorAll('label').forEach(l=>{const o=l.querySelector('input');\
+l.classList.remove('right','wrong');if(o.dataset.right==='1')l.classList.add('right');else if(o.checked)l.classList.add('wrong');});})));";
+
+fn study_field<'a>(item: &'a Value, key: &str, index: usize) -> Result<&'a str, String> {
+  item
+    .get(key)
+    .and_then(Value::as_str)
+    .filter(|s| !s.trim().is_empty())
+    .ok_or_else(|| format!("item {index} needs a non-empty \"{key}\""))
+}
+
+fn study_page(kind: &str, title: &str, items: &[Value]) -> Result<String, String> {
+  if items.is_empty() {
+    return Err("there are no items".to_string());
+  }
+  let mut body = String::new();
+  match kind {
+    "flashcards" => {
+      for (i, card) in items.iter().enumerate() {
+        body.push_str(&format!(
+          "<div class=\"card\"><div class=\"front\">{}</div><div class=\"back\">{}</div></div>\n",
+          escape_html(study_field(card, "front", i)?),
+          escape_html(study_field(card, "back", i)?)
+        ));
+      }
+    }
+    "quiz" => {
+      for (i, q) in items.iter().enumerate() {
+        let options = q
+          .get("options")
+          .and_then(Value::as_array)
+          .filter(|o| (2..=8).contains(&o.len()))
+          .ok_or_else(|| format!("question {i} needs 2-8 options"))?;
+        let answer = q
+          .get("answer")
+          .and_then(Value::as_u64)
+          .and_then(|a| usize::try_from(a).ok())
+          .filter(|a| *a < options.len())
+          .ok_or_else(|| format!("question {i}: \"answer\" must index one of its options"))?;
+        body.push_str(&format!(
+          "<div class=\"q\"><p><strong>{}. {}</strong></p>\n",
+          i + 1,
+          escape_html(study_field(q, "question", i)?)
+        ));
+        for (j, option) in options.iter().enumerate() {
+          let text = option
+            .as_str()
+            .ok_or_else(|| format!("question {i}: options must be strings"))?;
+          body.push_str(&format!(
+            "<label><input type=\"radio\" name=\"q{i}\" data-right=\"{}\"> {}</label>\n",
+            u8::from(j == answer),
+            escape_html(text)
+          ));
+        }
+        if let Some(why) = q.get("explanation").and_then(Value::as_str) {
+          body.push_str(&format!("<div class=\"why\">{}</div>", escape_html(why)));
+        }
+        body.push_str("</div>\n");
+      }
+    }
+    other => {
+      return Err(format!(
+        "unknown kind '{other}': expected flashcards or quiz"
+      ));
+    }
+  }
+  Ok(format!(
+    "<!doctype html>\n<html><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>{t}</title><style>{STUDY_STYLE}</style></head>\n<body><h1>{t}</h1>\n{body}<script>{STUDY_SCRIPT}</script></body></html>\n",
+    t = escape_html(title)
+  ))
+}
+
+#[async_trait]
+impl AsyncNode for RenderStudyNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let kind = optional_str(inputs, "kind")
+      .ok_or_else(|| input_error(&self.id, "missing input 'kind' (flashcards or quiz)"))?;
+    let items = match inputs.get("items") {
+      Some(FlowValue::Json(Value::Array(items))) => items.clone(),
+      Some(FlowValue::Json(Value::String(text))) => serde_json::from_str::<Vec<Value>>(text)
+        .map_err(|e| input_error(&self.id, format!("items is not a JSON array: {e}")))?,
+      _ => {
+        return Err(input_error(
+          &self.id,
+          "missing input 'items' (a JSON array)",
+        ));
+      }
+    };
+    let title = optional_str(inputs, "title").unwrap_or(match kind {
+      "quiz" => "Quiz",
+      _ => "Flashcards",
+    });
+    let page = study_page(kind, title, &items).map_err(|e| input_error(&self.id, e))?;
+    Ok(output(
+      &self.id,
+      write_artifact(&self.id, page.as_bytes(), "text/html").await?,
+    ))
+  }
+}
+
 // ── render_audio (external: ffmpeg) ────────────────────────────────────
 
 /// `render_audio` (Y4.3): join audio clips in order and loudness-normalise
@@ -1521,5 +1649,55 @@ mod tests {
     for bad in ["../etc/passwd", "a/b", "", "x.pptx"] {
       assert!(theme_reference("d", bad, "pptx").is_err(), "{bad:?}");
     }
+  }
+
+  #[test]
+  fn study_pages_escape_model_text_and_mark_the_right_answer() {
+    let page = study_page(
+      "quiz",
+      "Tides <quiz>",
+      &[json!({"question": "What pulls the sea? <script>x()</script>", "options": ["The moon", "The wind"], "answer": 0, "explanation": "Gravity."})],
+    )
+    .expect("page");
+    assert!(!page.contains("<script>x()"), "model text is escaped");
+    assert!(page.contains("&lt;script&gt;x()"));
+    assert!(
+      page.contains("data-right=\"1\"> The moon") && page.contains("data-right=\"0\"> The wind")
+    );
+    assert!(page.contains("<title>Tides &lt;quiz&gt;</title>"));
+    let cards = study_page(
+      "flashcards",
+      "Cards",
+      &[json!({"front": "Neap tide", "back": "At quarter moon"})],
+    )
+    .expect("cards");
+    assert!(cards.contains("<div class=\"front\">Neap tide</div>"));
+  }
+
+  #[test]
+  fn study_pages_reject_bad_items() {
+    assert!(
+      study_page(
+        "quiz",
+        "t",
+        &[json!({"question": "q", "options": ["a", "b"], "answer": 2})]
+      )
+      .is_err(),
+      "answer out of range"
+    );
+    assert!(
+      study_page(
+        "quiz",
+        "t",
+        &[json!({"question": "q", "options": ["a"], "answer": 0})]
+      )
+      .is_err(),
+      "one option"
+    );
+    assert!(
+      study_page("flashcards", "t", &[json!({"front": "x"})]).is_err(),
+      "no back"
+    );
+    assert!(study_page("flashcards", "t", &[]).is_err(), "empty");
   }
 }

@@ -468,6 +468,11 @@ const GENERATORS: &[(&str, &str)] = &[
     "slides",
     include_str!("../../examples/generators/slides.yml"),
   ),
+  (
+    "flashcards",
+    include_str!("../../examples/generators/flashcards.yml"),
+  ),
+  ("quiz", include_str!("../../examples/generators/quiz.yml")),
 ];
 
 /// How much notebook text a generator gets, in characters (the

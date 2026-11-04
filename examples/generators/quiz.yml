@@ -1,0 +1,129 @@
+# Y6.2 — `quiz` generator (docs/RFC_CONTENT_STUDIO.md §3).
+#
+# Source (a URL, fetched with the http node's SSRF filter, pasted text,
+# or notebook chunks) → multiple-choice questions (llm, json_schema) →
+# one self-contained HTML page that checks answers (render_study) → one
+# `Deliverable` whose content carries the questions as JSON.
+#
+#   yanshi workflow run examples/generators/quiz.yml \
+#     --input url https://example.org/article --output-dir out
+name: quiz
+description: "A multiple-choice quiz on a source: JSON questions and a self-checking HTML page"
+
+inputs:
+  url:
+    description: "Page to study (fetched with SSRF protection); leave empty to use `text`"
+    default: ""
+  text:
+    description: "Source text, used when `url` is empty"
+    default: ""
+  focus:
+    description: "What the quiz should test"
+    default: "the key facts and ideas"
+  count:
+    description: "How many questions (3-20)"
+    default: 8
+  chunks:
+    description: "Notebook passages to work from instead of url / text: [{chunk_id, source_id, content}]. Citations then point at these ids."
+    default: []
+
+nodes:
+  - id: options
+    type: template
+    parameters:
+      output_format: json
+      template: '{"has_url": {{ url != "" }}}'
+
+  # `url` (the workflow input) reaches the node directly.
+  - id: fetch
+    type: http
+    dependencies: ["options"]
+    run_if: "{{ nodes.options.outputs.has_url }}"
+
+  - id: source
+    type: template
+    input_mapping:
+      page: "{{ nodes.fetch.outputs.body }}"
+    parameters:
+      template: "{% if chunks | length > 0 %}{% for c in chunks %}[{{ c.chunk_id }}] {{ c.content }}\n\n{% endfor %}{% elif page %}{{ page | striptags | truncate(length=24000) }}{% else %}{{ text | truncate(length=24000) }}{% endif %}"
+
+  - id: prompt
+    type: template
+    dependencies: ["source"]
+    input_mapping:
+      source_text: "{{ nodes.source.outputs.output }}"
+    parameters:
+      template: |
+        Write {{ count }} multiple-choice questions on the source below,
+        testing {{ focus }}. Each has 3-5 `options`, exactly one right;
+        `answer` is the 0-based index of the right option, and
+        `explanation` says in one sentence why, from the source. Wrong
+        options must be plausible. Use only what the source supports.
+        When the source's passages carry [ids], give every question the
+        chunk_id of the passage it comes from.
+
+        SOURCE:
+        {{ source_text }}
+
+  - id: draft
+    type: llm
+    dependencies: ["prompt"]
+    input_mapping:
+      prompt: "{{ nodes.prompt.outputs.output }}"
+    parameters:
+      system: "You write fair, unambiguous quiz questions. Answer with JSON only."
+      json_schema:
+        type: object
+        required: [title, items]
+        properties:
+          title: { type: string }
+          items:
+            type: array
+            minItems: 1
+            items:
+              type: object
+              required: [question, options, answer]
+              properties:
+                question: { type: string }
+                options: { type: array, minItems: 2, maxItems: 8, items: { type: string } }
+                answer: { type: integer, minimum: 0 }
+                explanation: { type: string }
+                chunk_id: { type: string }
+
+  # Lift the items out of the model's answer for the renderer.
+  - id: lifted
+    type: template
+    dependencies: ["draft"]
+    input_mapping:
+      draft: "{{ nodes.draft.outputs.output }}"
+    parameters:
+      output_format: json
+      template: '{"title": {{ draft.title | json_encode() }}, "items": {{ draft["items"] | json_encode() }}}'
+
+  - id: page
+    type: render_study
+    dependencies: ["lifted"]
+    input_mapping:
+      title: "{{ nodes.lifted.outputs.title }}"
+      items: "{{ nodes.lifted.outputs.items }}"
+    parameters:
+      kind: quiz
+
+  - id: deliverable
+    type: template
+    dependencies: ["page"]
+    input_mapping:
+      drafted: "{{ nodes.draft.outputs.output }}"
+      html: "{{ nodes.page.outputs.page_output }}"
+    parameters:
+      output_format: json
+      template: |
+        {"deliverable": {
+          "kind": "quiz",
+          "title": {{ drafted.title | json_encode() }},
+          "content": {"items": {{ drafted["items"] | json_encode() }}},
+          "citations": [{% set_global first = true %}{% for n in drafted["items"] %}{% if n.chunk_id %}{% set_global sid = "" %}{% set_global passage = "" %}{% for c in chunks %}{% if c.chunk_id == n.chunk_id %}{% set_global sid = c.source_id %}{% set_global passage = c.content %}{% endif %}{% endfor %}{% if passage %}{% if not first %},{% endif %}{% set_global first = false %}{"source_id": {{ sid | json_encode() }}, "chunk_id": {{ n.chunk_id | json_encode() }}, "quote": {{ passage | truncate(length=300) | json_encode() }}}{% endif %}{% endif %}{% endfor %}],
+          "files": [
+            {"node_id": "page", "name": {{ html | split(pat="/") | last | json_encode() }}, "mime_type": "text/html", "role": "primary"}
+          ]
+        }}

@@ -212,7 +212,7 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
   let mut notes: Vec<String> = Vec::new();
   let (category, capabilities) = match node.node_type.as_str() {
     "template" | "markmap" | "batch" | "conditional" | "while" | "render_table" | "render_svg"
-    | "render_mindmap" | "render_markdown" => (PermissionCategory::Pure, vec![]),
+    | "render_mindmap" | "render_markdown" | "render_study" => (PermissionCategory::Pure, vec![]),
     // Y3.4: calls a model, then runs lualatex / pdftocairo / typst under
     // the OS sandbox, writing only to its artifact directory.
     "figure" => (

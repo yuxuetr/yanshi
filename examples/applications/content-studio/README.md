@@ -6,7 +6,7 @@ from a closed menu of generators, and each generator is a hand-written
 workflow template.
 
 ```
-yanshi skill run → planner (ReAct) → report / mindmap / audio_overview tools
+yanshi skill run → planner (ReAct) → report / mindmap / audio_overview / slides / flashcards / quiz tools
                                         │  (WorkflowTool over examples/generators/*.yml)
                                         └→ files → --output-dir/<tool>/<node>/<file>
 ```
@@ -35,7 +35,7 @@ Output:
 ```
 out/report/report_md/1.md       out/mindmap/map_svg/1.svg      out/audio_overview/episode/1.mp3
 out/report/report_html/1.html   out/mindmap/map_png/1.png
-out/report/report_pdf/1.pdf     out/mindmap/map_html/1.html
+out/report/report_pdf/1.pdf     out/mindmap/map_html/1.html    out/quiz/page/1.html
 ```
 
 Each tool directory also has an `artifacts.json` (size and SHA-256 per
