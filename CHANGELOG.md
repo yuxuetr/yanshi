@@ -338,6 +338,16 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **`slides` generator (Y6.1).** `examples/generators/slides.yml`:
+  source (url / text / notebook chunks) → a deck plan (`llm` with
+  `json_schema`: title, bullets, speaker notes and an optional figure
+  per slide) → every figure rendered by the `figure` node in a Map →
+  Markdown slides → a `.pptx` through pandoc, figures embedded as SVG
+  so they stay vector, with speaker notes. `render_document` can now
+  read the run's own artifacts (to embed figures) and takes a `theme`:
+  a bare name resolved to a reference document in `YANSHI_THEMES_DIR`.
+  Slides is available to `POST /v1/notebooks/{id}/generate` and to
+  content-studio. Beamer / typst slide PDFs are not done yet.
 - **Generate deliverables from a notebook (Y5.4).**
   `POST /v1/notebooks/{id}/generate {kind, params, model}` runs the
   report, mindmap or audio_overview generator (compiled into the

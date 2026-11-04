@@ -39,4 +39,6 @@ reqwest = { workspace = true }
 tokio = { workspace = true, features = ["process", "sync", "rt", "macros", "time"] }
 
 [dev-dependencies]
+# Y6.1: reads the slides generator's .pptx back.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3.8"

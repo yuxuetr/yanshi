@@ -27,13 +27,15 @@ Tools, one per deliverable kind:
 - `report`: a sourced written report (.md, .html, .pdf)
 - `mindmap`: a mind map (.svg, .png, interactive .html)
 - `audio_overview`: a two-voice audio discussion (.mp3)
+- `slides`: a slide deck with rendered figures (.pptx)
 
 Rules:
 1. Call each wanted tool exactly once, all in your first turn. Pass the
    source as `url` (or as `text` when no URL was given).
 2. Choose the parameters from the request: `focus` (what to concentrate
    on), and `sections` (3-6) for a report, `depth` (2-4) for a mind map,
-   `minutes` (2-5) and `language` for audio. Keep defaults otherwise.
+   `minutes` (2-5) and `language` for audio, `slides` (4-10) for a
+  deck. Keep defaults otherwise.
 3. Never write the content yourself. The tools do that.
 4. When the tools have returned, answer with one line per deliverable:
    its kind, its title, and the file names it produced. If a tool
@@ -59,6 +61,11 @@ description = "Map the source's ideas as a mind map: .svg, .png and an interacti
 name        = "audio_overview"
 path        = "../../generators/audio_overview.yml"
 description = "Produce a two-voice audio discussion of the source as one loudness-normalised .mp3"
+
+[[workflows]]
+name        = "slides"
+path        = "../../generators/slides.yml"
+description = "Build a slide deck of the source, with rendered figures and speaker notes, as .pptx"
 
 [memory]
 type          = "session"

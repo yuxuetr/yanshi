@@ -933,7 +933,9 @@ impl AsyncNode for RenderAudioNode {
 /// `render_document` (Y3.3): Markdown → `docx` / `pptx` / `html` /
 /// `epub` / `pdf` through pandoc; PDF uses `--pdf-engine=typst` (one
 /// binary, no TeX). Inputs: `markdown` (required), `format` (required),
-/// `title`, `toc` (bool).
+/// `title`, `toc` (bool), `theme` (a reference document's name in
+/// `YANSHI_THEMES_DIR`, for pptx / docx). The Markdown may embed images
+/// from this run's artifacts (e.g. `figure` SVGs) by absolute path.
 ///
 /// pandoc (and typst under it) runs under the platform OS sandbox
 /// backend, writing only to this node's artifact directory and the temp
@@ -968,6 +970,45 @@ fn document_format(format: &str) -> Option<(&'static str, &'static str)> {
   })
 }
 
+/// `YANSHI_THEMES_DIR`: operator-installed pandoc reference documents
+/// (`<name>.pptx` / `<name>.docx`), selected by a node's `theme` input.
+fn themes_dir() -> Option<std::path::PathBuf> {
+  std::env::var_os("YANSHI_THEMES_DIR")
+    .map(std::path::PathBuf::from)
+    .filter(|dir| dir.is_dir())
+}
+
+/// The reference document for `theme` and `extension`, if one is
+/// installed. A theme is a bare name: it cannot point elsewhere on the
+/// host, and an unknown one is an error rather than a silent default.
+fn theme_reference(
+  node: &str,
+  theme: &str,
+  extension: &str,
+) -> Result<std::path::PathBuf, YanshiError> {
+  let bare = !theme.is_empty()
+    && theme
+      .chars()
+      .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+  if !bare {
+    return Err(input_error(
+      node,
+      format!("theme '{theme}' must be a bare name"),
+    ));
+  }
+  let dir = themes_dir()
+    .ok_or_else(|| input_error(node, "a theme needs YANSHI_THEMES_DIR on this host"))?;
+  let path = dir.join(format!("{theme}.{extension}"));
+  if path.is_file() {
+    Ok(path)
+  } else {
+    Err(input_error(
+      node,
+      format!("no theme '{theme}' for .{extension} in {}", dir.display()),
+    ))
+  }
+}
+
 /// Run pandoc (and, for PDF, typst under it) through
 /// [`crate::common::sandboxed`]: fonts and typst's install tree readable,
 /// writes confined to `workdir` and the temp dir.
@@ -988,6 +1029,10 @@ async fn run_pandoc(
       sandboxed::find_tool("typst").ok_or_else(|| not_installed("typst (the PDF engine)"))?;
     read_paths.extend(sandboxed::install_prefixes(&typst));
   }
+  // Y6.1: a document may embed this run's own artifacts (figures);
+  // nothing else of the host's files.
+  read_paths.extend(yanshi_core::run_context::current_artifact_root());
+  read_paths.extend(themes_dir());
   let output = sandboxed::run(sandboxed::SandboxedRun {
     node,
     program: pandoc,
@@ -1065,6 +1110,12 @@ impl AsyncNode for RenderDocumentNode {
         "html" => args.push("--embed-resources".into()),
         "pdf" => args.push("--pdf-engine=typst".into()),
         _ => {}
+      }
+      if let Some(theme) = optional_str(inputs, "theme")
+        && matches!(extension, "pptx" | "docx")
+      {
+        args.push("--reference-doc".into());
+        args.push(theme_reference(&self.id, theme, extension)?.into());
       }
       run_pandoc(&self.id, &workdir, &args, extension == "pdf").await?;
       tokio::fs::read(&target)
@@ -1463,5 +1514,12 @@ mod tests {
       None,
       "silence is not normalised"
     );
+  }
+
+  #[test]
+  fn a_theme_is_a_bare_name_inside_the_themes_dir() {
+    for bad in ["../etc/passwd", "a/b", "", "x.pptx"] {
+      assert!(theme_reference("d", bad, "pptx").is_err(), "{bad:?}");
+    }
   }
 }

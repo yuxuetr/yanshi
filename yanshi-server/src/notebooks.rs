@@ -464,6 +464,10 @@ const GENERATORS: &[(&str, &str)] = &[
     "audio_overview",
     include_str!("../../examples/generators/audio_overview.yml"),
   ),
+  (
+    "slides",
+    include_str!("../../examples/generators/slides.yml"),
+  ),
 ];
 
 /// How much notebook text a generator gets, in characters (the

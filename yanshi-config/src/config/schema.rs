@@ -504,7 +504,8 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("format", ParamType::String),
     ]),
     "figure" => Some(vec![
-      ParamSpec::required("language", ParamType::String),
+      // Read at execute time, so a Map item may supply it (Y6.1).
+      ParamSpec::required_input("language", ParamType::String),
       ParamSpec::optional("model", ParamType::String),
       ParamSpec::optional("description", ParamType::String),
       ParamSpec::optional("source", ParamType::String),
@@ -517,6 +518,7 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required("format", ParamType::String),
       ParamSpec::optional("title", ParamType::String),
       ParamSpec::optional("toc", ParamType::Bool),
+      ParamSpec::optional("theme", ParamType::String),
     ]),
     "tts" => Some(vec![
       // Y4.3: all three may come from `input_mapping` (one node voicing
