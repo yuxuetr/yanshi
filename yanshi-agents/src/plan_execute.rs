@@ -2208,6 +2208,7 @@ mod tests {
     crate::eval::PricingTable::default().with_default(crate::eval::ModelPricing {
       input_per_1k: 20.0,
       output_per_1k: 0.0,
+      ..Default::default()
     })
   }
 

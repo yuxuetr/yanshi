@@ -351,6 +351,7 @@ mod tests {
       name: "test".to_string(),
       inputs: HashMap::new(),
       nodes,
+      cost_limit_usd: None,
     }
   }
 

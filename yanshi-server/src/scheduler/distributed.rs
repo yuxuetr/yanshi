@@ -532,5 +532,6 @@ pub fn mock_flow(name: impl Into<String>, nodes: Vec<NodeDefinitionV2>) -> FlowD
     name: name.into(),
     inputs: HashMap::new(),
     nodes,
+    cost_limit_usd: None,
   }
 }

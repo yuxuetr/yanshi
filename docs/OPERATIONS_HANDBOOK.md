@@ -231,7 +231,7 @@ yanshi rag eval -d <dataset_dir> -r hybrid --compare-baseline <path>
 | `YANSHI_SECURITY_PROFILE` | `dev`/`local`/`production` |
 | `YANSHI_MODELS_CONFIG` | 覆盖 `models.yml` 路径 |
 | `YANSHI_MCP_CONFIG` | 覆盖 `mcp.toml` 路径 |
-| `YANSHI_PRICING_TABLE` | eval harness 成本表路径 |
+| `YANSHI_PRICING_TABLE` | 成本表路径（eval、Agent 预算、DAG `cost_limit_usd` 共用） |
 | `YANSHI_MOCK_RESPONSES` / `YANSHI_MOCK_TOOL_CALLS` | Mock provider 排队响应（**调试/CI 环境记得清理，否则会污染后续运行**） |
 
 ## 6. 相关文档索引

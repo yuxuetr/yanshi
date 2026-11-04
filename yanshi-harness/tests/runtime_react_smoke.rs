@@ -168,6 +168,7 @@ fn flat_dollar_per_call_pricing() -> PricingTable {
   PricingTable::default().with_default(ModelPricing {
     input_per_1k: 20.0,
     output_per_1k: 0.0,
+    ..Default::default()
   })
 }
 

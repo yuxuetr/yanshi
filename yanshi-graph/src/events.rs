@@ -141,6 +141,27 @@ pub enum WorkflowEvent {
     timestamp: Instant,
   },
 
+  /// Y2.3: a node finished having recorded billed spend.
+  NodeCostRecorded {
+    workflow_id: String,
+    node_id: String,
+    /// USD this node recorded (its Map / While items included).
+    cost_usd: f64,
+    /// USD the run has recorded so far, this node included.
+    total_cost_usd: f64,
+    timestamp: Instant,
+  },
+
+  /// Y2.3: the run's spend passed `cost_limit_usd`; `node_id` is the
+  /// first node refused. Emitted once per run.
+  CostLimitExceeded {
+    workflow_id: String,
+    node_id: String,
+    spent_usd: f64,
+    limit_usd: f64,
+    timestamp: Instant,
+  },
+
   /// LLM prompt sent (for detailed tracing)
   LLMPromptSent {
     workflow_id: String,
@@ -219,6 +240,8 @@ impl WorkflowEvent {
       | Self::CheckpointRestored { workflow_id, .. }
       | Self::RetryAttempt { workflow_id, .. }
       | Self::ResourceWarning { workflow_id, .. }
+      | Self::NodeCostRecorded { workflow_id, .. }
+      | Self::CostLimitExceeded { workflow_id, .. }
       | Self::LLMPromptSent { workflow_id, .. }
       | Self::LLMResponseReceived { workflow_id, .. }
       | Self::ResumeDecisionRecorded { workflow_id, .. } => workflow_id,
@@ -241,6 +264,8 @@ impl WorkflowEvent {
       | Self::CheckpointRestored { timestamp, .. }
       | Self::RetryAttempt { timestamp, .. }
       | Self::ResourceWarning { timestamp, .. }
+      | Self::NodeCostRecorded { timestamp, .. }
+      | Self::CostLimitExceeded { timestamp, .. }
       | Self::LLMPromptSent { timestamp, .. }
       | Self::LLMResponseReceived { timestamp, .. }
       | Self::ResumeDecisionRecorded { timestamp, .. } => *timestamp,
@@ -263,6 +288,8 @@ impl WorkflowEvent {
       Self::CheckpointRestored { .. } => "checkpoint.restored",
       Self::RetryAttempt { .. } => "retry.attempt",
       Self::ResourceWarning { .. } => "resource.warning",
+      Self::NodeCostRecorded { .. } => "node.cost",
+      Self::CostLimitExceeded { .. } => "cost.limit_exceeded",
       Self::LLMPromptSent { .. } => "llm.prompt.sent",
       Self::LLMResponseReceived { .. } => "llm.response.received",
       Self::ResumeDecisionRecorded { .. } => "resume.decision.recorded",
@@ -346,6 +373,26 @@ impl fmt::Display for WorkflowEvent {
           limit
         )
       }
+      Self::NodeCostRecorded {
+        node_id,
+        cost_usd,
+        total_cost_usd,
+        ..
+      } => write!(
+        f,
+        "Node '{}' cost ${:.4} (run total ${:.4})",
+        node_id, cost_usd, total_cost_usd
+      ),
+      Self::CostLimitExceeded {
+        node_id,
+        spent_usd,
+        limit_usd,
+        ..
+      } => write!(
+        f,
+        "Cost limit exceeded before node '{}': ${:.4} of ${:.4}",
+        node_id, spent_usd, limit_usd
+      ),
       Self::LLMPromptSent {
         node_id,
         model,

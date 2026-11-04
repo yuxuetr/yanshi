@@ -481,7 +481,10 @@ curl -N -H "Authorization: Bearer dev-secret" \
 
 Expected event kinds for a successful fixed DAG include:
 `workflow.started`, `node.started`, `node.output.captured`, `node.completed`,
-and `workflow.completed`.
+and `workflow.completed`. Runs with billed nodes also emit `node.cost`
+(`cost_usd`, `total_cost_usd`), and a run that passes its
+`cost_limit_usd` emits one `cost.limit_exceeded` (`spent_usd`,
+`limit_usd`); see `docs/CONFIGURATION.md` § Cost Limits.
 
 #### Per-run retention overrides (P10.14.1)
 

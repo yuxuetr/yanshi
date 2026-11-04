@@ -187,6 +187,15 @@ impl TextToVideoNode {
         .ok_or_else(|| YanshiError::AsyncExecutionError {
           message: "No videos returned from text-to-video provider".to_string(),
         })?;
+    // Billed per second of video produced; fall back to the requested
+    // length when the vendor does not report one.
+    let seconds: f64 = video_response
+      .videos
+      .iter()
+      .filter_map(|video| video.duration_seconds.or(self.duration_seconds))
+      .map(f64::from)
+      .sum();
+    crate::cost::record(&self.model, |p| p.cost_for_seconds(seconds))?;
 
     let result = match self.output_format {
       ArtifactOutputFormat::File => {

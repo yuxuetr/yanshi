@@ -321,6 +321,7 @@ impl TextToImageNode {
         .map_err(|e| YanshiError::AsyncExecutionError {
           message: format!("Text-to-image generation failed: {}", e),
         })?;
+    crate::cost::record(&model, |p| p.cost_for_images(image_response.images.len()))?;
 
     let first_image =
       image_response

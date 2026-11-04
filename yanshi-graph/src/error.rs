@@ -213,6 +213,11 @@ pub enum YanshiError {
   #[error("Task cancelled")]
   TaskCancelled,
 
+  /// Y2.3: the run's recorded spend passed its `cost_limit_usd`, so this
+  /// node was not started.
+  #[error("Cost limit exceeded: spent ${spent_usd:.4} of ${limit_usd:.4}")]
+  CostLimitExceeded { spent_usd: f64, limit_usd: f64 },
+
   #[error("Async execution error: {message}")]
   AsyncExecutionError { message: String },
 

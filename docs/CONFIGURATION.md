@@ -248,6 +248,45 @@ yanshi trace replay <run_id>
 yanshi trace tui <run_id>
 ```
 
+## Cost Limits
+
+Billed modality nodes (`tts`, `text_to_image`, `image_to_image`,
+`image_edit`, `text_to_video`) price each call against the pricing
+table: `YANSHI_PRICING_TABLE`, else `~/.yanshi/pricing.yml`, else empty
+(every model costs $0). No prices are bundled; wrong bundled prices
+would enforce the wrong limit.
+
+```yaml
+# ~/.yanshi/pricing.yml
+models:
+  gpt-image-1:
+    per_image: 0.04            # each generated / edited image
+  step-tts-mini:
+    per_1k_input_chars: 0.015  # TTS input text
+    per_output_second: 0.0     # seconds of audio (derived for WAV only)
+  veo-3:
+    per_output_second: 0.50    # seconds of video
+  gpt-4o:                      # token prices (agents / eval)
+    input_per_1k: 0.005
+    output_per_1k: 0.015
+```
+
+Cap a run's spend with a top-level `cost_limit_usd`:
+
+```yaml
+name: illustrated report
+cost_limit_usd: 2.00
+nodes: [...]
+```
+
+Once the run's recorded spend has passed the limit, nodes that have not
+started are refused with `CostLimitExceeded`. The node that crossed the
+limit, and any already running concurrently, finish. Events:
+`node.cost` (per billed node, with the run total) and one
+`cost.limit_exceeded`. `POST /v1/runs` also accepts `cost_limit_usd`;
+when both are set the tighter applies. `yanshi doctor` shows which
+pricing table is in effect, and warns when it does not parse.
+
 ## Skills
 
 Skills use `SKILL.md` as the recommended entry point, with `skill.toml` still

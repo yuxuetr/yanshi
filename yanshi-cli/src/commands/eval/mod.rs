@@ -6,7 +6,7 @@
 pub mod cli;
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -245,23 +245,7 @@ fn glob_match_inner(pattern: &[char], candidate: &[char]) -> bool {
 /// structured anyhow message so operators don't silently lose cost
 /// tracking they expected to have.
 fn load_pricing_table() -> Result<PricingTable> {
-  if let Ok(path) = std::env::var("YANSHI_PRICING_TABLE") {
-    let path = PathBuf::from(path);
-    return PricingTable::load_from_yaml(&path)
-      .with_context(|| format!("failed to load pricing table from {}", path.display()));
-  }
-  if let Some(home) = dirs::home_dir() {
-    let default_path = home.join(".yanshi").join("pricing.yml");
-    if default_path.exists() {
-      return PricingTable::load_from_yaml(&default_path).with_context(|| {
-        format!(
-          "failed to load default pricing table from {}",
-          default_path.display()
-        )
-      });
-    }
-  }
-  Ok(PricingTable::empty())
+  PricingTable::load_default().context("failed to load the pricing table")
 }
 
 /// Default factory: spin up a fresh ReActAgent per case using the

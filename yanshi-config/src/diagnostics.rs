@@ -45,6 +45,8 @@ pub struct DoctorReport {
   security: SecurityReport,
   sandbox: SandboxReport,
   code_exec: CodeExecReport,
+  /// Y2.3: the pricing table cost limits are enforced against.
+  pricing: PricingReport,
   environment: EnvironmentReport,
   disk: DiskReport,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -465,7 +467,14 @@ pub async fn build_report(
     None => None,
   };
 
+  let pricing = pricing_report();
+
   let mut status = DoctorStatus::Ok;
+
+  // Y2.3: a malformed pricing file fails every billed node.
+  if pricing.error.is_some() {
+    status.promote(DoctorStatus::Warning);
+  }
 
   // Config / API keys.
   if config.error.is_some() {
@@ -607,6 +616,7 @@ pub async fn build_report(
     security,
     sandbox,
     code_exec,
+    pricing,
     environment: EnvironmentReport {
       yanshi_run_dir: std::env::var("YANSHI_RUN_DIR").ok(),
       yanshi_trace_dir: std::env::var("YANSHI_TRACE_DIR").ok(),
@@ -618,6 +628,44 @@ pub async fn build_report(
     backup_check: backup_check_report,
     installations: installations_report,
     status,
+  }
+}
+
+/// Y2.3: where the pricing table comes from and whether it loads.
+#[derive(Debug, Serialize)]
+pub struct PricingReport {
+  /// `YANSHI_PRICING_TABLE=<path>`, the `~/.yanshi/pricing.yml` path, or
+  /// `none`.
+  source: String,
+  /// Models with an explicit price row.
+  models: usize,
+  /// Whether a fallback `default:` row exists.
+  has_default: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  error: Option<String>,
+}
+
+fn pricing_report() -> PricingReport {
+  let source = match std::env::var("YANSHI_PRICING_TABLE") {
+    Ok(path) => format!("YANSHI_PRICING_TABLE={path}"),
+    Err(_) => match dirs::home_dir().map(|home| home.join(".yanshi").join("pricing.yml")) {
+      Some(path) if path.exists() => path.display().to_string(),
+      _ => "none".to_string(),
+    },
+  };
+  match yanshi_llm::pricing::PricingTable::load_default() {
+    Ok(table) => PricingReport {
+      source,
+      models: table.models.len(),
+      has_default: table.default.is_some(),
+      error: None,
+    },
+    Err(error) => PricingReport {
+      source,
+      models: 0,
+      has_default: false,
+      error: Some(error.to_string()),
+    },
   }
 }
 
@@ -1199,6 +1247,20 @@ pub fn print_text_report(report: &DoctorReport) {
   println!("  backend: {}", report.code_exec.backend);
   println!("  enforcement: {}", report.code_exec.enforcement.as_str());
   println!("  enforcing: {}", enabled_label(report.code_exec.enforcing));
+  println!();
+
+  println!("Pricing (cost_limit_usd is enforced against this):");
+  println!("  source: {}", report.pricing.source);
+  println!("  priced models: {}", report.pricing.models);
+  println!(
+    "  default price: {}",
+    enabled_label(report.pricing.has_default)
+  );
+  if let Some(error) = &report.pricing.error {
+    println!("  error: {error}");
+  } else if report.pricing.models == 0 && !report.pricing.has_default {
+    println!("  note: every model costs $0, so cost limits never trip");
+  }
   println!();
 
   println!("Environment:");

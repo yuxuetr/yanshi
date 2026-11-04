@@ -58,6 +58,94 @@ pub async fn with_inherited_artifact_root<F: Future>(root: Option<PathBuf>, fut:
   }
 }
 
+tokio::task_local! {
+  static COST_METER: std::sync::Arc<CostMeter>;
+}
+
+/// Y2.3: USD spend recorded by billed nodes. Each node executes under its
+/// own meter, a child of the run's meter, so one `record_cost_usd` call
+/// adds to the node's total and to every enclosing total. A Map / While
+/// sub-flow's run meter is a child of the node that started it, so the
+/// parent node's cost includes its items'.
+#[derive(Debug, Default)]
+pub struct CostMeter {
+  usd: std::sync::Mutex<f64>,
+  parent: Option<std::sync::Arc<CostMeter>>,
+  limit_reported: std::sync::atomic::AtomicBool,
+}
+
+impl CostMeter {
+  /// A top-level meter (a run with no enclosing node).
+  pub fn root() -> std::sync::Arc<Self> {
+    std::sync::Arc::new(Self::default())
+  }
+
+  /// A meter whose spend also counts toward `parent`.
+  pub fn child(parent: std::sync::Arc<CostMeter>) -> std::sync::Arc<Self> {
+    std::sync::Arc::new(Self {
+      parent: Some(parent),
+      ..Self::default()
+    })
+  }
+
+  /// Add `usd` here and to every ancestor. Non-finite or negative
+  /// amounts are ignored rather than allowed to lower a total.
+  pub fn add(&self, usd: f64) {
+    if !usd.is_finite() || usd <= 0.0 {
+      return;
+    }
+    let mut meter = Some(self);
+    while let Some(current) = meter {
+      let mut total = current
+        .usd
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+      *total += usd;
+      drop(total);
+      meter = current.parent.as_deref();
+    }
+  }
+
+  /// USD recorded on this meter (including its children).
+  pub fn total(&self) -> f64 {
+    *self
+      .usd
+      .lock()
+      .unwrap_or_else(std::sync::PoisonError::into_inner)
+  }
+
+  /// True exactly once: lets the executor emit one
+  /// `CostLimitExceeded` per run even when several nodes are refused.
+  pub fn claim_limit_report(&self) -> bool {
+    !self
+      .limit_reported
+      .swap(true, std::sync::atomic::Ordering::SeqCst)
+  }
+}
+
+/// Record `usd` against the node currently executing. A no-op outside a
+/// flow (a node called directly), so nodes need not care.
+pub fn record_cost_usd(usd: f64) {
+  let _ = COST_METER.try_with(|meter| meter.add(usd));
+}
+
+/// The meter of the node currently executing, if any.
+pub fn current_cost_meter() -> Option<std::sync::Arc<CostMeter>> {
+  COST_METER.try_with(std::sync::Arc::clone).ok()
+}
+
+/// Run `fut` with `meter` as the current node's meter. Task-locals do not
+/// cross `tokio::spawn`, so a spawned Map item re-enters it explicitly.
+pub async fn with_cost_meter<F: Future>(
+  meter: Option<std::sync::Arc<CostMeter>>,
+  fut: F,
+) -> F::Output {
+  match meter {
+    Some(meter) => COST_METER.scope(meter, fut).await,
+    None => fut.await,
+  }
+}
+
 /// One `FlowValue::File` a finished run left in its state pool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileOutput {
@@ -223,5 +311,25 @@ mod tests {
       "outside-base and non-File outputs must be skipped; order is by node id"
     );
     assert_eq!(found[1].mime_type.as_deref(), Some("audio/wav"));
+  }
+
+  #[tokio::test]
+  async fn recorded_cost_rolls_up_through_node_and_run_meters() {
+    let run = CostMeter::root();
+    let node = CostMeter::child(run.clone());
+    with_cost_meter(Some(node.clone()), async {
+      record_cost_usd(0.04);
+      record_cost_usd(f64::NAN);
+      record_cost_usd(-1.0);
+      let item = CostMeter::child(current_cost_meter().expect("meter in scope"));
+      with_cost_meter(Some(item), async { record_cost_usd(0.01) }).await;
+    })
+    .await;
+    assert!((node.total() - 0.05).abs() < 1e-12);
+    assert!((run.total() - 0.05).abs() < 1e-12);
+    record_cost_usd(1.0); // outside any scope: ignored
+    assert!((run.total() - 0.05).abs() < 1e-12);
+    assert!(run.claim_limit_report());
+    assert!(!run.claim_limit_report());
   }
 }

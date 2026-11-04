@@ -97,6 +97,10 @@ pub struct CreateRunRequest {
   /// the run row is created. "Experimental" per `docs/STABILITY.md`.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub execution_mode: Option<String>,
+  /// Y2.3: USD spend cap for this run. When the workflow also declares
+  /// `cost_limit_usd`, the tighter of the two applies. Must be > 0.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub cost_limit_usd: Option<f64>,
 }
 
 /// Body shape for `retention_overrides:` on `POST /v1/runs`
@@ -211,6 +215,9 @@ pub struct RunContext {
   /// invocation is a single agent loop, not a DAG) — only `flow_execute`
   /// consults it.
   pub run_max_concurrency: usize,
+  /// Y2.3: the request's `cost_limit_usd`, combined with the workflow's
+  /// own in `flow_execute`. `None` for skill runs.
+  pub cost_limit_usd: Option<f64>,
 }
 
 /// Postgres NOTIFY channel carrying cross-replica cancellation intents
@@ -711,11 +718,17 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
     flow = flow.with_state_size_observer(registry.observer_for(ctx.run_id));
   }
 
-  let execution_config = server_execution_config(
+  let mut execution_config = server_execution_config(
     ctx.run_base_dir.clone(),
     ctx.cancellation_token.clone(),
     ctx.run_max_concurrency,
   );
+  if let Some(limit) = flow_def
+    .effective_cost_limit(ctx.cost_limit_usd)
+    .map_err(anyhow::Error::msg)?
+  {
+    execution_config = execution_config.with_cost_limit_usd(limit);
+  }
   let state = flow
     .execute_from_inputs_with_id_and_config(run_id, initial_inputs, execution_config)
     .await?;
@@ -1360,6 +1373,11 @@ pub async fn submit_run(
     }
   };
 
+  if let Some(limit) = req.cost_limit_usd {
+    yanshi_config::config::v2::validate_cost_limit(limit).map_err(ApiError::BadRequest)?;
+  }
+  let cost_limit_usd = req.cost_limit_usd;
+
   let (events_retention_days, artifacts_retention_days) = match req.retention_overrides {
     Some(overrides) => {
       if let Err(msg) = overrides.validate() {
@@ -1509,6 +1527,7 @@ pub async fn submit_run(
         approval_registry,
         approval_timeout: crate::serve::HARNESS_APPROVAL_TIMEOUT,
         run_max_concurrency,
+        cost_limit_usd,
       })
       .await;
     cancellation_registry.complete(run_id);

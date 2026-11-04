@@ -124,6 +124,13 @@ pub async fn execute(
   let timeout_duration =
     parse_duration(&timeout).with_context(|| format!("Invalid --timeout value '{}'", timeout))?;
   let mut execution_config = parse_execution_config(&execution_mode, max_concurrency, run_dir)?;
+  if let Some(limit) = flow_def
+    .effective_cost_limit(None)
+    .map_err(anyhow::Error::msg)?
+  {
+    println!("💰 Cost limit: ${limit:.4}");
+    execution_config = execution_config.with_cost_limit_usd(limit);
+  }
   // Q3.1.2: install a FlowCancellationToken so the Ctrl-C handler
   // below can ask the flow to stop after the current node instead of
   // the runtime aborting the in-flight node mid-`await`.

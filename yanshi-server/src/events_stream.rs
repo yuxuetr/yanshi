@@ -1005,6 +1005,30 @@ fn workflow_event_payload(event: &yanshi_core::events::WorkflowEvent) -> serde_j
         "force_replay": force_replay,
       },
     }),
+    W::NodeCostRecorded {
+      workflow_id,
+      node_id,
+      cost_usd,
+      total_cost_usd,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "cost_usd": cost_usd,
+      "total_cost_usd": total_cost_usd,
+    }),
+    W::CostLimitExceeded {
+      workflow_id,
+      node_id,
+      spent_usd,
+      limit_usd,
+      ..
+    } => serde_json::json!({
+      "workflow_id": workflow_id,
+      "node_id": node_id,
+      "spent_usd": spent_usd,
+      "limit_usd": limit_usd,
+    }),
     // `WorkflowEvent` is `#[non_exhaustive]`: a future variant we don't yet
     // render falls back to an empty payload rather than failing to compile.
     _ => serde_json::json!({}),
@@ -1338,5 +1362,35 @@ mod tests {
     assert_eq!(payload["error"], "boom");
     assert_eq!(payload["node_id"], "n1");
     assert_eq!(payload["duration_ms"], 20);
+  }
+
+  /// Y2.3: cost events reach SSE subscribers with their amounts, not the
+  /// empty fallback payload.
+  #[test]
+  fn workflow_event_payload_carries_cost_events() {
+    use std::time::Instant;
+    use yanshi_core::events::WorkflowEvent;
+
+    let recorded = workflow_event_payload(&WorkflowEvent::NodeCostRecorded {
+      workflow_id: "demo".into(),
+      node_id: "draw".into(),
+      cost_usd: 0.04,
+      total_cost_usd: 0.08,
+      timestamp: Instant::now(),
+    });
+    assert_eq!(recorded["node_id"], "draw");
+    assert_eq!(recorded["cost_usd"], 0.04);
+    assert_eq!(recorded["total_cost_usd"], 0.08);
+
+    let exceeded = workflow_event_payload(&WorkflowEvent::CostLimitExceeded {
+      workflow_id: "demo".into(),
+      node_id: "third".into(),
+      spent_usd: 0.08,
+      limit_usd: 0.05,
+      timestamp: Instant::now(),
+    });
+    assert_eq!(exceeded["node_id"], "third");
+    assert_eq!(exceeded["spent_usd"], 0.08);
+    assert_eq!(exceeded["limit_usd"], 0.05);
   }
 }

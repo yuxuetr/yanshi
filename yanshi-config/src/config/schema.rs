@@ -93,6 +93,11 @@ pub fn validate_flow_definition_with_options(
       .issues
       .push("workflow must define at least one node".to_string());
   }
+  if let Some(limit) = flow_def.cost_limit_usd
+    && let Err(message) = crate::config::v2::validate_cost_limit(limit)
+  {
+    report.issues.push(message);
+  }
 
   for (idx, node) in flow_def.nodes.iter().enumerate() {
     let path = format!("nodes[{}]", idx);

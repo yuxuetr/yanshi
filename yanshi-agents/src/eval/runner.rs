@@ -900,6 +900,7 @@ mod tests {
       crate::eval::ModelPricing {
         input_per_1k: 1.0,
         output_per_1k: 2.0,
+        ..Default::default()
       },
     );
     let runner = EvalRunner::new(&dataset, &factory).with_pricing(pricing);
@@ -943,6 +944,7 @@ mod tests {
       crate::eval::ModelPricing {
         input_per_1k: 0.001,
         output_per_1k: 0.001,
+        ..Default::default()
       },
     );
     let report = EvalRunner::new(&dataset, &factory)
@@ -979,6 +981,7 @@ mod tests {
     let pricing = crate::eval::PricingTable::default().with_default(crate::eval::ModelPricing {
       input_per_1k: 100.0,
       output_per_1k: 100.0,
+      ..Default::default()
     });
     let report = EvalRunner::new(&dataset, &factory)
       .with_pricing(pricing)

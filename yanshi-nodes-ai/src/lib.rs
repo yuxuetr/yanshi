@@ -8,6 +8,7 @@
 //! / `yanshi-mcp`.
 
 pub mod artifacts;
+mod cost;
 pub mod nodes;
 
 pub use artifacts::ArtifactOutputFormat;

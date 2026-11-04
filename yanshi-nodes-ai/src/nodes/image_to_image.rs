@@ -105,6 +105,7 @@ impl AsyncNode for ImageToImageNode {
         .map_err(|e| YanshiError::AsyncExecutionError {
           message: format!("Image-to-image transform failed: {}", e),
         })?;
+    crate::cost::record(&self.model, |p| p.cost_for_images(response.images.len()))?;
 
     let first_image = response
       .images

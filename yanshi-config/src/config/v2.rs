@@ -12,6 +12,36 @@ pub struct FlowDefinitionV2 {
   #[serde(default)]
   pub inputs: HashMap<String, InputDefinitionV2>,
   pub nodes: Vec<NodeDefinitionV2>,
+  /// Y2.3: USD spend cap for a run of this workflow. Billed nodes price
+  /// their calls against the operator's pricing table; once the run has
+  /// spent more than this, nodes that have not started are refused.
+  #[serde(default)]
+  pub cost_limit_usd: Option<f64>,
+}
+
+/// Y2.3: a cost limit must be a positive, finite USD amount.
+pub fn validate_cost_limit(limit_usd: f64) -> Result<f64, String> {
+  if limit_usd.is_finite() && limit_usd > 0.0 {
+    Ok(limit_usd)
+  } else {
+    Err(format!(
+      "cost_limit_usd must be a positive number, got {limit_usd}"
+    ))
+  }
+}
+
+impl FlowDefinitionV2 {
+  /// Y2.3: the run's cost cap: the tighter of this workflow's
+  /// `cost_limit_usd` and `requested` (e.g. the gateway request's), each
+  /// validated by [`validate_cost_limit`].
+  pub fn effective_cost_limit(&self, requested: Option<f64>) -> Result<Option<f64>, String> {
+    let own = self.cost_limit_usd.map(validate_cost_limit).transpose()?;
+    let requested = requested.map(validate_cost_limit).transpose()?;
+    Ok(match (own, requested) {
+      (Some(a), Some(b)) => Some(a.min(b)),
+      (a, b) => a.or(b),
+    })
+  }
 }
 
 /// Declares one named workflow input, consumed by

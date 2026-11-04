@@ -372,6 +372,21 @@ impl TraceCollector {
         }
       }
 
+      // Y2.3: emitted after the node's work, before `NodeCompleted`.
+      WorkflowEvent::NodeCostRecorded {
+        workflow_id,
+        node_id,
+        cost_usd,
+        ..
+      } => {
+        let mut traces_guard = traces.write().await;
+        if let Some(trace) = traces_guard.get_mut(&workflow_id)
+          && let Some(node) = trace.nodes.iter_mut().rev().find(|n| n.node_id == node_id)
+        {
+          node.cost_usd = Some(cost_usd);
+        }
+      }
+
       WorkflowEvent::NodeOutputCaptured {
         workflow_id,
         node_id,

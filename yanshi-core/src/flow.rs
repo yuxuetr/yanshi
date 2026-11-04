@@ -261,8 +261,35 @@ impl<'f> FlowExecutor<'f> {
       .await
   }
 
-  /// Execute workflow with optional checkpoint recovery
+  /// Execute workflow with optional checkpoint recovery, under the run's
+  /// cost meter (Y2.3). A sub-flow started by a node (Map / While items)
+  /// meters as a child of that node, so its spend counts toward it.
   async fn execute_with_workflow_id(
+    &self,
+    workflow_id: Option<String>,
+    initial_inputs: AsyncNodeInputs,
+    restored_state_pool: Option<HashMap<String, AsyncNodeResult>>,
+    restored_last_completed_node: Option<String>,
+    execution_config: Option<FlowExecutionConfig>,
+  ) -> Result<HashMap<String, AsyncNodeResult>, YanshiError> {
+    let run_meter = match crate::run_context::current_cost_meter() {
+      Some(parent) => crate::run_context::CostMeter::child(parent),
+      None => crate::run_context::CostMeter::root(),
+    };
+    Box::pin(crate::run_context::with_cost_meter(
+      Some(run_meter),
+      self.execute_with_workflow_id_metered(
+        workflow_id,
+        initial_inputs,
+        restored_state_pool,
+        restored_last_completed_node,
+        execution_config,
+      ),
+    ))
+    .await
+  }
+
+  async fn execute_with_workflow_id_metered(
     &self,
     workflow_id: Option<String>,
     initial_inputs: AsyncNodeInputs,
@@ -1152,10 +1179,72 @@ impl<'f> FlowExecutor<'f> {
     inputs: &AsyncNodeInputs,
     config: &FlowExecutionConfig,
   ) -> AsyncNodeResult {
+    // Y2.3: refuse to start once the run has overspent, and give the
+    // node its own meter (a child of the run's) so its cost is known.
+    let run_meter = crate::run_context::current_cost_meter();
+    if let (Some(limit_usd), Some(meter)) = (config.cost_limit_usd, run_meter.as_ref()) {
+      let spent_usd = meter.total();
+      if spent_usd > limit_usd {
+        if meter.claim_limit_report() {
+          self.emit_event(WorkflowEvent::CostLimitExceeded {
+            workflow_id: run_id.to_string(),
+            node_id: node_id.to_string(),
+            spent_usd,
+            limit_usd,
+            timestamp: Instant::now(),
+          });
+        }
+        return Err(YanshiError::CostLimitExceeded {
+          spent_usd,
+          limit_usd,
+        });
+      }
+    }
+    let node_meter = run_meter.clone().map(crate::run_context::CostMeter::child);
+    let result = self
+      .execute_node_attempts(
+        run_id,
+        run_dir,
+        node_id,
+        node_type,
+        inputs,
+        config,
+        &node_meter,
+      )
+      .await;
+    if let (Some(node_meter), Some(run_meter)) = (node_meter, run_meter) {
+      let cost_usd = node_meter.total();
+      if cost_usd > 0.0 {
+        self.emit_event(WorkflowEvent::NodeCostRecorded {
+          workflow_id: run_id.to_string(),
+          node_id: node_id.to_string(),
+          cost_usd,
+          total_cost_usd: run_meter.total(),
+          timestamp: Instant::now(),
+        });
+      }
+    }
+    result
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  async fn execute_node_attempts(
+    &self,
+    run_id: &str,
+    run_dir: &Path,
+    node_id: &str,
+    node_type: &NodeType,
+    inputs: &AsyncNodeInputs,
+    config: &FlowExecutionConfig,
+    node_meter: &Option<std::sync::Arc<crate::run_context::CostMeter>>,
+  ) -> AsyncNodeResult {
     let run_once = || async {
-      let execute = crate::run_context::with_artifact_root(
-        run_dir.to_path_buf(),
-        self.execute_node_type(node_type, inputs, config),
+      let execute = crate::run_context::with_cost_meter(
+        node_meter.clone(),
+        crate::run_context::with_artifact_root(
+          run_dir.to_path_buf(),
+          self.execute_node_type(node_type, inputs, config),
+        ),
       );
       match config.node_timeout_ms {
         Some(timeout_ms) => {
@@ -1467,9 +1556,12 @@ impl<'f> FlowExecutor<'f> {
         // run's artifact root into the sub-flow task so Map items file
         // their artifacts under the parent run, not their own uuid dir.
         let artifact_root = crate::run_context::current_artifact_root();
-        let handle = tokio::spawn(crate::run_context::with_inherited_artifact_root(
-          artifact_root,
-          async move {
+        // Y2.3: same for the cost meter, so item spend counts toward the
+        // Map node.
+        let cost_meter = crate::run_context::current_cost_meter();
+        let handle = tokio::spawn(crate::run_context::with_cost_meter(
+          cost_meter,
+          crate::run_context::with_inherited_artifact_root(artifact_root, async move {
             // Hold the permit for the entire sub-flow execution so the
             // concurrent count is a tight upper bound, not just a
             // start-rate cap. Acquired permits drop on task end (any
@@ -1489,7 +1581,7 @@ impl<'f> FlowExecutor<'f> {
             FlowExecutor::new(&sub_flow)
               .execute_from_inputs_with_config(initial_inputs, sub_config)
               .await
-          },
+          }),
         ));
         abort_on_drop.0.push(handle.abort_handle());
         handles.push(handle);
@@ -5340,6 +5432,97 @@ mod tests {
       seen_orders.len()
     );
   }
+  /// Y2.3: spend recorded inside parallel Map items (spawned sub-flow
+  /// tasks) counts toward the Map node and the run, and the run's limit
+  /// then refuses the next node.
+  #[tokio::test]
+  async fn map_item_spend_rolls_up_to_the_map_node_and_trips_the_limit() {
+    use_writable_home();
+
+    struct Billed;
+    #[async_trait]
+    impl AsyncNode for Billed {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        crate::run_context::record_cost_usd(0.01);
+        Ok(HashMap::new())
+      }
+    }
+
+    #[derive(Default)]
+    struct Costs(std::sync::Mutex<Vec<(String, f64, f64)>>);
+    impl EventListener for Costs {
+      fn on_event(&self, event: &WorkflowEvent) {
+        if let WorkflowEvent::NodeCostRecorded {
+          node_id,
+          cost_usd,
+          total_cost_usd,
+          ..
+        } = event
+        {
+          self
+            .0
+            .lock()
+            .unwrap()
+            .push((node_id.clone(), *cost_usd, *total_cost_usd));
+        }
+      }
+    }
+
+    let standard = |id: &str, deps: Vec<&str>| GraphNode {
+      id: id.to_string(),
+      node_type: NodeType::Standard(Arc::new(Billed)),
+      dependencies: deps.into_iter().map(String::from).collect(),
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    };
+    let map_node = GraphNode {
+      id: "map_node".to_string(),
+      node_type: NodeType::Map {
+        template: vec![standard("item", vec![])],
+        parallel: true,
+        max_concurrent: Some(2),
+      },
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: {
+        let mut inputs = HashMap::new();
+        inputs.insert("input_list".to_string(), FlowValue::Json(json!([1, 2, 3])));
+        inputs
+      },
+    };
+
+    let costs = Arc::new(Costs::default());
+    let temp_dir = TempDir::new().unwrap();
+    let state = Flow::new(vec![map_node, standard("after", vec!["map_node"])])
+      .with_event_listener(costs.clone())
+      .execute_from_inputs_with_config(
+        HashMap::new(),
+        FlowExecutionConfig::serial()
+          .with_run_base_dir(temp_dir.path())
+          .with_cost_limit_usd(0.025),
+      )
+      .await
+      .unwrap();
+
+    let costs = costs.0.lock().unwrap().clone();
+    let map_cost = costs
+      .iter()
+      .find(|(id, _, _)| id == "map_node")
+      .unwrap_or_else(|| panic!("no cost event for the Map node: {costs:?}"));
+    assert!((map_cost.1 - 0.03).abs() < 1e-9, "{costs:?}");
+    assert!((map_cost.2 - 0.03).abs() < 1e-9, "{costs:?}");
+    assert!(
+      matches!(
+        state.get("after"),
+        Some(Err(YanshiError::CostLimitExceeded { .. }))
+      ),
+      "the node after the Map must be refused: {:?}",
+      state.get("after")
+    );
+  }
+
   /// Y1.1: every node sees its run's directory as the artifact root,
   /// and Map items (which run in spawned sub-flow tasks with their own
   /// run dirs) inherit the *parent* run's root rather than their own.

@@ -117,6 +117,7 @@ impl AsyncNode for TTSNode {
       })?;
 
     let response_format = self.response_format.as_wire_str().to_string();
+    let input_chars = resolved_input.chars().count();
     let request = TtsRequest {
       model: self.model.clone(),
       input: resolved_input,
@@ -135,6 +136,8 @@ impl AsyncNode for TTSNode {
         .map_err(|e| YanshiError::AsyncExecutionError {
           message: format!("TTS synthesis failed: {}", e),
         })?;
+    let seconds = crate::cost::wav_duration_seconds(&tts_response.audio);
+    crate::cost::record(&self.model, |p| p.cost_for_speech(input_chars, seconds))?;
 
     let value = match self.output_format {
       ArtifactOutputFormat::File => {

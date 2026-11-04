@@ -143,6 +143,7 @@ async fn distributed_run_reaches_succeeded_and_emits_ordered_events() {
     approval_registry: PendingApprovalRegistry::new(),
     approval_timeout: Duration::from_secs(60),
     run_max_concurrency: 1,
+    cost_limit_usd: None,
   };
 
   let executor = DistributedFlowRunExecutor::new(control_plane);
@@ -260,6 +261,7 @@ async fn distributed_run_fails_when_a_node_reports_failure() {
     approval_registry: PendingApprovalRegistry::new(),
     approval_timeout: Duration::from_secs(60),
     run_max_concurrency: 1,
+    cost_limit_usd: None,
   };
 
   let executor = DistributedFlowRunExecutor::new(control_plane);
@@ -320,6 +322,7 @@ async fn cancelled_distributed_run_releases_its_queued_tasks() {
     approval_registry: PendingApprovalRegistry::new(),
     approval_timeout: Duration::from_secs(60),
     run_max_concurrency: 1,
+    cost_limit_usd: None,
   };
   // No worker runs: n1 sits in the queue until the cancel.
   let canceller = tokio::spawn(async move {

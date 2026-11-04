@@ -90,6 +90,7 @@ pub mod error;
 pub mod modality_dispatch;
 pub mod model_types;
 pub mod multimodal;
+pub mod pricing;
 pub mod providers;
 pub mod registry;
 pub mod thinking;

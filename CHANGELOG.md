@@ -300,6 +300,21 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **Cost limits for workflows with billed media nodes (Y2.3).** `tts`,
+  `text_to_image`, `image_to_image`, `image_edit` and `text_to_video`
+  price each call against the pricing table: per image, per second of
+  generated audio / video, per 1k TTS input characters. The table is the
+  one the eval harness already used (`YANSHI_PRICING_TABLE` or
+  `~/.yanshi/pricing.yml`), moved to `yanshi_llm::pricing`; the old
+  `yanshi_agents::eval::pricing` path re-exports it. Cost is recorded on
+  a per-run meter in `yanshi_core::run_context`, and Map / While items
+  count toward their node. A workflow's top-level `cost_limit_usd`, or
+  the same field on `POST /v1/runs`, refuses every node that has not
+  started once spend has passed the limit (`YanshiError::CostLimitExceeded`).
+  New events: `WorkflowEvent::NodeCostRecorded` (`node.cost`) and
+  `CostLimitExceeded` (`cost.limit_exceeded`), both on SSE. Trace nodes
+  carry `cost_usd`. `yanshi doctor` reports the pricing source. The
+  modality *tools* (`yanshi-tools-ai`) do not record cost yet.
 - **`yanshi workflow run` reports and exports artifacts (Y1.4).** A local
   run ends with an artifact table (node, output, MIME, size, path).
   `--output-dir <dir>` copies each artifact to `<dir>/<node_id>/<file>`

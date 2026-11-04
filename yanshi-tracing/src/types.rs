@@ -182,6 +182,10 @@ pub struct NodeTrace {
   /// Error message (if failed)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub error: Option<String>,
+
+  /// Y2.3: USD this node recorded against the run's cost meter.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub cost_usd: Option<f64>,
 }
 
 impl NodeTrace {
@@ -204,6 +208,7 @@ impl NodeTrace {
       llm_details: None,
       agent_details: None,
       error: None,
+      cost_usd: None,
     }
   }
 

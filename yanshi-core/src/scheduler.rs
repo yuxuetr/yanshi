@@ -55,6 +55,14 @@ pub struct FlowExecutionConfig {
   /// real dependency for any later node via `input_mapping` regardless of
   /// how recently it was "accessed", unlike a cache entry.
   pub resource_limits: Option<ResourceLimits>,
+  /// Y2.3: USD spend cap for the run, from the YAML top-level
+  /// `cost_limit_usd` or the gateway request. Billed nodes record their
+  /// cost (`run_context::record_cost_usd`); once the run's total has
+  /// passed the limit, every node that has not started yet is refused
+  /// with `YanshiError::CostLimitExceeded` and one
+  /// `WorkflowEvent::CostLimitExceeded` is emitted. The node that crosses
+  /// the limit finishes; nodes already running concurrently finish too.
+  pub cost_limit_usd: Option<f64>,
 }
 
 impl FlowExecutionConfig {
@@ -86,7 +94,14 @@ impl FlowExecutionConfig {
       node_timeout_ms: None,
       node_retry_policy: None,
       resource_limits: None,
+      cost_limit_usd: None,
     }
+  }
+
+  /// Y2.3: cap the run's recorded spend (see [`Self::cost_limit_usd`]).
+  pub fn with_cost_limit_usd(mut self, limit_usd: f64) -> Self {
+    self.cost_limit_usd = Some(limit_usd);
+    self
   }
 
   pub fn with_run_base_dir(mut self, run_base_dir: impl Into<PathBuf>) -> Self {
@@ -130,6 +145,7 @@ impl Default for FlowExecutionConfig {
       node_timeout_ms: None,
       node_retry_policy: None,
       resource_limits: None,
+      cost_limit_usd: None,
     }
   }
 }
