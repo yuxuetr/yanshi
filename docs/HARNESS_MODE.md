@@ -118,6 +118,7 @@ pub struct ApprovalRequest {
   pub source: Option<ToolSource>,
   pub permissions: Vec<ToolPermission>,
   pub idempotency: ToolIdempotency,
+  pub effect: ToolEffect,          // Y7.2, additive: omitted when `local`
   pub params_summary: serde_json::Value,
   pub risk: ApprovalRisk,
   pub reason: String,
@@ -146,6 +147,14 @@ Rules:
 - `expires_at` is honored by the provider; a missed deadline produces
   `HarnessError::ApprovalTimeout`, never an implicit allow
   (HARNESS_MODE_EVOLUTION Risk 2).
+
+- `effect` (Y7.2) is `publish` for a call that puts content in front of
+  an outside audience (`Tool::effect`, per call like `idempotency`).
+  It is omitted on the wire for `local` calls, so older readers are
+  unaffected and a consumer can filter for `"effect": "publish"`. Under
+  `production` every publish needs approval: there is no budget (Y7.1),
+  no cached `session`/`run` decision, and no idempotency exemption. A
+  pre-hook `Deny` still wins.
 
 ## Interrupt protocol (V2.3)
 

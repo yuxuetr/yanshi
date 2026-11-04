@@ -252,6 +252,26 @@ pub enum ToolIdempotency {
   Unknown,
 }
 
+/// Y7.2: what a call does to the world beyond its own result.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolEffect {
+  /// Stays within this system and its vendors (files, API calls, media
+  /// generation): the default.
+  #[default]
+  Local,
+  /// Puts content in front of an audience outside the system (a blog
+  /// post, a social or podcast platform). It cannot be taken back, so
+  /// the production profile approves every such call, every time.
+  Publish,
+}
+
+impl ToolEffect {
+  pub fn is_local(&self) -> bool {
+    matches!(self, Self::Local)
+  }
+}
+
 /// Metadata used for inspection, tracing, and tool registry diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolMetadata {
@@ -354,6 +374,13 @@ pub trait Tool: Send + Sync {
   /// still exposing a conservative default through metadata.
   fn idempotency(&self, _params: &Value) -> ToolIdempotency {
     self.metadata().idempotency
+  }
+
+  /// Y7.2: the call's [`ToolEffect`]. Per call, like
+  /// [`Self::idempotency`], so one tool can publish for some parameters
+  /// only (a `status: "published"` vs a draft).
+  fn effect(&self, _params: &Value) -> ToolEffect {
+    ToolEffect::Local
   }
 
   /// OS-level capabilities the tool needs to execute.

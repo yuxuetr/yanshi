@@ -85,6 +85,7 @@ fn sample_request(run_id: Uuid, request_id: &str) -> ApprovalRequest {
     source: None,
     permissions: Vec::new(),
     idempotency: Default::default(),
+    effect: Default::default(),
     params_summary: json!({"cmd": "ls"}),
     risk: ApprovalRisk::Medium,
     reason: "cross-replica run test".into(),

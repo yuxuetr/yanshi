@@ -42,8 +42,8 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use yanshi_tool::{
-  Capability, SandboxStatus, Tool, ToolError, ToolIdempotency, ToolMetadata, ToolOutput,
-  ToolRegistry,
+  Capability, SandboxStatus, Tool, ToolEffect, ToolError, ToolIdempotency, ToolMetadata,
+  ToolOutput, ToolRegistry,
 };
 
 use crate::approval::{
@@ -426,6 +426,10 @@ impl Tool for HookedTool {
     self.inner.idempotency(params)
   }
 
+  fn effect(&self, params: &serde_json::Value) -> ToolEffect {
+    self.inner.effect(params)
+  }
+
   fn requires_capabilities(&self) -> Vec<Capability> {
     self.inner.requires_capabilities()
   }
@@ -544,6 +548,7 @@ impl HookedTool {
       source: Some(metadata.source.clone()),
       permissions: metadata.permissions.permissions.clone(),
       idempotency: self.inner.idempotency(params),
+      effect: self.inner.effect(params),
       // D4 (W1.7): `PendingToolCall.params` is documented as MUST-redacted
       // before third-party pre-hooks see it. The raw `params` still gets
       // passed to the actual tool call in `execute` (a separate, unmoved
@@ -623,8 +628,22 @@ impl HookedTool {
     // most side-effecting calls.
     let escalation = matches!(self.config.profile, HarnessProfile::Production)
       && !matches!(pending.idempotency, ToolIdempotency::Idempotent);
+    // Y7.2: publishing cannot be taken back, so under production it is
+    // approved every time: no budget, no cached session/run decision.
+    let publish = matches!(self.config.profile, HarnessProfile::Production)
+      && matches!(pending.effect, ToolEffect::Publish);
 
     let need_approval = match pre_decision {
+      PreToolDecision::Deny { reason } => {
+        return Ok((Proceed::Deny { reason }, false));
+      }
+      PreToolDecision::Allow | PreToolDecision::RequireApproval { .. } if publish => Some((
+        ApprovalRisk::Critical,
+        format!(
+          "production profile: '{}' publishes to an outside audience; every publish needs approval",
+          pending.tool
+        ),
+      )),
       // Y7.1: a priced call under a budget is decided by the budget.
       PreToolDecision::Allow => match (price, self.config.budget.as_ref()) {
         (Some(price), Some(budget)) => match budget.try_reserve(price) {
@@ -643,9 +662,6 @@ impl HookedTool {
         )),
         _ => None,
       },
-      PreToolDecision::Deny { reason } => {
-        return Ok((Proceed::Deny { reason }, false));
-      }
       PreToolDecision::RequireApproval { risk, reason } => Some((risk, reason)),
     };
 
@@ -681,7 +697,11 @@ impl HookedTool {
           false,
         ));
       }
-      cache.lookup(&pending.tool, digest.as_deref())
+      if publish {
+        None
+      } else {
+        cache.lookup(&pending.tool, digest.as_deref())
+      }
     } {
       self
         .emit_cached_decision(pending, scope, outcome, risk, &reason)
@@ -708,6 +728,7 @@ impl HookedTool {
       source: pending.source.clone(),
       permissions: pending.permissions.clone(),
       idempotency: pending.idempotency,
+      effect: pending.effect,
       params_summary,
       risk,
       reason,
@@ -733,12 +754,14 @@ impl HookedTool {
 
     {
       let mut cache = self.config.approval_cache.lock().await;
-      cache.record(
-        &pending.tool,
-        digest.as_deref(),
-        decision.scope,
-        decision.decision,
-      );
+      if !publish {
+        cache.record(
+          &pending.tool,
+          digest.as_deref(),
+          decision.scope,
+          decision.decision,
+        );
+      }
       if matches!(decision.decision, ApprovalOutcome::DenyAndStop) {
         cache.stop_after_deny = true;
       }
@@ -778,6 +801,7 @@ impl HookedTool {
       source: pending.source.clone(),
       permissions: pending.permissions.clone(),
       idempotency: pending.idempotency,
+      effect: pending.effect,
       params_summary,
       risk,
       reason: reason.to_string(),
@@ -833,6 +857,7 @@ impl HookedTool {
       source: pending.source.clone(),
       permissions: pending.permissions.clone(),
       idempotency: pending.idempotency,
+      effect: pending.effect,
       params_summary,
       risk,
       reason: stop_reason.to_string(),
@@ -1068,6 +1093,127 @@ mod tests {
       .iter()
       .filter(|event| matches!(event.body, HarnessEventBody::ApprovalRequested(_)))
       .count()
+  }
+
+  /// Y7.2: a mock blog tool that publishes only for `status: "published"`
+  /// (drafts are local), declared idempotent and priced, so neither of
+  /// those can excuse a publish from approval.
+  struct PublishBlog {
+    posts: Arc<std::sync::Mutex<usize>>,
+  }
+
+  #[async_trait]
+  impl Tool for PublishBlog {
+    fn name(&self) -> &str {
+      "publish_blog"
+    }
+    fn description(&self) -> &str {
+      "post to the blog"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+      serde_json::json!({})
+    }
+    fn metadata(&self) -> ToolMetadata {
+      ToolMetadata {
+        source: ToolSource::Builtin,
+        permissions: ToolPermissionSet::default(),
+        idempotency: ToolIdempotency::Idempotent,
+        mcp_server_name: None,
+        mcp_tool_name: None,
+      }
+    }
+    fn effect(&self, params: &serde_json::Value) -> ToolEffect {
+      if params["status"] == "published" {
+        ToolEffect::Publish
+      } else {
+        ToolEffect::Local
+      }
+    }
+    async fn execute(&self, _params: serde_json::Value) -> Result<ToolOutput, ToolError> {
+      *self.posts.lock().unwrap() += 1;
+      Ok(ToolOutput::success("posted"))
+    }
+  }
+
+  /// Approves for the whole session, which would normally cache.
+  struct SessionAllow;
+
+  #[async_trait]
+  impl ApprovalProvider for SessionAllow {
+    fn name(&self) -> &str {
+      "session_allow"
+    }
+    async fn request(&self, request: ApprovalRequest) -> Result<ApprovalDecision, HarnessError> {
+      Ok(ApprovalDecision {
+        request_id: request.id,
+        decision: ApprovalOutcome::Allow,
+        scope: ApprovalScope::Session,
+        decided_by: "test".into(),
+        decided_at: Utc::now(),
+        reason: None,
+      })
+    }
+  }
+
+  #[tokio::test]
+  async fn production_approves_every_publish_and_marks_it_in_the_event() {
+    let posts = Arc::new(std::sync::Mutex::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(PublishBlog {
+      posts: posts.clone(),
+    }));
+    let sink = Arc::new(InMemoryEventSink::new());
+    let sinks = SinkChain::new().push(sink.clone() as Arc<dyn HarnessEventSink>);
+    let config = HookConfig::new("sess-1", Arc::new(SessionAllow), sinks)
+      .with_profile(HarnessProfile::Production)
+      .with_cost_budget(100.0, Arc::new(|_, _| Some(0.0)));
+    let registry = wrap_registry(registry, config);
+    let post = serde_json::json!({"title": "Tides", "status": "published"});
+    // Session-scoped approval, an idempotent declaration and a budget
+    // with room to spare: each publish still asks.
+    for _ in 0..2 {
+      registry
+        .execute("publish_blog", post.clone())
+        .await
+        .expect("approved");
+    }
+    // A draft is local: idempotent + under budget, so no prompt.
+    registry
+      .execute("publish_blog", serde_json::json!({"status": "draft"}))
+      .await
+      .expect("draft");
+    let events = sink.snapshot().await;
+    let requests: Vec<&ApprovalRequest> = events
+      .iter()
+      .filter_map(|event| match &event.body {
+        HarnessEventBody::ApprovalRequested(payload) => Some(&payload.request),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(requests.len(), 2, "one per publish, none for the draft");
+    assert!(requests.iter().all(|r| r.effect == ToolEffect::Publish));
+    assert!(requests.iter().all(|r| r.risk == ApprovalRisk::Critical));
+    // Filterable on the wire: publish requests say so, others omit it.
+    let wire = serde_json::to_value(requests[0]).expect("json");
+    assert_eq!(wire["effect"], "publish");
+    assert_eq!(*posts.lock().unwrap(), 3);
+
+    // Under the local profile publishing is not forced through approval.
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(PublishBlog {
+      posts: posts.clone(),
+    }));
+    let local_sink = Arc::new(InMemoryEventSink::new());
+    let config = HookConfig::new(
+      "sess-2",
+      Arc::new(AutoDenyApprovalProvider::new()),
+      SinkChain::new().push(local_sink.clone() as Arc<dyn HarnessEventSink>),
+    );
+    wrap_registry(registry, config)
+      .execute("publish_blog", post)
+      .await
+      .expect("local allows");
+    assert_eq!(approvals_requested(&local_sink.snapshot().await), 0);
   }
 
   /// Y7.1 acceptance: threshold 1.00, each call 0.40 → calls 1 and 2 run

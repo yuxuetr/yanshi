@@ -929,6 +929,7 @@ mod tests {
       source: None,
       permissions: vec![],
       idempotency: ToolIdempotency::NonIdempotent,
+      effect: Default::default(),
       params_summary: serde_json::Value::Null,
       risk: ApprovalRisk::High,
       reason: "test".into(),

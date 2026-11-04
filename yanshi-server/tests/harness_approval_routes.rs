@@ -75,6 +75,7 @@ fn sample_request(session_id: Uuid, request_id: &str) -> ApprovalRequest {
     source: None,
     permissions: Vec::new(),
     idempotency: Default::default(),
+    effect: Default::default(),
     params_summary: json!({"cmd": "ls"}),
     risk: ApprovalRisk::Medium,
     reason: "integration test".into(),

@@ -649,6 +649,7 @@ mod tests {
       source: None,
       permissions: Vec::new(),
       idempotency: Default::default(),
+      effect: Default::default(),
       params_summary: serde_json::Value::Null,
       risk: ApprovalRisk::Medium,
       reason: "test".to_string(),

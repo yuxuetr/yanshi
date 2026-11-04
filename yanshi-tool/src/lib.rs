@@ -36,6 +36,6 @@ pub use security_profile::{
   SecurityProfileDefaults, SecurityProfileError, ToolPermissionDefaults, WorkerAdmissionDefaults,
 };
 pub use tool::{
-  Tool, ToolCall, ToolDefinition, ToolIdempotency, ToolMetadata, ToolOutput, ToolOutputPart,
-  ToolPermission, ToolPermissionSet, ToolSource,
+  Tool, ToolCall, ToolDefinition, ToolEffect, ToolIdempotency, ToolMetadata, ToolOutput,
+  ToolOutputPart, ToolPermission, ToolPermissionSet, ToolSource,
 };

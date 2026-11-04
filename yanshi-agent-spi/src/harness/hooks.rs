@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use yanshi_tool::{ToolIdempotency, ToolPermission, ToolSource};
+use yanshi_tool::{ToolEffect, ToolIdempotency, ToolPermission, ToolSource};
 
 use crate::ApprovalRisk;
 use crate::HarnessError;
@@ -35,6 +35,9 @@ pub struct PendingToolCall {
   /// Replay safety classification of the call.
   #[serde(default)]
   pub idempotency: ToolIdempotency,
+  /// Y7.2: what the call does beyond its result; see [`ToolEffect`].
+  #[serde(default, skip_serializing_if = "ToolEffect::is_local")]
+  pub effect: ToolEffect,
   /// Redacted/truncated parameters surfaced to the hook. The runtime
   /// MUST redact secrets before constructing this struct.
   pub params: serde_json::Value,
@@ -148,6 +151,7 @@ mod tests {
       source: Some(ToolSource::Builtin),
       permissions: vec![ToolPermission::Network],
       idempotency: ToolIdempotency::Idempotent,
+      effect: Default::default(),
       params: serde_json::json!({"method": "GET", "url": "https://example.test"}),
       requested_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
     };

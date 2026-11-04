@@ -347,6 +347,7 @@ mod tests {
       source: Some(ToolSource::Builtin),
       permissions: vec![ToolPermission::ProcessExec],
       idempotency: ToolIdempotency::NonIdempotent,
+      effect: Default::default(),
       params_summary: serde_json::json!({"cmd": "ls"}),
       risk: ApprovalRisk::High,
       reason: "shell tool".into(),

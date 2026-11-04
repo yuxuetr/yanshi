@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use yanshi_tool::{ToolIdempotency, ToolPermission, ToolSource};
+use yanshi_tool::{ToolEffect, ToolIdempotency, ToolPermission, ToolSource};
 
 use crate::HarnessError;
 
@@ -113,6 +113,11 @@ pub struct ApprovalRequest {
   /// Idempotency classification of the call.
   #[serde(default)]
   pub idempotency: ToolIdempotency,
+  /// Y7.2: `publish` when the call would put content in front of an
+  /// outside audience; omitted (local) otherwise, so a consumer can filter
+  /// the event stream for publish approvals.
+  #[serde(default, skip_serializing_if = "ToolEffect::is_local")]
+  pub effect: ToolEffect,
   /// Redacted/truncated summary of the tool parameters. Implementations
   /// MUST avoid embedding secrets or raw file contents here.
   pub params_summary: serde_json::Value,
@@ -186,6 +191,7 @@ mod tests {
       source: Some(ToolSource::Builtin),
       permissions: vec![ToolPermission::ProcessExec],
       idempotency: ToolIdempotency::NonIdempotent,
+      effect: Default::default(),
       params_summary: serde_json::json!({"cmd": "rm -rf /tmp/x"}),
       risk: ApprovalRisk::High,
       reason: "shell tool requires explicit approval in local profile".into(),
