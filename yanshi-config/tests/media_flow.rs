@@ -167,3 +167,33 @@ nodes:
   };
   assert!(!answer.is_empty(), "mock chat model must answer");
 }
+
+/// The YAML `prompt` reaches the vendor (the factory used to drop it).
+/// The mock fails a prompt carrying `mock:http=400`, so a failing node
+/// proves the prompt arrived.
+#[tokio::test]
+async fn text_to_image_yaml_prompt_reaches_the_vendor() {
+  install_mock_registry().await;
+  let work = tempfile::TempDir::new().expect("tempdir");
+  let yaml = r#"
+name: "prompt reaches vendor"
+nodes:
+  - id: draw
+    type: text_to_image
+    parameters:
+      model: mock-t2i
+      prompt: "an RC circuit mock:http=400"
+"#;
+  let state = build_flow_from_yaml(yaml, None)
+    .expect("flow builds")
+    .execute_from_inputs_with_config(
+      HashMap::new(),
+      FlowExecutionConfig::serial().with_run_base_dir(work.path()),
+    )
+    .await
+    .expect("run returns its state");
+  let error = state["draw"]
+    .as_ref()
+    .expect_err("the prompt's marker fails the call");
+  assert!(error.to_string().contains("400"), "{error}");
+}

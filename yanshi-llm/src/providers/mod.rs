@@ -29,7 +29,7 @@ pub mod stepfun;
 pub use anthropic::AnthropicProvider;
 pub use google::GoogleProvider;
 pub use mock::MockProvider;
-pub use mock_media::MockMediaProvider;
+pub use mock_media::{MockMediaProvider, text2image_calls as mock_text2image_calls};
 pub use moonshot::MoonshotProvider;
 pub use openai::OpenAIProvider;
 pub use stepfun::StepFunProvider;

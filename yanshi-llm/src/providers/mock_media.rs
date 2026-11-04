@@ -30,6 +30,10 @@
 //! ```
 //!
 //! routes `Yanshi::tts("mock-tts")` here without any API key.
+//!
+//! Y2.5: a text-to-image prompt containing `mock:http=<status>` fails
+//! with that HTTP status instead, and [`text2image_calls`] counts every
+//! call, so retry behaviour can be asserted without a vendor.
 
 use async_trait::async_trait;
 
@@ -40,6 +44,20 @@ use super::modality::{
   TtsRequest, TtsResponse, VideoGenerationResponse, VideoGenerationStatus, VideoGenerationTask,
 };
 use crate::Result;
+
+static TEXT2IMAGE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Y2.5: text-to-image calls this process has made to the mock.
+pub fn text2image_calls() -> usize {
+  TEXT2IMAGE_CALLS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The status in a `mock:http=<status>` marker, if the prompt has one.
+fn injected_status(prompt: &str) -> Option<u16> {
+  let rest = prompt.split("mock:http=").nth(1)?;
+  let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+  digits.parse().ok()
+}
 
 /// A minimal valid 1×1 opaque PNG, base64-encoded (no `data:` prefix).
 pub const MOCK_PNG_BASE64: &str =
@@ -132,7 +150,14 @@ impl Text2ImageProvider for MockMediaProvider {
     "mock"
   }
 
-  async fn generate(&self, _request: Text2ImageRequest) -> Result<ImageGenerationResponse> {
+  async fn generate(&self, request: Text2ImageRequest) -> Result<ImageGenerationResponse> {
+    TEXT2IMAGE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Some(status_code) = injected_status(&request.prompt) {
+      return Err(crate::LLMError::HttpError {
+        status_code,
+        message: "mock vendor failure".to_string(),
+      });
+    }
     Ok(png_response())
   }
 }

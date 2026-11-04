@@ -217,15 +217,40 @@ pub fn create_graph_node(node_def: &NodeDefinitionV2) -> Result<GraphNode> {
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "text_to_image" => {
-      let model = get_string_param_optional(&node_def.parameters, "model");
-      let node = TextToImageNode::new(&node_def.id, &model)
-        .with_output_format(get_output_format(&node_def.parameters)?);
+      // The `prompt` (a `{{input}}` template) used to be dropped here, so
+      // every YAML text_to_image call sent the vendor an empty prompt.
+      let params = &node_def.parameters;
+      let model = get_string_param_optional(params, "model");
+      let mut node = TextToImageNode::new(&node_def.id, &model)
+        .with_prompt(&get_string_param_optional(params, "prompt"))
+        .with_output_format(get_output_format(params)?);
+      let negative = get_string_param_optional(params, "negative_prompt");
+      if !negative.is_empty() {
+        node = node.with_negative_prompt(&negative);
+      }
+      let size = get_string_param_optional(params, "size");
+      if !size.is_empty() {
+        node = node.with_size(&size);
+      }
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "text_to_video" => {
-      let model = get_string_param_optional(&node_def.parameters, "model");
-      let node = TextToVideoNode::new(&node_def.id, &model)
-        .with_output_format(get_output_format(&node_def.parameters)?);
+      let params = &node_def.parameters;
+      let model = get_string_param_optional(params, "model");
+      let mut node = TextToVideoNode::new(&node_def.id, &model)
+        .with_prompt(&get_string_param_optional(params, "prompt"))
+        .with_output_format(get_output_format(params)?);
+      let aspect_ratio = get_string_param_optional(params, "aspect_ratio");
+      if !aspect_ratio.is_empty() {
+        node = node.with_aspect_ratio(&aspect_ratio);
+      }
+      let resolution = get_string_param_optional(params, "resolution");
+      if !resolution.is_empty() {
+        node = node.with_resolution(&resolution);
+      }
+      if let Some(seconds) = params.get("duration_seconds").and_then(|v| v.as_u64()) {
+        node = node.with_duration_seconds(u32::try_from(seconds).unwrap_or(u32::MAX));
+      }
       Ok(NodeType::Standard(Arc::new(node)))
     }
     "tts" => {
