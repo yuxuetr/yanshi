@@ -1141,3 +1141,233 @@ async fn expired_run_lease_is_reclaimed_and_frees_the_tenant_slot() {
     AdmissionOutcome::Admitted(_)
   ));
 }
+
+/// Y5.1: notebooks, sources and artifact links, all scoped to a tenant.
+#[tokio::test]
+async fn notebook_and_source_repos_are_tenant_scoped() {
+  use yanshi_db::{NewSource, NotebookRepo, SourceKind, SourceRepo, SourceStatus};
+  let Some(db) = fresh_db().await else {
+    eprintln!(
+      "skipping notebook_and_source_repos_are_tenant_scoped — set YANSHI_DATABASE_TEST_URL"
+    );
+    return;
+  };
+  let repos = Repositories::from_pool(db.pool.clone());
+  let tenant = format!("tenant-nb-{}", Uuid::new_v4());
+  let other = format!("tenant-nb-other-{}", Uuid::new_v4());
+
+  // Notebooks: create / get / list, invisible to another tenant.
+  let notebook = repos
+    .notebooks
+    .create(&tenant, "Tides")
+    .await
+    .expect("create");
+  assert_eq!(notebook.title, "Tides");
+  assert_eq!(
+    repos
+      .notebooks
+      .get(&tenant, notebook.id)
+      .await
+      .expect("get"),
+    Some(notebook.clone())
+  );
+  assert_eq!(
+    repos.notebooks.get(&other, notebook.id).await.expect("get"),
+    None
+  );
+  let second = repos
+    .notebooks
+    .create(&tenant, "Moons")
+    .await
+    .expect("create");
+  let listed = repos.notebooks.list(&tenant, 10).await.expect("list");
+  assert_eq!(
+    listed.iter().map(|n| n.id).collect::<Vec<_>>(),
+    vec![second.id, notebook.id],
+    "newest first"
+  );
+  assert!(
+    repos
+      .notebooks
+      .list(&other, 10)
+      .await
+      .expect("list")
+      .is_empty()
+  );
+
+  // Sources: only into your own notebook; status transitions keep the digest.
+  let source = repos
+    .sources
+    .create(NewSource {
+      notebook_id: notebook.id,
+      tenant_id: tenant.clone(),
+      kind: SourceKind::Url,
+      title: "Tides article".into(),
+      uri: Some("https://example.com/tides".into()),
+    })
+    .await
+    .expect("create")
+    .expect("own notebook");
+  assert_eq!(source.status, "pending");
+  assert_eq!(source.kind, "url");
+  let foreign = repos
+    .sources
+    .create(NewSource {
+      notebook_id: notebook.id,
+      tenant_id: other.clone(),
+      kind: SourceKind::Text,
+      title: "intruder".into(),
+      uri: None,
+    })
+    .await
+    .expect("create");
+  assert!(
+    foreign.is_none(),
+    "cannot add a source to another tenant's notebook"
+  );
+  repos
+    .sources
+    .update_status(source.id, SourceStatus::Ingesting, None, Some("abc123"))
+    .await
+    .expect("ingesting");
+  repos
+    .sources
+    .update_status(source.id, SourceStatus::Ready, None, None)
+    .await
+    .expect("ready");
+  let ready = repos
+    .sources
+    .get(&tenant, source.id)
+    .await
+    .expect("get")
+    .expect("row");
+  assert_eq!(ready.status, "ready");
+  assert_eq!(ready.sha256.as_deref(), Some("abc123"), "digest kept");
+  assert!(
+    repos
+      .sources
+      .get(&other, source.id)
+      .await
+      .expect("get")
+      .is_none()
+  );
+  assert_eq!(
+    repos
+      .sources
+      .list_for_notebook(&tenant, notebook.id)
+      .await
+      .expect("list")
+      .len(),
+    1
+  );
+  assert!(
+    repos
+      .sources
+      .list_for_notebook(&other, notebook.id)
+      .await
+      .expect("list")
+      .is_empty()
+  );
+
+  // Artifact links: only between the same tenant's notebook and artifact.
+  let run_id = Uuid::new_v4();
+  repos
+    .runs
+    .create(NewRun {
+      id: run_id,
+      workflow: "report".into(),
+      status: RunStatus::Succeeded,
+      run_dir: None,
+      tenant_id: tenant.clone(),
+      events_retention_days: None,
+      artifacts_retention_days: None,
+    })
+    .await
+    .expect("run");
+  let artifact = repos
+    .artifacts
+    .create(NewArtifact {
+      id: Uuid::new_v4(),
+      run_id,
+      node_id: "report_md".into(),
+      name: "1.md".into(),
+      path_or_url: "/tmp/1.md".into(),
+      mime_type: Some("text/markdown".into()),
+      tenant_id: Some(tenant.clone()),
+      size_bytes: Some(10),
+      sha256: None,
+    })
+    .await
+    .expect("artifact");
+  assert!(
+    repos
+      .notebooks
+      .attach_artifact(&tenant, notebook.id, artifact.id, "report")
+      .await
+      .expect("attach")
+  );
+  assert!(
+    repos
+      .notebooks
+      .attach_artifact(&tenant, notebook.id, artifact.id, "report")
+      .await
+      .expect("attach"),
+    "attaching twice is idempotent"
+  );
+  assert!(
+    !repos
+      .notebooks
+      .attach_artifact(&other, notebook.id, artifact.id, "report")
+      .await
+      .expect("attach"),
+    "another tenant cannot link"
+  );
+  let attached = repos
+    .notebooks
+    .list_artifacts(&tenant, notebook.id)
+    .await
+    .expect("list");
+  assert_eq!(attached.len(), 1);
+  assert_eq!(attached[0].kind, "report");
+  assert_eq!(attached[0].artifact.name, "1.md");
+  assert!(
+    repos
+      .notebooks
+      .list_artifacts(&other, notebook.id)
+      .await
+      .expect("list")
+      .is_empty()
+  );
+
+  // Delete cascades to sources and links; another tenant cannot delete.
+  assert!(
+    !repos
+      .notebooks
+      .delete(&other, notebook.id)
+      .await
+      .expect("delete")
+  );
+  assert!(
+    repos
+      .notebooks
+      .delete(&tenant, notebook.id)
+      .await
+      .expect("delete")
+  );
+  assert!(
+    repos
+      .sources
+      .get(&tenant, source.id)
+      .await
+      .expect("get")
+      .is_none()
+  );
+  assert!(
+    repos
+      .notebooks
+      .list_artifacts(&tenant, notebook.id)
+      .await
+      .expect("list")
+      .is_empty()
+  );
+}

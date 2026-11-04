@@ -338,6 +338,15 @@ _New entries go here. Will roll into the next tag (likely
   not registered, so the route never becomes a read primitive beyond the
   run's own output. Artifact files already live in the run dir the
   retention sweep removes; the row sweep is unchanged.
+- **Notebooks and sources in the gateway database (Y5.1).** Migration
+  `0013_notebooks.sql` adds `notebooks` (tenant, title), `sources`
+  (notebook, kind `url` / `file` / `text` / `recording`, ingestion
+  status, sha256) and `notebook_artifacts` (links to registered
+  artifacts, with the deliverable kind). The new `NotebookRepo` and
+  `SourceRepo` take the caller's tenant on every read, so another
+  tenant's ids behave as missing. Sources and links can only attach to
+  the tenant's own notebook and artifacts, and deleting a notebook
+  cascades.
 - **Content Studio: a planner skill over the generators (Y4.4).**
   `examples/applications/content-studio` is a ReAct skill whose tools
   are the three generator templates, declared in a new `[[workflows]]`

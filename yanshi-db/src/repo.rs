@@ -1259,6 +1259,9 @@ pub struct Repositories {
   pub harness_events: PgHarnessEventRepo,
   pub user_preferences: PgUserPreferenceRepo,
   pub approval_intents: PgApprovalIntentRepo,
+  /// Y5.1: notebooks (and their artifact links) and sources.
+  pub notebooks: crate::notebooks::PgNotebookRepo,
+  pub sources: crate::notebooks::PgSourceRepo,
 }
 
 impl Repositories {
@@ -1308,6 +1311,14 @@ impl Repositories {
         read_pool: read_pool.clone(),
       },
       user_preferences: PgUserPreferenceRepo {
+        pool: write_pool.clone(),
+        read_pool: read_pool.clone(),
+      },
+      notebooks: crate::notebooks::PgNotebookRepo {
+        pool: write_pool.clone(),
+        read_pool: read_pool.clone(),
+      },
+      sources: crate::notebooks::PgSourceRepo {
         pool: write_pool.clone(),
         read_pool,
       },
