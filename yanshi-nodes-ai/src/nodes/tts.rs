@@ -90,7 +90,7 @@ impl AsyncNode for TTSNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     tracing::debug!(name = %self.name, "executing TTSNode");
 
-    Yanshi::init()
+    Yanshi::ensure_init()
       .await
       .map_err(|e| YanshiError::ConfigurationError {
         message: format!("Failed to initialize Yanshi LLM service: {}", e),

@@ -46,7 +46,7 @@ impl AsyncNode for ImageUnderstandNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     tracing::debug!(name = %self.name, "executing ImageUnderstandNode");
 
-    Yanshi::init()
+    Yanshi::ensure_init()
       .await
       .map_err(|e| YanshiError::ConfigurationError {
         message: format!("Failed to initialize Yanshi LLM service: {}", e),

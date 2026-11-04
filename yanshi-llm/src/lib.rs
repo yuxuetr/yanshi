@@ -208,6 +208,18 @@ impl Yanshi {
     Ok(())
   }
 
+  /// [`Self::init`] once per process. Workflow nodes call this on every
+  /// execution; reloading the registry each time rebuilt every provider
+  /// (and its rate-limit bucket) per call and raced concurrent callers
+  /// in a parallel Map. A failed load is retried on the next call.
+  pub async fn ensure_init() -> Result<()> {
+    static LOADED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    LOADED
+      .get_or_try_init(|| async { Self::init().await })
+      .await?;
+    Ok(())
+  }
+
   /// Initialize with built-in default configuration
   pub async fn init_with_builtin_config() -> Result<()> {
     let registry = ModelRegistry::global();

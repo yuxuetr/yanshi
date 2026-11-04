@@ -159,7 +159,7 @@ impl AsyncNode for MultiAgentNode {
       .to_string();
     let model_override = get_optional_string(inputs, "model").map_err(|m| self.input_error(m))?;
 
-    Yanshi::init()
+    Yanshi::ensure_init()
       .await
       .map_err(|err| YanshiError::ConfigurationError {
         message: format!(

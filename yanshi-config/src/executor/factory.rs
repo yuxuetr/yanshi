@@ -564,7 +564,7 @@ impl AsyncNode for SkillAgentWorkflowNode {
       ),
     })?;
 
-    Yanshi::init()
+    Yanshi::ensure_init()
       .await
       .map_err(|err| YanshiError::ConfigurationError {
         message: format!(
