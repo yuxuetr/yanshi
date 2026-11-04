@@ -163,6 +163,12 @@ pub struct Artifact {
   pub created_at: DateTime<Utc>,
   #[serde(default = "default_tenant_id")]
   pub tenant_id: String,
+  /// Y1.3: byte length and hex SHA-256 recorded at registration; `None`
+  /// on rows written before migration 0012.
+  #[serde(default)]
+  pub size_bytes: Option<i64>,
+  #[serde(default)]
+  pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +180,8 @@ pub struct NewArtifact {
   pub path_or_url: String,
   pub mime_type: Option<String>,
   pub tenant_id: Option<String>,
+  pub size_bytes: Option<i64>,
+  pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

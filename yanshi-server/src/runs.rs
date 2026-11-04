@@ -724,6 +724,22 @@ async fn flow_execute(ctx: &RunContext) -> Result<(), anyhow_like::FlowRunError>
   // them all before the run is marked finished and its channel closed.
   events_flushed.flushed().await;
 
+  // Y1.3: register every `FlowValue::File` the run left under its base
+  // dir before the status flips, so a client that observes `succeeded`
+  // can list and download immediately.
+  let artifact_base = ctx
+    .run_base_dir
+    .clone()
+    .unwrap_or_else(default_run_base_dir);
+  crate::artifacts::register_run_artifacts(
+    &ctx.repos,
+    ctx.run_id,
+    &ctx.tenant_id,
+    &state,
+    &artifact_base,
+  )
+  .await?;
+
   if let Some(error) = first_state_error(&state) {
     ctx
       .repos

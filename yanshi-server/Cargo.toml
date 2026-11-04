@@ -29,6 +29,9 @@ futures = "0.3"
 uuid = { workspace = true, features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+# Y1.3: artifact digests at registration + streamed downloads.
+sha2 = "0.10"
+tokio-util = { version = "0.7.11", features = ["io"] }
 dirs = "5.0"
 prost = "0.13"
 # T1.2: explicit `tls`/`tls-roots` for the worker gRPC control-plane

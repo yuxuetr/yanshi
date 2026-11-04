@@ -24,6 +24,7 @@ use yanshi_core::{HealthChecker, HealthStatus, YanshiError};
 use yanshi_db::{Database, Repositories};
 use yanshi_tools::{CorsMode, SecurityProfile, SecurityProfileDefaults};
 
+pub mod artifacts;
 pub mod auth;
 pub mod cleanup;
 pub mod diagnostics;
@@ -647,6 +648,12 @@ pub fn create_router(state: AppState) -> Router {
     .route("/v1/runs/:id/events/history", get(list_events))
     .route("/v1/runs/:id/events", get(stream_events))
     .route("/v1/runs/:id/approvals", get(list_run_approvals))
+    // Y1.3: what a run produced, and the bytes themselves.
+    .route("/v1/runs/:id/artifacts", get(artifacts::list_run_artifacts))
+    .route(
+      "/v1/runs/:id/artifacts/:artifact_id",
+      get(artifacts::download_run_artifact),
+    )
     .route(
       "/v1/runs/:id/approvals/:request_id",
       post(decide_run_approval),

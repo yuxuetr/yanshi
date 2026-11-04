@@ -265,6 +265,17 @@ _New entries go here. Will roll into the next tag (likely
   covered end to end: `text_to_image → image_understand` and
   `tts → file(copy)` run as config-first workflows under `vendor: mock`
   (`yanshi-config/tests/media_flow.rs`).
+- **Run artifacts are registered and downloadable (Y1.3).** When a
+  gateway run finishes, every `FlowValue::File` under the run base dir
+  is recorded in `artifacts` with `size_bytes` and `sha256` (migration
+  `0012`, streamed hashing). `GET /v1/runs/{id}/artifacts` lists them;
+  `GET /v1/runs/{id}/artifacts/{artifact_id}` streams the file with
+  `Content-Type` / `Content-Length` / `Content-Disposition`. Both are
+  tenant-scoped (404 across tenants). Files outside the run base dir
+  (a `file` node's `read_bytes` of a sandbox-allowed path) are logged and
+  not registered, so the route never becomes a read primitive beyond the
+  run's own output. Artifact files already live in the run dir the
+  retention sweep removes; the row sweep is unchanged.
 
 - **`cargo xtask refresh-live-models` now calls each default model.**
   A model listed in `/models` can still be retired: Google lists

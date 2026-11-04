@@ -216,8 +216,12 @@ request, so no session affinity is needed. Two things stay per pod:
 
 - the run artifact dir (`YANSHI_RUN_DIR`, the `scratch` emptyDir), so
   `run_dir` paths in `GET /v1/runs/{id}` refer to the pod that ran it
-  and are lost when that pod goes away. The database stays the system
-  of record for runs and events.
+  and are lost when that pod goes away. The same holds for
+  `GET /v1/runs/{id}/artifacts/{artifact_id}` (Y1.3): the listing comes
+  from the database on any pod, but the bytes are read from that pod's
+  run dir, so with `replicaCount > 1` back `/data` with a shared volume
+  or route downloads to the pod that ran the workflow. The database
+  stays the system of record for runs, events and artifact metadata.
 - the opt-in SQLite harness memory (`YANSHI_HARNESS_MEMORY_DB`, see
   below), which assumes a single node.
 

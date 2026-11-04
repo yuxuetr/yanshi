@@ -172,6 +172,9 @@ pub trait EventRepo: Send + Sync {
 pub trait ArtifactRepo: Send + Sync {
   async fn create(&self, artifact: NewArtifact) -> Result<Artifact, DbError>;
   async fn list_for_run(&self, run_id: Uuid) -> Result<Vec<Artifact>, DbError>;
+  /// Y1.3: one artifact by id, for the download route. Tenant and run
+  /// ownership are checked by the caller against the returned row.
+  async fn get(&self, id: Uuid) -> Result<Option<Artifact>, DbError>;
 }
 
 #[async_trait]
@@ -706,9 +709,9 @@ impl ArtifactRepo for PgArtifactRepo {
   async fn create(&self, artifact: NewArtifact) -> Result<Artifact, DbError> {
     let tenant_id = artifact.tenant_id.as_deref().unwrap_or("default");
     let row = sqlx::query_as::<_, Artifact>(
-      r#"INSERT INTO artifacts (id, run_id, node_id, name, path_or_url, mime_type, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, run_id, node_id, name, path_or_url, mime_type, created_at, tenant_id"#,
+      r#"INSERT INTO artifacts (id, run_id, node_id, name, path_or_url, mime_type, tenant_id, size_bytes, sha256)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, run_id, node_id, name, path_or_url, mime_type, created_at, tenant_id, size_bytes, sha256"#,
     )
     .bind(artifact.id)
     .bind(artifact.run_id)
@@ -717,6 +720,8 @@ impl ArtifactRepo for PgArtifactRepo {
     .bind(&artifact.path_or_url)
     .bind(artifact.mime_type.as_deref())
     .bind(tenant_id)
+    .bind(artifact.size_bytes)
+    .bind(artifact.sha256.as_deref())
     .fetch_one(&self.pool)
     .await?;
     Ok(row)
@@ -724,13 +729,24 @@ impl ArtifactRepo for PgArtifactRepo {
 
   async fn list_for_run(&self, run_id: Uuid) -> Result<Vec<Artifact>, DbError> {
     let rows = sqlx::query_as::<_, Artifact>(
-      r#"SELECT id, run_id, node_id, name, path_or_url, mime_type, created_at, tenant_id
-         FROM artifacts WHERE run_id = $1 ORDER BY created_at ASC"#,
+      r#"SELECT id, run_id, node_id, name, path_or_url, mime_type, created_at, tenant_id, size_bytes, sha256
+         FROM artifacts WHERE run_id = $1 ORDER BY created_at ASC, node_id ASC, name ASC"#,
     )
     .bind(run_id)
     .fetch_all(&self.read_pool)
     .await?;
     Ok(rows)
+  }
+
+  async fn get(&self, id: Uuid) -> Result<Option<Artifact>, DbError> {
+    let row = sqlx::query_as::<_, Artifact>(
+      r#"SELECT id, run_id, node_id, name, path_or_url, mime_type, created_at, tenant_id, size_bytes, sha256
+         FROM artifacts WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&self.read_pool)
+    .await?;
+    Ok(row)
   }
 }
 

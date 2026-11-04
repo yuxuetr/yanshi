@@ -538,6 +538,8 @@ async fn artifact_repo_create_and_list_round_trip() {
         path_or_url: format!("/tmp/artifact-{i}"),
         mime_type: Some("text/plain".into()),
         tenant_id: None,
+        size_bytes: Some(1024 * i),
+        sha256: Some(format!("{i:0>64}")),
       })
       .await
       .expect("create artifact");
@@ -545,6 +547,23 @@ async fn artifact_repo_create_and_list_round_trip() {
 
   let listed = repos.artifacts.list_for_run(run_id).await.expect("list");
   assert_eq!(listed.len(), 3);
+  // Y1.3: size / digest round-trip, and `get` finds a single row.
+  let by_id = repos
+    .artifacts
+    .get(listed[1].id)
+    .await
+    .expect("get")
+    .expect("row exists");
+  assert_eq!(by_id.size_bytes, Some(1024));
+  assert_eq!(by_id.sha256.as_deref(), Some(&format!("{:0>64}", 1)[..]));
+  assert!(
+    repos
+      .artifacts
+      .get(Uuid::new_v4())
+      .await
+      .expect("get missing")
+      .is_none()
+  );
   // Foreign-key tenant isolation: artifacts for another run id should
   // not surface here.
   let other_run = seed_run(&repos, "tenant-artifact-other").await;
