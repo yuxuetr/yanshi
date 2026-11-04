@@ -89,7 +89,9 @@ pub fn apply_declared_inputs(
   Ok(())
 }
 
-/// Apply the CLI/server model override to node kinds that invoke agents or LLMs.
+/// Apply the CLI/server model override to node kinds that invoke agents or
+/// LLMs, including those inside `map` / `while` bodies (Y4.1: an `llm` in
+/// a Map template used to keep its own, possibly empty, model).
 pub fn apply_model_override(
   node_def: &NodeDefinitionV2,
   graph_node: &mut GraphNode,
@@ -100,12 +102,33 @@ pub fn apply_model_override(
   };
   if matches!(
     node_def.node_type.as_str(),
-    "llm" | "skill_agent" | "agent" | "multi_agent"
+    "llm" | "skill_agent" | "agent" | "multi_agent" | "figure"
   ) {
     graph_node.initial_inputs.insert(
       "model".to_string(),
       FlowValue::Json(Value::String(model.to_string())),
     );
+  }
+  let body_key = match node_def.node_type.as_str() {
+    "map" => "template",
+    "while" => "do",
+    _ => return,
+  };
+  let (yanshi_core::NodeType::Map { template, .. } | yanshi_core::NodeType::While { template, .. }) =
+    &mut graph_node.node_type
+  else {
+    return;
+  };
+  // The factory built `template` from these definitions, in this order.
+  let Some(body) = node_def
+    .parameters
+    .get(body_key)
+    .and_then(|raw| serde_yaml::from_value::<Vec<NodeDefinitionV2>>(raw.clone()).ok())
+  else {
+    return;
+  };
+  for (nested_def, nested_node) in body.iter().zip(template.iter_mut()) {
+    apply_model_override(nested_def, nested_node, Some(model));
   }
 }
 
@@ -247,5 +270,37 @@ nodes:
     let mut inputs = AsyncNodeInputs::new();
     apply_declared_inputs(&flow_def, &mut inputs)
       .expect("required must default to false, so this must not fail");
+  }
+
+  #[test]
+  fn model_override_reaches_llm_nodes_inside_map_bodies() {
+    let flow_def = parse(
+      r#"
+name: nested
+nodes:
+  - id: outer
+    type: llm
+    parameters: { prompt: "hi" }
+  - id: each
+    type: map
+    parameters:
+      template:
+        - id: inner
+          type: llm
+          parameters: { prompt: "{{ item }}" }
+"#,
+    );
+    let flow = build_flow_from_definition(&flow_def, Some("mock-x")).expect("builds");
+    let model_of = |node: &GraphNode| node.initial_inputs.get("model").cloned();
+    let expected = Some(FlowValue::Json(Value::String("mock-x".to_string())));
+    assert_eq!(model_of(&flow.nodes()["outer"]), expected);
+    let yanshi_core::NodeType::Map { template, .. } = &flow.nodes()["each"].node_type else {
+      panic!("each is a map");
+    };
+    assert_eq!(
+      model_of(&template[0]),
+      expected,
+      "nested llm gets the override"
+    );
   }
 }
