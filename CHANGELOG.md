@@ -102,6 +102,13 @@ _New entries go here. Will roll into the next tag (likely
   (`unlink`, `rename`, `mkdir`, `chmod`, …), `fchmod`/`fchown`/
   `fchmodat2` and the xattr family (`c510494`).
 
+### Removed
+
+- **StepFun image generation, image-to-image and image editing.** StepFun
+  shut these endpoints down on 2026-10-10; the client code, dispatch
+  entries and the hidden `yanshi audio clone` stub are gone, along with
+  the stale StepFun CLI examples and docs.
+
 ### Fixed
 
 - **Anthropic structured output on current Claude models.** A `JsonSchema`
