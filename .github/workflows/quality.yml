@@ -645,6 +645,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # yanshi-cli's generator test builds the whole CLI, which pulls in
+      # yanshi-worker-proto; its build.rs needs protoc.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       # The figure node's d2 language (no apt package; pinned release).
