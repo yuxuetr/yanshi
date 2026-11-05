@@ -104,6 +104,12 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **Anthropic structured output on current Claude models.** A `JsonSchema`
+  response format was emulated with a forced tool call, which Opus 5.5,
+  Sonnet 5.5 and Fable 5.1 reject with a 400. Claude 4.5 and later now get
+  `output_config.format` (also when streaming or with tools); older models
+  keep the emulation. A forced `tool_choice` on those four models is now
+  refused before sending.
 - **Keg-only Homebrew renderers start in the sandbox.** A binary under
   `<root>/Cellar/` (e.g. `ffmpeg-full`, the Homebrew ffmpeg with libass)
   could not load libraries from `<root>/opt/` and aborted before `main`;

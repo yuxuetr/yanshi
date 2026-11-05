@@ -136,6 +136,15 @@ impl AnthropicProvider {
       body["tools"] = Value::Array(tools.iter().map(tool_spec_to_anthropic_value).collect());
     }
     if let Some(choice) = &request.tool_choice {
+      if forces_tool(choice) && rejects_forced_tool_choice(&request.model) {
+        return Err(LLMError::ConfigurationError {
+          message: format!(
+            "{} rejects forced tool_choice (`any` / `tool`); use ToolChoice::Auto \
+             and name the tool in the prompt",
+            request.model
+          ),
+        });
+      }
       body["tool_choice"] = tool_choice_to_anthropic_value(choice);
     }
 
@@ -143,7 +152,19 @@ impl AnthropicProvider {
       apply_anthropic_thinking(&mut body, &request.model, thinking)?;
     }
 
-    // V2.1: Anthropic has no native `response_format` field. Emulate a
+    // Structured outputs: models that take `output_config.format` get the
+    // schema there — it constrains the text reply itself, so it also works
+    // when streaming and alongside the caller's own tools.
+    if let Some(ResponseFormat::JsonSchema { schema, .. }) = &request.response_format
+      && supports_output_format(&request.model)
+    {
+      let mut schema = schema.clone();
+      close_object_schemas(&mut schema);
+      body["output_config"]["format"] = json!({ "type": "json_schema", "schema": schema });
+      return Ok(body);
+    }
+
+    // V2.1: older models have no `output_config.format`. Emulate a
     // `JsonSchema` constraint by forcing a single synthetic tool call whose
     // `input_schema` is the requested schema — `execute()` unwraps that
     // tool call's arguments back into plain-text `content` so callers see
@@ -345,6 +366,59 @@ pub(crate) fn apply_anthropic_thinking(
     body["output_config"] = json!({ "effort": effort });
   }
   Ok(())
+}
+
+fn forces_tool(choice: &ToolChoice) -> bool {
+  matches!(choice, ToolChoice::Required | ToolChoice::Tool { .. })
+}
+
+/// Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer forced tool use
+/// (`tool_choice` `any` / `tool`) with a 400. Fable 5 and Opus 5 accept it.
+fn rejects_forced_tool_choice(model: &str) -> bool {
+  [
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+  ]
+  .iter()
+  .any(|prefix| model.starts_with(prefix))
+}
+
+/// Structured outputs (`output_config.format`) exist from the 4.5 models
+/// on; Claude 3.x and 4.0 / 4.1 only get the forced-tool emulation.
+fn supports_output_format(model: &str) -> bool {
+  !(model.starts_with("claude-3")
+    || ["-4-0", "-4-1", "-4-2025"]
+      .iter()
+      .any(|version| model.contains(version)))
+}
+
+/// Structured outputs require `additionalProperties: false` on every
+/// object. Fill it in where the caller left it out (an explicit value is
+/// kept, so a non-false one still gets the API's own 400).
+fn close_object_schemas(schema: &mut Value) {
+  match schema {
+    Value::Object(map) => {
+      let is_object = map.get("type") == Some(&json!("object")) || map.contains_key("properties");
+      if is_object && !map.contains_key("additionalProperties") {
+        map.insert("additionalProperties".to_string(), json!(false));
+      }
+      for (key, value) in map.iter_mut() {
+        match key.as_str() {
+          "properties" | "$defs" | "definitions" => {
+            if let Value::Object(children) = value {
+              children.values_mut().for_each(close_object_schemas);
+            }
+          }
+          "items" | "anyOf" | "allOf" | "oneOf" => close_object_schemas(value),
+          _ => {}
+        }
+      }
+    }
+    Value::Array(items) => items.iter_mut().for_each(close_object_schemas),
+    _ => {}
+  }
 }
 
 /// Encode a `ToolSpec` as Anthropic's `{ name, description, input_schema }`.
@@ -1389,6 +1463,117 @@ mod tests {
     let body = provider.build_request_body(&request).unwrap();
     assert!(body.get("tools").is_none());
     assert!(body.get("tool_choice").is_none());
+  }
+
+  fn schema_request(model: &str, stream: bool) -> ProviderRequest {
+    ProviderRequest {
+      model: model.to_string(),
+      messages: vec![json!({"role": "user", "content": "answer please"})],
+      stream,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: Some(ResponseFormat::JsonSchema {
+        name: "final_answer".to_string(),
+        schema: json!({
+          "type": "object",
+          "properties": {
+            "answer": {"type": "string"},
+            "steps": {"type": "array", "items": {"type": "object", "properties": {"n": {"type": "integer"}}}}
+          },
+          "required": ["answer"]
+        }),
+        strict: Some(true),
+      }),
+    }
+  }
+
+  /// Forced tool use is a 400 on Opus 5.5, so current models get the
+  /// schema in `output_config.format` instead of a synthetic tool, with
+  /// `additionalProperties: false` filled in on every object.
+  #[test]
+  fn current_models_use_output_config_format_for_json_schema() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    for model in [
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-fable-5-1",
+      "claude-haiku-4-5",
+    ] {
+      for stream in [false, true] {
+        let body = provider
+          .build_request_body(&schema_request(model, stream))
+          .unwrap();
+        assert!(body.get("tools").is_none(), "{model}");
+        assert!(body.get("tool_choice").is_none(), "{model}");
+        let format = &body["output_config"]["format"];
+        assert_eq!(format["type"], "json_schema", "{model}");
+        assert_eq!(format["schema"]["additionalProperties"], false);
+        assert_eq!(
+          format["schema"]["properties"]["steps"]["items"]["additionalProperties"],
+          false
+        );
+        assert!(
+          format["schema"]["properties"]["answer"]
+            .get("additionalProperties")
+            .is_none()
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn output_format_sits_beside_thinking_effort() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let mut request = schema_request("claude-opus-5-5", false);
+    request.thinking = Some(ThinkingConfig::High);
+    let body = provider.build_request_body(&request).unwrap();
+    assert_eq!(body["output_config"]["effort"], "high");
+    assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+  }
+
+  #[test]
+  fn forced_tool_choice_is_refused_where_the_model_rejects_it() {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    let tool = ToolSpec::new(
+      "get_weather",
+      "Return the weather",
+      json!({"type": "object"}),
+    );
+    for (model, choice, refused) in [
+      ("claude-opus-5-5", ToolChoice::Required, true),
+      (
+        "claude-sonnet-5-5",
+        ToolChoice::Tool {
+          name: "get_weather".into(),
+        },
+        true,
+      ),
+      ("claude-fable-5-1", ToolChoice::Required, true),
+      ("claude-opus-5-5", ToolChoice::Auto, false),
+      ("claude-opus-5", ToolChoice::Required, false),
+      (
+        "claude-fable-5",
+        ToolChoice::Tool {
+          name: "get_weather".into(),
+        },
+        false,
+      ),
+    ] {
+      let request = ProviderRequest {
+        model: model.to_string(),
+        messages: vec![json!({"role": "user", "content": "weather?"})],
+        stream: false,
+        parameters: std::collections::HashMap::new(),
+        tools: Some(vec![tool.clone()]),
+        tool_choice: Some(choice.clone()),
+        thinking: None,
+        response_format: None,
+      };
+      let result = provider.build_request_body(&request);
+      assert_eq!(result.is_err(), refused, "{model} {choice:?}");
+    }
   }
 
   #[test]

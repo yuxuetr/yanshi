@@ -27,7 +27,7 @@ use yanshi_llm::providers::{
   ProviderRequest, StepFunProvider, TokenUsage,
 };
 use yanshi_llm::tool_calling::{StopReason, ToolChoice, ToolSpec};
-use yanshi_llm::{LLMConfig, ThinkingConfig, Yanshi};
+use yanshi_llm::{LLMConfig, ResponseFormat, ThinkingConfig, Yanshi};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LiveCapability {
@@ -912,6 +912,69 @@ async fn anthropic_live_adaptive_thinking() {
     "anthropic {model}: expected 391, got {answer:?}"
   );
   assert_eq!(response.stop_reason, Some(StopReason::Stop));
+}
+
+/// Y10.2: a `JsonSchema` response format used to become a forced tool
+/// call, which Opus 5.5 / Sonnet 5.5 / Fable 5.1 answer with a 400. It now
+/// goes in `output_config.format`; the reply text must be the JSON itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_live_structured_output() {
+  if !prepare_live_provider("anthropic", LiveCapability::Llm).await {
+    return;
+  }
+  let key_envs = ["ANTHROPIC_API_KEY", "ANTHROPIC_KEY", "CLAUDE_API_KEY"];
+  let Some((_, api_key)) = pick_api_key(&key_envs) else {
+    eprintln!(
+      "[live] anthropic structured output: skipped (none of {key_envs:?} set; live gate is on)"
+    );
+    return;
+  };
+  let provider = AnthropicProvider::new(&api_key, None).expect("anthropic provider");
+  let model = live_model("anthropic", "STRUCTURED", "claude-sonnet-5-5");
+  let request = ProviderRequest {
+    model: model.clone(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "What is 17 * 23? Give the product and the two factors."
+    })],
+    stream: false,
+    parameters: HashMap::from([("max_tokens".to_string(), json!(2048))]),
+    tools: None,
+    tool_choice: None,
+    thinking: Some(ThinkingConfig::Low),
+    response_format: Some(ResponseFormat::JsonSchema {
+      name: "product".to_string(),
+      schema: json!({
+        "type": "object",
+        "properties": {
+          "factors": {"type": "array", "items": {"type": "integer"}},
+          "product": {"type": "integer"}
+        },
+        "required": ["factors", "product"]
+      }),
+      strict: Some(true),
+    }),
+  };
+
+  let response = tokio::time::timeout(Duration::from_secs(120), provider.execute(&request))
+    .await
+    .unwrap_or_else(|_| panic!("anthropic {model}: structured request timed out after 120s"))
+    .unwrap_or_else(|e| panic!("anthropic {model}: structured request failed: {e}"));
+
+  eprintln!(
+    "[live] anthropic {model}: structured reply {:?}",
+    response.content
+  );
+  let ContentType::Text(text) = &response.content else {
+    panic!(
+      "anthropic {model}: expected text, got {:?}",
+      response.content
+    );
+  };
+  let value: serde_json::Value = serde_json::from_str(text)
+    .unwrap_or_else(|e| panic!("anthropic {model}: reply is not JSON ({e}): {text:?}"));
+  assert_eq!(value["product"], 391, "anthropic {model}: {value}");
+  assert!(response.tool_calls.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
