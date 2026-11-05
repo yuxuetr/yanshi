@@ -2,7 +2,7 @@
 #
 # Source (url / text / notebook chunks) → a structured deck (llm,
 # json_schema: per slide a title, bullets, speaker notes and an optional
-# figure) → each figure rendered by `figure` (svg / tikz / typst / python,
+# figure) → each figure rendered by `figure` (svg / tikz / typst / d2 / python,
 # render errors fed back) → Markdown slides → PPTX through pandoc, with
 # the figures embedded as SVG (vector) → a `Deliverable`.
 #
@@ -30,7 +30,7 @@ inputs:
     description: "Number of content slides"
     default: 6
   figure_languages:
-    description: "Figure languages the deck may use (svg is always available; tikz / typst / python need their renderers)"
+    description: "Figure languages the deck may use (svg is always available; tikz / typst / d2 / python need their renderers; d2 suits boxes-and-arrows diagrams)"
     default: "svg"
   theme:
     description: "Name of a reference .pptx in YANSHI_THEMES_DIR; empty for pandoc's default look"

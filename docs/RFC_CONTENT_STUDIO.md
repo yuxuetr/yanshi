@@ -205,7 +205,8 @@ re-planning from the L track.
 |---|---|---|---|
 | `tikz` | TeX Live: `standalone` class → `lualatex` → PDF → `pdftocairo -svg` | circuitikz (electrical), chemfig (chemistry), pgfplots (plots), tikz-cd, tikz-3dplot, and every package TeX Live ships | circuitikz RC loop → 6.9 KB SVG |
 | `typst` | `typst compile` with cetz | vector drawings, faster compiles, cleaner error text | cetz canvas compiles (package download on first use) |
-| `mermaid`, `d2` | `mmdc`, `d2` | software and structure diagrams | — |
+| `d2` | `d2 fig.d2 fig.svg`, automatic layout | software and structure diagrams: boxes and arrows without coordinates | dangling connection → `fig.d2:2:1: connection missing destination` fed back, retry renders |
+| `mermaid` | `mmdc` (headless Chromium) | same ground as d2 | not built: Chromium cannot start in the OS sandbox |
 | `python` (Y3.5) | `code_exec` container image with matplotlib, RDKit, dna_features_viewer, ete3, networkx | data-driven science figures: molecules, plasmid and gene maps, phylogenetic trees | — |
 
 Domains (Y6.5) add a second check before the compile. With `domain:
@@ -227,10 +228,19 @@ tikz only:
   its label. Each link needs a `\draw` path on which `from` comes directly
   before `to`; a path drawn with `<-` counts reversed.
 
-The mermaid and D2 backends in the table above are not built. Neither
-binary is on the development machine, so a renderer for them could not be
-checked end to end. Revisit when a generator needs one and `mmdc` or `d2`
-is available where its tests run.
+`d2` (2026-11-05) runs in the OS sandbox unchanged, about 0.1 s per
+diagram; its errors carry `file:line:col`, which the node passes back
+with the work directory stripped. CI's media-tools job installs a pinned
+d2 release and runs `figure_d2`, which is also the check that d2 runs
+under the Linux sandbox.
+
+`mermaid` is not built. `mmdc` renders through headless Chromium, and in
+the macOS sandbox Chromium first cannot read its own ICU data and, with
+the browser cache readable, then fails to register a Mach port. Making it
+start means loosening the sandbox profile for a full browser on
+model-written input, and d2 covers the same diagrams. Revisit when a
+generator needs Mermaid syntax specifically; the likely route is the
+`code_exec` container tier with a mermaid-cli image, as for `python`.
 
 Sandbox notes that follow from the experiments: TeX Live installs outside
 `PATH` on macOS (`/Library/TeX/texbin`), so the allowlist names full paths

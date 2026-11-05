@@ -304,6 +304,14 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **`figure` renders D2 (`language: d2`).** `d2 fig.d2 fig.svg` under the
+  OS sandbox lays boxes and arrows out automatically, so the model gives
+  no coordinates. d2's `fig.d2:<line>:<col>: ...` errors go back to the
+  model with the work directory stripped. `yanshi doctor` lists `d2`;
+  `slides` mentions it in `figure_languages`; CI's media-tools job
+  installs d2 v0.9.0 and runs `figure_d2`. Mermaid is not offered:
+  `mmdc`'s headless Chromium cannot start inside the OS sandbox
+  (`docs/RFC_CONTENT_STUDIO.md` §5).
 - **Modality nodes emit `FlowValue::File` artifacts (Y1.1,
   `docs/RFC_CONTENT_STUDIO.md` §4.1).** `tts` / `text_to_image` /
   `image_to_image` / `image_edit` / `text_to_video` write their bytes to

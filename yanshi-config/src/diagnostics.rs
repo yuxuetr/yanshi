@@ -658,6 +658,7 @@ const EXTERNAL_TOOLS: &[(&str, &str)] = &[
   ),
   ("lualatex", "figure language: tikz (TeX Live)"),
   ("pdftocairo", "figure language: tikz (PDF to SVG, poppler)"),
+  ("d2", "figure language: d2"),
 ];
 
 fn external_tools_report() -> Vec<ExternalToolReport> {

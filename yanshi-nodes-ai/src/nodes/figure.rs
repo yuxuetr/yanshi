@@ -15,6 +15,11 @@
 //!   font cache (`TEXMFVAR`) lives in the run directory.
 //! - `typst`: `typst compile` straight to SVG; packages must already be
 //!   in typst's cache (the sandbox has no network).
+//! - `d2`: `d2 fig.d2 fig.svg`, laid out automatically; for boxes and
+//!   arrows where the model should not place coordinates. d2's error
+//!   lines (`fig.d2:<line>:<col>: ...`) go back to the model with the work
+//!   directory stripped. mermaid is not offered: `mmdc` drives headless
+//!   Chromium, which the OS sandbox does not let start.
 //! - `python` (Y3.5): a script that saves `figure.svg`, run in the
 //!   `code_exec` container tier (no network, read-only rootfs, only the
 //!   work directory writable) on the image built from
@@ -66,6 +71,7 @@ enum Language {
   Svg,
   Tikz,
   Typst,
+  D2,
   Python,
 }
 
@@ -75,6 +81,7 @@ impl Language {
       "svg" => Some(Self::Svg),
       "tikz" => Some(Self::Tikz),
       "typst" => Some(Self::Typst),
+      "d2" => Some(Self::D2),
       "python" => Some(Self::Python),
       _ => None,
     }
@@ -85,6 +92,7 @@ impl Language {
       Self::Svg => "svg",
       Self::Tikz => "tikz",
       Self::Typst => "typst",
+      Self::D2 => "d2",
       Self::Python => "python",
     }
   }
@@ -106,6 +114,11 @@ impl Language {
         "Write one complete Typst document that starts with \
          #set page(width: auto, height: auto, margin: 4pt) and produces exactly one page. \
          There is no network: only packages already cached (such as @preview/cetz) can be imported."
+      }
+      Self::D2 => {
+        "Write one D2 diagram (d2lang.com): shapes as `id: Label`, connections as \
+         `a -> b: label`. Layout is automatic, so give no positions. No imports and no \
+         icons or images (there is no network)."
       }
       Self::Python => {
         "Write one complete Python 3 script that draws the figure and saves it as SVG to \
@@ -222,6 +235,21 @@ fn latex_errors(log: &str) -> Option<String> {
   (!picked.is_empty()).then(|| picked.join("\n"))
 }
 
+/// `text` with the work directory taken out of file paths, so an error
+/// reads `fig.d2:2:1: ...` (d2 prints absolute paths, and on macOS the
+/// temp dir may appear in its canonical `/private` form).
+fn strip_workdir(text: &str, workdir: &Path) -> String {
+  let mut dirs = vec![workdir.to_path_buf()];
+  if let Ok(canonical) = workdir.canonicalize() {
+    dirs.push(canonical);
+  }
+  // Longest first: the canonical form can contain the other one.
+  dirs.sort_by_key(|dir| std::cmp::Reverse(dir.as_os_str().len()));
+  dirs.iter().fold(text.to_string(), |text, dir| {
+    text.replace(&format!("{}/", dir.display()), "")
+  })
+}
+
 /// typst's package cache and data directories (read-only in the sandbox).
 fn typst_package_dirs() -> Vec<PathBuf> {
   let mut dirs = Vec::new();
@@ -255,6 +283,7 @@ impl FigureNode {
     let result = match language {
       Language::Tikz => self.render_tikz(&node_dir, &workdir, source).await,
       Language::Typst => self.render_typst(&workdir, source).await,
+      Language::D2 => self.render_d2(&workdir, source).await,
       Language::Python => self.render_python(&workdir, source).await,
       Language::Svg => unreachable!("handled before the work directory is created"),
     };
@@ -354,6 +383,31 @@ impl FigureNode {
     .await?;
     if !run.status.success() {
       return Ok(Err(sandboxed::output_tail(&run, 20)));
+    }
+    self.read_svg(workdir).await
+  }
+
+  async fn render_d2(&self, workdir: &Path, source: &str) -> Result<Rendered, YanshiError> {
+    let d2 = self.tool("d2")?;
+    tokio::fs::write(workdir.join("fig.d2"), source)
+      .await
+      .map_err(|e| self.input_error(format!("cannot stage the source: {e}")))?;
+    let run = sandboxed::run(sandboxed::SandboxedRun {
+      node: &self.id,
+      program: d2,
+      args: ["fig.d2", "fig.svg"].map(Into::into).to_vec(),
+      workdir,
+      read_paths: sandboxed::font_dirs(),
+      write_paths: Vec::new(),
+      env: Vec::new(),
+      timeout: RENDER_TIMEOUT,
+    })
+    .await?;
+    if !run.status.success() {
+      return Ok(Err(strip_workdir(
+        &sandboxed::output_tail(&run, 20),
+        workdir,
+      )));
     }
     self.read_svg(workdir).await
   }
@@ -469,11 +523,12 @@ impl FigureNode {
 #[async_trait]
 impl AsyncNode for FigureNode {
   async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
-    let language = string_input(inputs, "language")
-      .ok_or_else(|| self.input_error("missing input 'language' (svg, tikz or typst)"))?;
+    let language = string_input(inputs, "language").ok_or_else(|| {
+      self.input_error("missing input 'language' (svg, tikz, typst, d2 or python)")
+    })?;
     let language = Language::parse(language.trim()).ok_or_else(|| {
       self.input_error(format!(
-        "unsupported language '{language}': expected svg, tikz, typst or python"
+        "unsupported language '{language}': expected svg, tikz, typst, d2 or python"
       ))
     })?;
     let description = string_input(inputs, "description");
@@ -621,6 +676,18 @@ mod tests {
       Some("! Undefined control sequence.\nl.4 \\drawx\n (0,0)")
     );
     assert_eq!(latex_errors("all good"), None);
+  }
+
+  #[test]
+  fn strip_workdir_leaves_file_names_relative() {
+    let dir = Path::new("/nonexistent/run/.figure-1");
+    assert_eq!(
+      strip_workdir(
+        "err: /nonexistent/run/.figure-1/fig.d2:2:1: connection missing destination",
+        dir
+      ),
+      "err: fig.d2:2:1: connection missing destination"
+    );
   }
 
   #[test]

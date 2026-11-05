@@ -647,6 +647,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # The figure node's d2 language (no apt package; pinned release).
+      - name: Install d2
+        run: |
+          curl -fsSL https://github.com/terrastruct/d2/releases/download/v0.9.0/d2-v0.9.0-linux-amd64.tar.gz | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/d2-v0.9.0/bin" >> "$GITHUB_PATH"
       - name: Run the media-tools end-to-end test
         run: cargo test -p yanshi-mcp --test media_tools_e2e -- --ignored
       # Y4.3 / Y6.4: render_audio, render_video and their generators also need ffmpeg.
@@ -658,6 +663,8 @@ jobs:
           cargo test -p yanshi-config --test generator_video -- --ignored
           cargo test -p yanshi-config --test generator_video_motion -- --ignored
           cargo test -p yanshi-cli --test generators_cli_tests audio_overview -- --ignored
+      - name: Run the d2 figure test
+        run: cargo test -p yanshi-nodes-ai --test figure_d2 -- --ignored
 
   release-gate:
     name: release gate
