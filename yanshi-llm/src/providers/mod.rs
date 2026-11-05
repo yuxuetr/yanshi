@@ -58,19 +58,33 @@ pub(crate) const DEFAULT_HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// 600 s in their canonical SDKs.
 pub(crate) const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 600;
 
+/// Sent on every provider and download request. Some hosts refuse
+/// requests without one: Wikimedia answers 403 and points at its robot
+/// policy, which broke image-to-image from a Wikimedia source URL.
+pub(crate) const USER_AGENT: &str = concat!(
+  "yanshi-llm/",
+  env!("CARGO_PKG_VERSION"),
+  " (+https://github.com/yuxuetr/yanshi)"
+);
+
+fn base_client_builder() -> reqwest::ClientBuilder {
+  reqwest::Client::builder()
+    .user_agent(USER_AGENT)
+    // Q1.8.2: pin timeouts. Without these the client waits
+    // indefinitely on a dropped connection / hung-but-not-closed
+    // socket. Aligned with the timeout `LLMError::from` already
+    // reports.
+    .connect_timeout(std::time::Duration::from_secs(
+      DEFAULT_HTTP_CONNECT_TIMEOUT_SECS,
+    ))
+    .timeout(std::time::Duration::from_secs(
+      DEFAULT_HTTP_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
 pub(crate) fn default_http_client() -> Result<reqwest::Client> {
   build_http_client(|disable_proxy| {
-    let builder = reqwest::Client::builder()
-      // Q1.8.2: pin timeouts. Without these the client waits
-      // indefinitely on a dropped connection / hung-but-not-closed
-      // socket. Aligned with the timeout `LLMError::from` already
-      // reports.
-      .connect_timeout(std::time::Duration::from_secs(
-        DEFAULT_HTTP_CONNECT_TIMEOUT_SECS,
-      ))
-      .timeout(std::time::Duration::from_secs(
-        DEFAULT_HTTP_REQUEST_TIMEOUT_SECS,
-      ));
+    let builder = base_client_builder();
     if disable_proxy {
       builder.no_proxy()
     } else {
@@ -468,6 +482,27 @@ pub fn create_provider(
 mod tests {
   use super::*;
   use reqwest::header::HeaderMap;
+
+  /// Wikimedia refuses requests without a User-Agent (403), which failed
+  /// the live image-to-image tests. The provider client must send one.
+  #[tokio::test]
+  async fn provider_requests_carry_a_user_agent() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+      .mock("GET", "/source.png")
+      .match_header("user-agent", USER_AGENT)
+      .with_status(200)
+      .create_async()
+      .await;
+    let client = base_client_builder().no_proxy().build().unwrap();
+    let response = client
+      .get(format!("{}/source.png", server.url()))
+      .send()
+      .await
+      .unwrap();
+    assert_eq!(response.status(), 200);
+    mock.assert_async().await;
+  }
 
   fn headers_with_retry_after(value: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
