@@ -289,6 +289,9 @@ struct MoonshotStreamingDelta {
   /// `openai::OpenAIStreamingToolCall`'s doc comment.
   #[serde(default)]
   tool_calls: Option<Vec<OpenAIStreamingToolCall>>,
+  /// Y10.3: Kimi thinking models stream their reasoning here.
+  #[serde(default)]
+  reasoning_content: Option<String>,
 }
 
 pub struct MoonshotStreamingResponse {
@@ -326,6 +329,7 @@ impl MoonshotStreamingResponse {
 
     if data.trim() == "[DONE]" {
       return Some(StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: String::new(),
         is_final: true,
@@ -341,6 +345,7 @@ impl MoonshotStreamingResponse {
     {
       let content_text = choice.delta.content.clone().unwrap_or_default();
       let tool_call_deltas = openai_streaming_tool_call_deltas(choice.delta.tool_calls.as_deref());
+      let thinking = choice.delta.reasoning_content.clone().unwrap_or_default();
 
       // P-LLM2.5: previously this whole branch required `delta.content` to
       // be present (`&& let Some(content) = &choice.delta.content`), so a
@@ -349,6 +354,7 @@ impl MoonshotStreamingResponse {
       // way through to `None` and was silently dropped. Emit a chunk when
       // there is *any* signal, mirroring the same fix in `openai.rs`.
       let has_signal = !content_text.is_empty()
+        || !thinking.is_empty()
         || !tool_call_deltas.is_empty()
         || choice.finish_reason.is_some()
         || chunk.usage.is_some()
@@ -358,6 +364,7 @@ impl MoonshotStreamingResponse {
       }
 
       return Some(StreamChunk {
+        thinking,
         media: Vec::new(),
         content: content_text,
         is_final: choice.finish_reason.is_some(),
@@ -428,6 +435,16 @@ impl StreamingResponse for MoonshotStreamingResponse {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn streaming_reasoning_content_is_surfaced_as_thinking() {
+    let chunk = MoonshotStreamingResponse::parse_sse_chunk(
+      "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"kimi-k2-thinking\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"hmm\"},\"finish_reason\":null}]}",
+    )
+    .expect("reasoning chunk");
+    assert_eq!(chunk.thinking, "hmm");
+    assert!(chunk.content.is_empty());
+  }
 
   #[test]
   fn test_moonshot_provider_creation() {

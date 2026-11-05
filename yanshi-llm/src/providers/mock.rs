@@ -227,6 +227,7 @@ impl StreamingResponse for MockStreamingResponse {
   async fn next_chunk(&mut self) -> Result<Option<StreamChunk>> {
     if let Some(piece) = self.chunks.pop_front() {
       return Ok(Some(StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: piece,
         is_final: false,
@@ -264,6 +265,7 @@ impl StreamingResponse for MockStreamingResponse {
     };
 
     Ok(Some(StreamChunk {
+      thinking: String::new(),
       media: Vec::new(),
       content: String::new(),
       is_final: true,

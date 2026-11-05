@@ -27,6 +27,12 @@ pub struct StreamChunk {
   /// streams an image as one whole `inlineData` part, never split).
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub media: Vec<crate::providers::ContentBlock>,
+  /// Y10.3: reasoning text that arrived in this chunk (Anthropic
+  /// `thinking_delta`, the OpenAI-compatible `reasoning_content` /
+  /// `reasoning` deltas). Kept apart from `content` so the answer text
+  /// never carries the model's reasoning.
+  #[serde(default, skip_serializing_if = "String::is_empty")]
+  pub thinking: String,
 }
 
 /// Incremental tool_call payload streamed by a provider. Multiple deltas
@@ -138,10 +144,12 @@ where
   let mut tool_call_order: Vec<u32> = Vec::new();
   let mut tool_call_acc: HashMap<u32, (Option<String>, Option<String>, String)> = HashMap::new();
   let mut media = Vec::new();
+  let mut thinking = String::new();
 
   while let Some(chunk) = response.next_chunk().await? {
     on_chunk(&chunk).await;
     content.push_str(&chunk.content);
+    thinking.push_str(&chunk.thinking);
     media.extend(chunk.media.iter().cloned());
     if chunk.usage.is_some() {
       usage = chunk.usage.clone();
@@ -197,7 +205,7 @@ where
     stop_reason,
     usage,
     raw_metadata,
-    thinking: None,
+    thinking: (!thinking.is_empty()).then_some(thinking),
     media,
   })
 }
@@ -251,6 +259,7 @@ mod collect_streaming_response_tests {
 
   fn text_chunk(text: &str) -> StreamChunk {
     StreamChunk {
+      thinking: String::new(),
       media: Vec::new(),
       content: text.to_string(),
       is_final: false,
@@ -259,6 +268,33 @@ mod collect_streaming_response_tests {
       content_type: Some("text".to_string()),
       tool_call_deltas: Vec::new(),
     }
+  }
+
+  /// Y10.3: reasoning deltas land in `LLMResponse.thinking`, never in the
+  /// answer text.
+  #[tokio::test]
+  async fn reasoning_deltas_collect_into_thinking() {
+    let mut first = text_chunk("");
+    first.thinking = "17*23 ".to_string();
+    let mut second = text_chunk("");
+    second.thinking = "= 391".to_string();
+    let stream: Box<dyn StreamingResponse> = Box::new(FixedChunkStream(VecDeque::from(vec![
+      first,
+      second,
+      text_chunk("391"),
+    ])));
+    let response = collect_streaming_response(stream, |_| async {})
+      .await
+      .expect("collect");
+    assert_eq!(response.content, "391");
+    assert_eq!(response.thinking.as_deref(), Some("17*23 = 391"));
+
+    let plain: Box<dyn StreamingResponse> =
+      Box::new(FixedChunkStream(VecDeque::from(vec![text_chunk("hi")])));
+    let response = collect_streaming_response(plain, |_| async {})
+      .await
+      .expect("collect");
+    assert_eq!(response.thinking, None);
   }
 
   /// The V2.2 test bar: every delta in the sequence is forwarded via
@@ -271,6 +307,7 @@ mod collect_streaming_response_tests {
       text_chunk("lo, "),
       text_chunk("wor"),
       StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: "ld!".to_string(),
         is_final: true,
@@ -310,6 +347,7 @@ mod collect_streaming_response_tests {
   async fn tool_call_deltas_reassemble_across_chunks_by_index() {
     let stream: Box<dyn StreamingResponse> = Box::new(FixedChunkStream(VecDeque::from(vec![
       StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: String::new(),
         is_final: false,
@@ -324,6 +362,7 @@ mod collect_streaming_response_tests {
         }],
       },
       StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: String::new(),
         is_final: true,
@@ -363,6 +402,7 @@ mod collect_streaming_response_tests {
   async fn single_final_chunk_round_trips_like_a_non_chunked_response() {
     let stream: Box<dyn StreamingResponse> =
       Box::new(FixedChunkStream(VecDeque::from(vec![StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: "the whole answer at once".to_string(),
         is_final: true,

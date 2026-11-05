@@ -773,6 +773,7 @@ impl GoogleStreamingResponse {
       return Ok(None);
     };
     Ok(Some(StreamChunk {
+      thinking: String::new(),
       media,
       content: content_text,
       is_final,

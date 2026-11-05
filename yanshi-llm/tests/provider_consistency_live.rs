@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde_json::json;
+use yanshi_llm::client::streaming::collect_streaming_response;
 use yanshi_llm::providers::stepfun::{ASRRequest, StepFunSpecializedClient, TTSBuilder};
 use yanshi_llm::providers::{
   AnthropicProvider, ContentType, GoogleProvider, LLMProvider, MoonshotProvider, OpenAIProvider,
@@ -1066,6 +1067,55 @@ async fn stepfun_live_reasoning_effort() {
   assert!(
     response.thinking.as_deref().is_some_and(|t| !t.is_empty()),
     "stepfun {model}: expected reasoning text"
+  );
+}
+
+/// Y10.3: streamed reasoning deltas reach `LLMResponse.thinking` and stay
+/// out of the answer. Defaults to step-5-preview so the flagship model is
+/// exercised live as well.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_streaming_reasoning() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
+  let model = live_model("stepfun", "STREAMING_THINKING", "step-5-preview");
+  let request = ProviderRequest {
+    model: model.clone(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "What is 17 * 23? Reply with just the number."
+    })],
+    stream: true,
+    parameters: HashMap::new(),
+    tools: None,
+    tool_choice: None,
+    thinking: Some(ThinkingConfig::Low),
+    response_format: None,
+  };
+
+  let response = tokio::time::timeout(Duration::from_secs(180), async {
+    let stream = provider.execute_streaming(&request).await?;
+    collect_streaming_response(stream, |_| async {}).await
+  })
+  .await
+  .unwrap_or_else(|_| panic!("stepfun {model}: streaming reasoning timed out after 180s"))
+  .unwrap_or_else(|e| panic!("stepfun {model}: streaming reasoning failed: {e}"));
+
+  eprintln!(
+    "[live] stepfun {model}: streamed answer {:?}, reasoning {} chars",
+    response.content,
+    response.thinking.as_deref().map_or(0, str::len)
+  );
+  assert!(
+    response.content.contains("391"),
+    "stepfun {model}: expected 391, got {:?}",
+    response.content
+  );
+  assert!(
+    response.thinking.as_deref().is_some_and(|t| !t.is_empty()),
+    "stepfun {model}: expected streamed reasoning text"
   );
 }
 

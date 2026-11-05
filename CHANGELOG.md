@@ -337,6 +337,12 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Streamed reasoning text.** `StreamChunk` gains a `thinking` delta,
+  filled from Anthropic `thinking_delta`, the OpenAI-compatible
+  `reasoning_content` / `reasoning` deltas (DeepSeek, Qwen, GLM, …),
+  Moonshot and StepFun; `collect_streaming_response` joins it into
+  `LLMResponse.thinking`, which streaming previously always left empty.
+
 - `figure`'s `domain: block` takes `language: d2` as well as `tikz`: the
   prompt carries D2 conventions and the source is checked against the
   spec's blocks and links (shapes `id: label`, connections `->` / `<-` /

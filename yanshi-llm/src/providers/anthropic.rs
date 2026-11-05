@@ -760,6 +760,7 @@ impl AnthropicStreamingResponse {
             let id = block.get("id").and_then(|i| i.as_str()).map(String::from);
             let name = block.get("name").and_then(|n| n.as_str()).map(String::from);
             return Some(StreamChunk {
+              thinking: String::new(),
               media: Vec::new(),
               content: String::new(),
               is_final: false,
@@ -785,6 +786,7 @@ impl AnthropicStreamingResponse {
             {
               let index = event.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
               return Some(StreamChunk {
+                thinking: String::new(),
                 media: Vec::new(),
                 content: String::new(),
                 is_final: false,
@@ -799,11 +801,27 @@ impl AnthropicStreamingResponse {
                 }],
               });
             }
+            // Y10.3: `thinking_delta` on a thinking block.
+            if delta_type == "thinking_delta"
+              && let Some(thinking) = delta.get("thinking").and_then(|t| t.as_str())
+            {
+              return Some(StreamChunk {
+                thinking: thinking.to_string(),
+                media: Vec::new(),
+                content: String::new(),
+                is_final: false,
+                metadata: Some(event.clone()),
+                usage: None,
+                content_type: Some("thinking".to_string()),
+                tool_call_deltas: Vec::new(),
+              });
+            }
             // Existing path: text_delta on a text block.
             if let Some(text) = delta.get("text")
               && let Some(text_str) = text.as_str()
             {
               return Some(StreamChunk {
+                thinking: String::new(),
                 media: Vec::new(),
                 content: text_str.to_string(),
                 is_final: false,
@@ -821,6 +839,7 @@ impl AnthropicStreamingResponse {
           // tool_use, …) and previously terminated the stream early, dropping
           // every block after the first one. Now only `message_stop` ends it.
           return Some(StreamChunk {
+            thinking: String::new(),
             media: Vec::new(),
             content: String::new(),
             is_final: true,
@@ -1574,6 +1593,16 @@ mod tests {
       let result = provider.build_request_body(&request);
       assert_eq!(result.is_err(), refused, "{model} {choice:?}");
     }
+  }
+
+  #[test]
+  fn streaming_thinking_delta_is_surfaced_as_thinking() {
+    let chunk = AnthropicStreamingResponse::parse_sse_event(
+      "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}",
+    )
+    .unwrap();
+    assert_eq!(chunk.thinking, "hmm");
+    assert!(chunk.content.is_empty());
   }
 
   #[test]

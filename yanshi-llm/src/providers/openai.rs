@@ -538,6 +538,24 @@ struct OpenAIStreamingDelta {
   /// for `function.arguments`; consumers must concatenate per-index.
   #[serde(default)]
   tool_calls: Option<Vec<OpenAIStreamingToolCall>>,
+  /// Y10.3: reasoning text streamed by OpenAI-compatible reasoning models
+  /// (DeepSeek, Qwen, GLM, Kimi, StepFun call it `reasoning_content`;
+  /// some vendors use `reasoning`).
+  #[serde(default)]
+  reasoning_content: Option<String>,
+  #[serde(default)]
+  reasoning: Option<String>,
+}
+
+/// Y10.3: the reasoning text of one OpenAI-compatible streaming delta.
+pub(crate) fn streaming_reasoning(
+  reasoning_content: Option<&str>,
+  reasoning: Option<&str>,
+) -> String {
+  reasoning_content
+    .or(reasoning)
+    .unwrap_or_default()
+    .to_string()
 }
 
 /// Q2.5.2: incremental tool_call entry inside a streaming delta.
@@ -625,6 +643,7 @@ impl OpenAIStreamingResponse {
 
     if data.trim() == "[DONE]" {
       return Some(StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: String::new(),
         is_final: true,
@@ -644,6 +663,7 @@ impl OpenAIStreamingResponse {
     // frame's raw metadata.
     if chunk.choices.is_empty() {
       return chunk.usage.map(|u| StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: String::new(),
         is_final: false,
@@ -665,11 +685,16 @@ impl OpenAIStreamingResponse {
       };
 
       let tool_call_deltas = openai_streaming_tool_call_deltas(choice.delta.tool_calls.as_deref());
+      let thinking = streaming_reasoning(
+        choice.delta.reasoning_content.as_deref(),
+        choice.delta.reasoning.as_deref(),
+      );
 
       // Q2.5.2: emit a chunk when there is *any* signal — text content,
       // tool_call delta, finish_reason, or usage — so tool-call-only
       // turns don't get silently dropped between [DONE] sentinels.
       let has_signal = !content_text.is_empty()
+        || !thinking.is_empty()
         || !tool_call_deltas.is_empty()
         || choice.finish_reason.is_some()
         || chunk.usage.is_some();
@@ -678,6 +703,7 @@ impl OpenAIStreamingResponse {
       }
 
       return Some(StreamChunk {
+        thinking,
         media: Vec::new(),
         content: content_text,
         is_final: choice.finish_reason.is_some(),
@@ -998,6 +1024,20 @@ mod tests {
     assert_eq!(delta.name.as_deref(), Some("get_weather"));
     assert_eq!(delta.arguments_delta.as_deref(), Some(""));
     assert!(!chunk.is_final);
+  }
+
+  /// Y10.3: DeepSeek / Qwen / GLM stream `reasoning_content`, others
+  /// `reasoning`; both become `StreamChunk.thinking`.
+  #[test]
+  fn streaming_reasoning_delta_is_surfaced_as_thinking() {
+    for field in ["reasoning_content", "reasoning"] {
+      let line = format!(
+        "data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-v4-flash\",\"choices\":[{{\"index\":0,\"delta\":{{\"{field}\":\"step one\"}},\"finish_reason\":null}}]}}"
+      );
+      let chunk = OpenAIStreamingResponse::parse_sse_chunk(&line).expect("reasoning chunk");
+      assert_eq!(chunk.thinking, "step one", "{field}");
+      assert!(chunk.content.is_empty());
+    }
   }
 
   #[test]

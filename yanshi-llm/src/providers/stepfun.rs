@@ -6,7 +6,8 @@ use crate::{
     ContentType, LLMProvider, ProviderRequest, ProviderResponse,
     openai::{
       OpenAIStreamingToolCall, openai_streaming_tool_call_deltas, parse_openai_tool_calls,
-      response_format_to_openai_value, tool_choice_to_openai_value, tool_spec_to_openai_value,
+      response_format_to_openai_value, streaming_reasoning, tool_choice_to_openai_value,
+      tool_spec_to_openai_value,
     },
   },
   thinking::ThinkingConfig,
@@ -483,6 +484,12 @@ struct StepFunStreamingDelta {
   /// `openai::OpenAIStreamingToolCall`'s doc comment.
   #[serde(default)]
   tool_calls: Option<Vec<OpenAIStreamingToolCall>>,
+  /// Y10.3: reasoning deltas, under the same two names as the
+  /// non-streaming `message`.
+  #[serde(default)]
+  reasoning: Option<String>,
+  #[serde(default)]
+  reasoning_content: Option<String>,
 }
 
 pub struct StepFunStreamingResponse {
@@ -520,6 +527,7 @@ impl StepFunStreamingResponse {
 
     if data.trim() == "[DONE]" {
       return Some(StreamChunk {
+        thinking: String::new(),
         media: Vec::new(),
         content: String::new(),
         is_final: true,
@@ -540,6 +548,10 @@ impl StepFunStreamingResponse {
         None => String::new(),
       };
       let tool_call_deltas = openai_streaming_tool_call_deltas(choice.delta.tool_calls.as_deref());
+      let thinking = streaming_reasoning(
+        choice.delta.reasoning.as_deref(),
+        choice.delta.reasoning_content.as_deref(),
+      );
 
       // P-LLM2.5: previously this whole branch required `delta.content` to
       // be present, so a tool-call-only delta (no text) never even reached
@@ -548,6 +560,7 @@ impl StepFunStreamingResponse {
       // chunk when there is *any* signal, mirroring the same fix in
       // `openai.rs`.
       let has_signal = !content_text.is_empty()
+        || !thinking.is_empty()
         || !tool_call_deltas.is_empty()
         || choice.finish_reason.is_some()
         || chunk.usage.is_some();
@@ -556,6 +569,7 @@ impl StepFunStreamingResponse {
       }
 
       return Some(StreamChunk {
+        thinking,
         media: Vec::new(),
         content: content_text,
         is_final: choice.finish_reason.is_some(),
@@ -1270,6 +1284,18 @@ mod tests {
   /// P-LLM2.5 regression: StepFun speaks the identical OpenAI-compatible
   /// `delta.tool_calls[]` streaming shape — mirrors
   /// `openai::tests::streaming_tool_call_delta_carries_id_and_name`.
+  #[test]
+  fn streaming_reasoning_delta_is_surfaced_as_thinking() {
+    for field in ["reasoning", "reasoning_content"] {
+      let line = format!(
+        "data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"step-3.7-flash\",\"choices\":[{{\"index\":0,\"delta\":{{\"{field}\":\"let me think\"}},\"finish_reason\":null}}]}}"
+      );
+      let chunk = StepFunStreamingResponse::parse_sse_chunk(&line).expect("reasoning chunk");
+      assert_eq!(chunk.thinking, "let me think", "{field}");
+      assert!(chunk.content.is_empty());
+    }
+  }
+
   #[test]
   fn streaming_tool_call_delta_carries_id_and_name() {
     let chunk = StepFunStreamingResponse::parse_sse_chunk(
