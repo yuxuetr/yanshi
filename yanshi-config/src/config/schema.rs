@@ -520,6 +520,7 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::required_input("scenes", ParamType::Any),
       ParamSpec::optional("width", ParamType::Integer),
       ParamSpec::optional("height", ParamType::Integer),
+      ParamSpec::optional("burn_subtitles", ParamType::Bool),
     ]),
     "render_study" => Some(vec![
       ParamSpec::required("kind", ParamType::String),

@@ -944,7 +944,10 @@ async fn run_media_tool(
     program: program.to_path_buf(),
     args,
     workdir,
-    read_paths: vec![root.to_path_buf()],
+    // Fonts: libass reads them to burn subtitles in (Y8.6).
+    read_paths: std::iter::once(root.to_path_buf())
+      .chain(sandboxed::font_dirs())
+      .collect(),
     write_paths: Vec::new(),
     env: Vec::new(),
     timeout: std::time::Duration::from_secs(600),
@@ -1122,8 +1125,10 @@ impl AsyncNode for RenderAudioNode {
 /// shows its still `image` (or loops its `video` clip) for exactly as
 /// long as its `audio` plays. `width` × `height` (default 1280 × 720,
 /// even numbers) letterbox every picture. Captions become a soft
-/// subtitle track (`mov_text`, toggled in the player; burning in would
-/// need ffmpeg built with libass) and a separate `.srt`.
+/// subtitle track (`mov_text`, toggled in the player) and a separate
+/// `.srt`; with `burn_subtitles: true` (Y8.6) they are drawn into the
+/// picture instead, which needs ffmpeg's `subtitles` filter (libass). An
+/// ffmpeg without it is an error, never a quiet fall back to the track.
 ///
 /// Outputs `<id>_output` (MP4), `<id>_subtitles` (SRT, when any scene
 /// has a caption) and `<id>_seconds`. Inputs must be inside the run's
@@ -1220,6 +1225,14 @@ fn build_srt(captions: &[&str], durations: &[f64]) -> String {
   srt
 }
 
+/// Whether `ffmpeg -filters` output lists the libass `subtitles` filter
+/// (a line like ` ... subtitles         V->V       Render text subtitles ...`).
+fn has_subtitles_filter(listing: &str) -> bool {
+  listing
+    .lines()
+    .any(|line| line.split_whitespace().nth(1) == Some("subtitles"))
+}
+
 impl RenderVideoNode {
   fn scenes(&self, inputs: &AsyncNodeInputs) -> Result<Vec<Scene>, YanshiError> {
     let items = match inputs.get("scenes") {
@@ -1294,9 +1307,31 @@ impl AsyncNode for RenderVideoNode {
     let height = self.dimension(inputs, "height", 720)?;
     let ffmpeg = media_tool(&self.id, "ffmpeg")?;
     let ffprobe = media_tool(&self.id, "ffprobe")?;
+    let burn = matches!(
+      inputs.get("burn_subtitles"),
+      Some(FlowValue::Json(Value::Bool(true)))
+    );
     let (root, workdir) = media_workdirs(&self.id, "video").await?;
 
     let produced = async {
+      if burn {
+        let filters = run_media_tool(
+          &self.id,
+          &ffmpeg,
+          &workdir,
+          &root,
+          vec!["-hide_banner".into(), "-filters".into()],
+        )
+        .await?;
+        if !has_subtitles_filter(&String::from_utf8_lossy(&filters.stdout)) {
+          return Err(input_error(
+            &self.id,
+            "burn_subtitles needs an ffmpeg built with libass (its `subtitles` filter), and this \
+             one has none; leave burn_subtitles off for a soft subtitle track",
+          ));
+        }
+      }
+
       // 1. Each scene's length is its narration's.
       let mut durations = Vec::with_capacity(scenes.len());
       for scene in &scenes {
@@ -1394,14 +1429,34 @@ impl AsyncNode for RenderVideoNode {
         "-i".into(),
         list_path.into(),
       ];
+      let burning = burn && srt.is_some();
       if let Some(srt) = &srt {
         let srt_path = workdir.join("captions.srt");
         tokio::fs::write(&srt_path, srt)
           .await
           .map_err(|e| input_error(&self.id, format!("cannot write the captions: {e}")))?;
+      }
+      if burning {
+        // Drawing changes every frame, so the picture is re-encoded; the
+        // file name is relative to the work directory (ffmpeg's cwd), which
+        // keeps the filter argument free of path escaping.
+        join.extend(
+          [
+            "-vf",
+            "subtitles=captions.srt",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+          ]
+          .map(Into::into),
+        );
+      } else if srt.is_some() {
         join.extend([
           "-i".into(),
-          srt_path.into(),
+          workdir.join("captions.srt").into(),
           "-map".into(),
           "0:v".into(),
           "-map".into(),
@@ -1412,7 +1467,10 @@ impl AsyncNode for RenderVideoNode {
           "mov_text".into(),
         ]);
       }
-      join.extend(["-c:v", "copy", "-c:a", "copy", "-movflags", "+faststart"].map(Into::into));
+      if !burning {
+        join.extend(["-c:v", "copy"].map(Into::into));
+      }
+      join.extend(["-c:a", "copy", "-movflags", "+faststart"].map(Into::into));
       join.push(out.clone().into());
       run_media_tool(&self.id, &ffmpeg, &workdir, &root, ffmpeg_args(join)).await?;
       let bytes = tokio::fs::read(&out)
@@ -2101,6 +2159,93 @@ mod tests {
       "1\n00:00:00,000 --> 00:00:01,000\nOne.\n\n2\n00:00:01,000 --> 00:00:03,000\nTwo two.\n\n3\n00:00:04,000 --> 00:00:06,000\nThree.\n\n"
     );
     assert_eq!(srt_time(3725.5), "01:02:05,500");
+  }
+
+  #[test]
+  fn the_subtitles_filter_is_found_by_name() {
+    let with = " T.. ass               V->V       Render ASS subtitles onto input video using the libass library.\n ... subtitles         V->V       Render text subtitles onto input video using the libass library.\n";
+    let without = " T.C drawbox           V->V       Draw a colored box on the input video.\n";
+    assert!(has_subtitles_filter(with));
+    assert!(!has_subtitles_filter(without));
+  }
+
+  /// Y8.6. Needs ffmpeg; checks which kind it is: with libass the
+  /// captions are burned in (no subtitle stream, the .srt still written),
+  /// without it the node says so instead of falling back.
+  #[tokio::test]
+  #[ignore = "needs ffmpeg"]
+  async fn render_video_burns_subtitles_in_or_says_why_it_cannot() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    let dir = root.join("artifacts").join("scene");
+    std::fs::create_dir_all(&dir).expect("dir");
+    for (args, out) in [
+      (["-f", "lavfi", "-i", "color=c=blue:s=320x180:d=1"], "a.png"),
+      (
+        ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"],
+        "a.wav",
+      ),
+    ] {
+      let mut command = std::process::Command::new("ffmpeg");
+      command
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(args);
+      if out.ends_with(".png") {
+        command.args(["-frames:v", "1"]);
+      }
+      assert!(
+        command
+          .arg(dir.join(out))
+          .status()
+          .expect("ffmpeg")
+          .success()
+      );
+    }
+    let listing = std::process::Command::new("ffmpeg")
+      .args(["-hide_banner", "-filters"])
+      .output()
+      .expect("ffmpeg");
+    let libass = has_subtitles_filter(&String::from_utf8_lossy(&listing.stdout));
+    let result = run_context::with_artifact_root(
+      root.clone(),
+      RenderVideoNode::new("film").execute(&inputs(&[
+        (
+          "scenes",
+          json!([{"image": dir.join("a.png"), "audio": dir.join("a.wav"), "caption": "Burned in."}]),
+        ),
+        ("width", json!(320)),
+        ("height", json!(180)),
+        ("burn_subtitles", json!(true)),
+      ])),
+    )
+    .await;
+    if !libass {
+      let error = result.expect_err("no libass").to_string();
+      assert!(error.contains("built with libass"), "{error}");
+      return;
+    }
+    let outputs = result.expect("burns");
+    let FlowValue::File { path, .. } = &outputs["film_output"] else {
+      panic!("mp4");
+    };
+    let probe = std::process::Command::new("ffprobe")
+      .args([
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "csv=p=0",
+      ])
+      .arg(path)
+      .output()
+      .expect("ffprobe");
+    let streams = String::from_utf8_lossy(&probe.stdout);
+    assert!(
+      streams.contains("video") && !streams.contains("subtitle"),
+      "{streams}"
+    );
+    assert!(matches!(outputs["film_subtitles"], FlowValue::File { .. }));
   }
 
   /// Needs ffmpeg: `cargo test -p yanshi-nodes --lib render_video -- --ignored`.

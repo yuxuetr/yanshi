@@ -56,6 +56,9 @@ inputs:
   video_seconds:
     description: "Length of each generated clip, in seconds (it loops for the narration)"
     default: 5
+  burn_subtitles:
+    description: "Draw the narration into the picture instead of a subtitle track the viewer toggles (needs ffmpeg with libass)"
+    default: false
   chunks:
     description: "Notebook passages to work from instead of url / text: [{chunk_id, source_id, content}]. Citations then point at these ids."
     default: []
@@ -197,6 +200,7 @@ nodes:
       template: |
         {"scenes": [{% for r in made %}{% set s = plan.scenes | nth(n=loop.index0) %}{"audio": {{ r.say.Ok.say_output.path | json_encode() }}, "caption": {{ s.narration | json_encode() }}, {% if r.clip.Ok %}"video": {{ r.clip.Ok.clip_video.path | json_encode() }}{% else %}"image": {{ r.picture.Ok.picture_image.path | json_encode() }}{% endif %}}{% if not loop.last %},{% endif %}{% endfor %}]}
 
+  # `burn_subtitles` (the workflow input) reaches the node directly.
   - id: film
     type: render_video
     dependencies: ["cut"]
