@@ -67,7 +67,7 @@ impl AnthropicProvider {
     Ok(headers)
   }
 
-  fn build_request_body(&self, request: &ProviderRequest) -> Value {
+  fn build_request_body(&self, request: &ProviderRequest) -> Result<Value> {
     // Convert OpenAI-style messages to Anthropic format
     let mut system_message = None;
     let mut anthropic_messages = Vec::new();
@@ -139,10 +139,8 @@ impl AnthropicProvider {
       body["tool_choice"] = tool_choice_to_anthropic_value(choice);
     }
 
-    if let Some(thinking) = &request.thinking
-      && let Some(block) = thinking_config_to_anthropic_value(thinking)
-    {
-      body["thinking"] = block;
+    if let Some(thinking) = &request.thinking {
+      apply_anthropic_thinking(&mut body, &request.model, thinking)?;
     }
 
     // V2.1: Anthropic has no native `response_format` field. Emulate a
@@ -169,7 +167,7 @@ impl AnthropicProvider {
       body["tool_choice"] = json!({ "type": "tool", "name": name });
     }
 
-    body
+    Ok(body)
   }
 }
 
@@ -266,22 +264,87 @@ fn openai_content_to_anthropic_content(content: &Value) -> Value {
   Value::Array(blocks)
 }
 
-/// Encode a [`ThinkingConfig`] as Anthropic's `thinking` request block.
-///
-/// Anthropic only accepts `{ type: "enabled", budget_tokens: N }` or
-/// `{ type: "disabled" }`. `Auto` maps to `enabled` with the model's
-/// default budget — Anthropic uses 5000 tokens when none is specified
-/// for Claude 3.7+, but we send an explicit baseline of 4096 so behaviour
-/// is reproducible across `Auto` and `Medium`.
-pub(crate) fn thinking_config_to_anthropic_value(config: &ThinkingConfig) -> Option<Value> {
-  if config.is_disabled() {
-    return Some(json!({ "type": "disabled" }));
+/// How a Claude model takes the thinking knob, decided by model name (the
+/// registry's `thinking_kind` does not reach the provider; DeepSeek V4 is
+/// dispatched the same way).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaudeThinking {
+  /// Claude 3.x and 4.0–4.5: `{ type: "enabled", budget_tokens: N }`.
+  Budget,
+  /// Opus 4.6+, Sonnet 4.6, Sonnet 5, Haiku 5.5: `{ type: "adaptive" }`
+  /// plus `output_config.effort`; `{ type: "disabled" }` turns it off.
+  /// `budget_tokens` is a 400 on 4.7 and later.
+  Adaptive,
+  /// Sonnet 5.5: adaptive, but `disabled` is a 400; `between_tools` is
+  /// the closest thing to off.
+  AdaptiveBetweenTools,
+  /// Opus 5.5, Fable, Mythos: thinking is always on; `disabled` is a 400
+  /// and only the effort level can be set.
+  AdaptiveAlwaysOn,
+}
+
+fn claude_thinking(model: &str) -> ClaudeThinking {
+  let budget_era = model.starts_with("claude-3")
+    || ["-4-0", "-4-1", "-4-5", "-4-2025"]
+      .iter()
+      .any(|version| model.contains(version));
+  if budget_era {
+    ClaudeThinking::Budget
+  } else if model.starts_with("claude-opus-5-5")
+    || model.starts_with("claude-fable")
+    || model.starts_with("claude-mythos")
+  {
+    ClaudeThinking::AdaptiveAlwaysOn
+  } else if model.starts_with("claude-sonnet-5-5") {
+    ClaudeThinking::AdaptiveBetweenTools
+  } else {
+    // Unknown and future Claude models: adaptive is the current API.
+    ClaudeThinking::Adaptive
   }
-  let budget = config.to_token_budget().unwrap_or(4096);
-  Some(json!({
-    "type": "enabled",
-    "budget_tokens": budget,
-  }))
+}
+
+/// Write the caller's [`ThinkingConfig`] onto an Anthropic request body.
+///
+/// Budget-era models get `{ type: "enabled", budget_tokens: N }` (`Auto`
+/// sends 4096 so `Auto` and `Medium` behave alike). Adaptive models get
+/// `{ type: "adaptive", display: "summarized" }` — `display` because 4.7
+/// and later return empty thinking text by default — and the depth goes in
+/// `output_config.effort`; `Auto` leaves the effort to the model default.
+/// `Disabled` on a model that cannot turn thinking off is an error rather
+/// than a silently ignored setting.
+pub(crate) fn apply_anthropic_thinking(
+  body: &mut Value,
+  model: &str,
+  config: &ThinkingConfig,
+) -> Result<()> {
+  let kind = claude_thinking(model);
+  if config.is_disabled() {
+    body["thinking"] = match kind {
+      ClaudeThinking::Budget | ClaudeThinking::Adaptive => json!({ "type": "disabled" }),
+      ClaudeThinking::AdaptiveBetweenTools => json!({ "type": "between_tools" }),
+      ClaudeThinking::AdaptiveAlwaysOn => {
+        return Err(LLMError::ConfigurationError {
+          message: format!(
+            "{model} always thinks and rejects `thinking: disabled`; \
+             lower the depth with ThinkingConfig::Low instead"
+          ),
+        });
+      }
+    };
+    return Ok(());
+  }
+  if kind == ClaudeThinking::Budget {
+    body["thinking"] = json!({
+      "type": "enabled",
+      "budget_tokens": config.to_token_budget().unwrap_or(4096),
+    });
+    return Ok(());
+  }
+  body["thinking"] = json!({ "type": "adaptive", "display": "summarized" });
+  if let Some(effort) = config.to_anthropic_effort() {
+    body["output_config"] = json!({ "effort": effort });
+  }
+  Ok(())
 }
 
 /// Encode a `ToolSpec` as Anthropic's `{ name, description, input_schema }`.
@@ -359,7 +422,7 @@ impl LLMProvider for AnthropicProvider {
     }
 
     let url = format!("{}/v1/messages", self.base_url);
-    let body = self.build_request_body(request);
+    let body = self.build_request_body(request)?;
 
     let response = self
       .client
@@ -448,7 +511,7 @@ impl LLMProvider for AnthropicProvider {
     }
 
     let url = format!("{}/v1/messages", self.base_url);
-    let body = self.build_request_body(request);
+    let body = self.build_request_body(request)?;
 
     let response = self
       .client
@@ -501,12 +564,19 @@ impl LLMProvider for AnthropicProvider {
   }
 
   fn supported_models(&self) -> Vec<String> {
-    vec![
-      "claude-opus-5".to_string(),
-      "claude-sonnet-5".to_string(),
-      "claude-fable-5".to_string(),
-      "claude-haiku-4-5".to_string(),
+    [
+      "claude-fable-5-1",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+      "claude-fable-5",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
     ]
+    .into_iter()
+    .map(String::from)
+    .collect()
   }
 }
 
@@ -809,7 +879,7 @@ mod tests {
       response_format: None,
     };
 
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     assert_eq!(body["model"], "claude-3-sonnet-20240229");
     assert_eq!(body["temperature"], 0.7);
     assert_eq!(body["max_tokens"], 100);
@@ -850,7 +920,7 @@ mod tests {
       response_format: None,
     };
 
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     let messages = body["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 2);
 
@@ -897,7 +967,7 @@ mod tests {
       response_format: None,
     };
 
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     assert_eq!(body["system"], "Be concise.");
   }
 
@@ -931,7 +1001,7 @@ mod tests {
       response_format: None,
     };
 
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     let messages = body["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 2);
 
@@ -975,7 +1045,7 @@ mod tests {
       response_format: None,
     };
 
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     let tools = body["tools"].as_array().expect("tools array");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["name"], "get_weather");
@@ -1084,15 +1154,14 @@ mod tests {
 
   // ----- Thinking serialisation + parse coverage -----
 
-  /// `ThinkingConfig::Medium` must be emitted as Anthropic's typed
-  /// `thinking: { type: "enabled", budget_tokens: 4096 }` block on the
-  /// request body — bypassing the parameters whitelist that would
-  /// otherwise silently drop it.
+  /// On a budget-era model (Haiku 4.5) `ThinkingConfig::Medium` must be
+  /// emitted as `thinking: { type: "enabled", budget_tokens: 4096 }` —
+  /// bypassing the parameters whitelist that would otherwise drop it.
   #[test]
   fn build_request_body_serialises_thinking_medium() {
     let provider = AnthropicProvider::new("test-key", None).unwrap();
     let request = ProviderRequest {
-      model: "claude-3-7-sonnet-20250219".to_string(),
+      model: "claude-haiku-4-5-20251001".to_string(),
       messages: vec![json!({"role": "user", "content": "reason"})],
       stream: false,
       parameters: std::collections::HashMap::new(),
@@ -1101,7 +1170,7 @@ mod tests {
       thinking: Some(ThinkingConfig::Medium),
       response_format: None,
     };
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["thinking"]["budget_tokens"], 4096);
   }
@@ -1119,9 +1188,69 @@ mod tests {
       thinking: Some(ThinkingConfig::Disabled),
       response_format: None,
     };
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     assert_eq!(body["thinking"]["type"], "disabled");
     assert!(body["thinking"].get("budget_tokens").is_none());
+  }
+
+  fn thinking_body(model: &str, thinking: ThinkingConfig) -> Result<Value> {
+    let provider = AnthropicProvider::new("test-key", None).unwrap();
+    provider.build_request_body(&ProviderRequest {
+      model: model.to_string(),
+      messages: vec![json!({"role": "user", "content": "reason"})],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(thinking),
+      response_format: None,
+    })
+  }
+
+  /// Opus 4.7 and later reject `budget_tokens` with a 400: current models
+  /// must get adaptive thinking, with the depth carried as effort.
+  #[test]
+  fn current_claude_models_get_adaptive_thinking_and_an_effort() {
+    for model in [
+      "claude-opus-4-6",
+      "claude-opus-4-8",
+      "claude-sonnet-5",
+      "claude-sonnet-5-5",
+      "claude-opus-5-5",
+      "claude-fable-5-1",
+      "claude-haiku-5-5",
+    ] {
+      let body = thinking_body(model, ThinkingConfig::High).unwrap();
+      assert_eq!(body["thinking"]["type"], "adaptive", "{model}");
+      assert_eq!(body["thinking"]["display"], "summarized", "{model}");
+      assert!(body["thinking"].get("budget_tokens").is_none(), "{model}");
+      assert_eq!(body["output_config"]["effort"], "high", "{model}");
+    }
+    let body = thinking_body("claude-opus-5", ThinkingConfig::Budget(20_000)).unwrap();
+    assert_eq!(body["output_config"]["effort"], "high");
+    let body = thinking_body("claude-opus-5", ThinkingConfig::Effort("max".into())).unwrap();
+    assert_eq!(body["output_config"]["effort"], "max");
+    let body = thinking_body("claude-opus-5", ThinkingConfig::Auto).unwrap();
+    assert!(
+      body.get("output_config").is_none(),
+      "Auto keeps the model's default effort"
+    );
+  }
+
+  /// Turning thinking off is spelled differently per model, and impossible
+  /// on the always-on ones.
+  #[test]
+  fn disabling_thinking_follows_each_model_s_rules() {
+    let body = thinking_body("claude-opus-5", ThinkingConfig::Disabled).unwrap();
+    assert_eq!(body["thinking"], json!({"type": "disabled"}));
+    let body = thinking_body("claude-sonnet-5-5", ThinkingConfig::Disabled).unwrap();
+    assert_eq!(body["thinking"], json!({"type": "between_tools"}));
+    for model in ["claude-opus-5-5", "claude-fable-5", "claude-mythos-5-1"] {
+      assert!(
+        thinking_body(model, ThinkingConfig::Disabled).is_err(),
+        "{model} would 400 on `disabled`"
+      );
+    }
   }
 
   #[test]
@@ -1137,7 +1266,7 @@ mod tests {
       thinking: None,
       response_format: None,
     };
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     assert!(
       body.get("thinking").is_none(),
       "no thinking config → no `thinking` key on the wire body"
@@ -1201,7 +1330,7 @@ mod tests {
       thinking: None,
       response_format: Some(json_schema_format()),
     };
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     let tools = body["tools"].as_array().expect("tools array");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["name"], "final_answer");
@@ -1233,7 +1362,7 @@ mod tests {
       thinking: None,
       response_format: Some(json_schema_format()),
     };
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     let tools = body["tools"].as_array().expect("tools array");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["name"], "get_weather");
@@ -1257,7 +1386,7 @@ mod tests {
       thinking: None,
       response_format: Some(json_schema_format()),
     };
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).unwrap();
     assert!(body.get("tools").is_none());
     assert!(body.get("tool_choice").is_none());
   }

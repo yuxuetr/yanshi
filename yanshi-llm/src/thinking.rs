@@ -3,8 +3,10 @@
 //! Unified abstraction over the model-side "slow think before acting"
 //! knob that each provider exposes in a different shape:
 //!
-//! - **Anthropic** (`claude-3.7-*`, `claude-sonnet-4-*`, `claude-opus-4-*`):
-//!   `thinking: { type: "enabled", budget_tokens: N }` on the request body.
+//! - **Anthropic**, two shapes chosen by model name. Haiku 4.5 and older:
+//!   `thinking: { type: "enabled", budget_tokens: N }`. Opus 4.6+, Sonnet
+//!   4.6+, Haiku 5.5, Fable: `thinking: { type: "adaptive" }` with the depth
+//!   in `output_config.effort` (`budget_tokens` is a 400 on 4.7 and later).
 //! - **OpenAI o-series** (`o1-*`, `o3-*`, `o4-*`): `reasoning_effort:
 //!   "minimal" | "low" | "medium" | "high"` on the request body.
 //! - **Google Gemini 2.5+**: `generationConfig.thinkingConfig.thinkingBudget:
@@ -92,6 +94,26 @@ impl ThinkingConfig {
     }
   }
 
+  /// Resolve to an Anthropic `output_config.effort` level for models with
+  /// adaptive thinking (`low` / `medium` / `high` / `xhigh` / `max`).
+  /// `None` for `Auto` (the model's default effort wins) and `Disabled`.
+  pub fn to_anthropic_effort(&self) -> Option<&'static str> {
+    match self {
+      ThinkingConfig::Auto | ThinkingConfig::Disabled => None,
+      ThinkingConfig::Low => Some("low"),
+      ThinkingConfig::Medium => Some("medium"),
+      ThinkingConfig::High => Some("high"),
+      ThinkingConfig::Budget(n) => Some(budget_to_effort(*n)),
+      ThinkingConfig::Effort(s) => Some(match s.to_ascii_lowercase().as_str() {
+        "minimal" | "low" => "low",
+        "high" => "high",
+        "xhigh" => "xhigh",
+        "max" => "max",
+        _ => "medium",
+      }),
+    }
+  }
+
   /// Resolve to an OpenAI `reasoning_effort` string.
   pub fn to_openai_effort(&self) -> Option<&'static str> {
     match self {
@@ -152,7 +174,7 @@ fn normalise_effort(s: &str) -> &'static str {
 pub enum ThinkingKind {
   /// OpenAI o-series: emits `reasoning_effort` string on the chat completion body.
   Effort,
-  /// Anthropic claude-3.7+ / 4.x: emits `thinking: { type: "enabled",
+  /// Anthropic Haiku 4.5 and older: emits `thinking: { type: "enabled",
   /// budget_tokens: N }` block.
   BudgetTokens,
   /// Google Gemini 2.5+: emits `generationConfig.thinkingConfig.thinkingBudget`.
@@ -171,6 +193,11 @@ pub enum ThinkingKind {
   /// provider, and distinct from [`Self::OutputOnly`] since — unlike legacy
   /// R1 — V4 *does* accept caller-supplied input configuration.
   DeepSeekReasoningEffort,
+  /// Anthropic Opus 4.6+, Sonnet 4.6+, Haiku 5.5, Fable: emits `thinking:
+  /// { type: "adaptive" }` plus `output_config.effort`. The provider picks
+  /// the shape by model name (see `providers::anthropic::apply_anthropic_thinking`),
+  /// as it does for DeepSeek V4.
+  Adaptive,
 }
 
 impl ThinkingKind {
@@ -260,5 +287,6 @@ mod tests {
     assert!(ThinkingKind::BudgetTokens.accepts_input());
     assert!(ThinkingKind::ThinkingConfigBudget.accepts_input());
     assert!(ThinkingKind::DeepSeekReasoningEffort.accepts_input());
+    assert!(ThinkingKind::Adaptive.accepts_input());
   }
 }

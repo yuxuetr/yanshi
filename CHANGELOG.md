@@ -1726,6 +1726,17 @@ _New entries go here. Will roll into the next tag (likely
   `kling-v*` models keep the legacy `/v1/videos/text2video` API. Resource
   packs for 4.0 are only drawn on by the current API. The Kling live test
   now generates 3 s of `kling-4.0-flash` at 720p.
+- Claude thinking follows each model's API. Opus 4.6+, Sonnet 4.6+,
+  Haiku 5.5 and Fable get `thinking: { type: "adaptive", display:
+  "summarized" }` with the depth in `output_config.effort` (`Auto` keeps
+  the model default; `Budget(n)` is bucketed); Haiku 4.5 keeps
+  `budget_tokens`, which is a 400 on 4.7 and later. `Disabled` sends
+  `between_tools` on Sonnet 5.5 and is an error on Opus 5.5 and Fable,
+  which always think. The registry now lists the current lineup (Fable
+  5.1 / 5, Opus 5.5 / 5 / 4.8 / 4.7 / 4.6, Sonnet 5.5 / 5 / 4.6, Haiku 5.5
+  / 4.5), marks them all as supporting thinking (before, `.thinking()` on
+  any Claude model was refused), and leaves `temperature` null on models
+  that reject non-default sampling parameters.
 
 ### Removed
 
