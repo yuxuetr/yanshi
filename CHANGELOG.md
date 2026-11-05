@@ -342,6 +342,9 @@ _New entries go here. Will roll into the next tag (likely
   `reasoning_content` / `reasoning` deltas (DeepSeek, Qwen, GLM, …),
   Moonshot and StepFun; `collect_streaming_response` joins it into
   `LLMResponse.thinking`, which streaming previously always left empty.
+- **Gemini reasoning text.** A thinking request now sets
+  `includeThoughts: true`; `thought: true` parts fill `thinking` (whole
+  replies and streams) and are kept out of the answer.
 
 - `figure`'s `domain: block` takes `language: d2` as well as `tikz`: the
   prompt carries D2 conventions and the source is checked against the

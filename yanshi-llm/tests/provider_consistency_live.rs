@@ -1015,6 +1015,59 @@ async fn google_live_streaming_path() {
   assert_live_stream_non_empty(stream).await;
 }
 
+/// Y10.3: with `includeThoughts`, Gemini streams `thought: true` parts;
+/// they must land in `thinking`, not in the answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn google_live_streaming_reasoning() {
+  if !prepare_live_provider("google", LiveCapability::Llm).await {
+    return;
+  }
+  let Some((_, api_key)) = pick_api_key(&["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_AI_KEY"])
+  else {
+    eprintln!("[live] google streaming reasoning: skipped (no Gemini API key env var set)");
+    return;
+  };
+  let provider =
+    GoogleProvider::with_client(no_proxy_client(), &api_key, None).expect("google provider");
+  let model = live_model("google", "THINKING", GOOGLE_TEXT_MODEL);
+  let request = ProviderRequest {
+    model: model.clone(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "What is 17 * 23? Reply with just the number."
+    })],
+    stream: true,
+    parameters: HashMap::new(),
+    tools: None,
+    tool_choice: None,
+    thinking: Some(ThinkingConfig::Low),
+    response_format: None,
+  };
+
+  let response = tokio::time::timeout(Duration::from_secs(120), async {
+    let stream = provider.execute_streaming(&request).await?;
+    collect_streaming_response(stream, |_| async {}).await
+  })
+  .await
+  .unwrap_or_else(|_| panic!("google {model}: streaming reasoning timed out after 120s"))
+  .unwrap_or_else(|e| panic!("google {model}: streaming reasoning failed: {e}"));
+
+  eprintln!(
+    "[live] google {model}: streamed answer {:?}, reasoning {} chars",
+    response.content,
+    response.thinking.as_deref().map_or(0, str::len)
+  );
+  assert!(
+    response.content.contains("391"),
+    "google {model}: expected 391, got {:?}",
+    response.content
+  );
+  assert!(
+    response.thinking.as_deref().is_some_and(|t| !t.is_empty()),
+    "google {model}: expected streamed thought text"
+  );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn moonshot_live_text_path() {
   run_text_path::<MoonshotProvider, _>("moonshot", &["MOONSHOT_API_KEY", "MOONSHOT_KEY"], |key| {

@@ -371,14 +371,24 @@ pub(crate) fn tool_choice_to_google_value(
 /// auto-budget). `Auto` maps to `thinkingBudget: -1`; explicit qualitative
 /// levels and `Budget(n)` map to integer token counts. `Disabled` emits
 /// `thinkingBudget: 0` per Google's documented "thinking off" form.
+/// `includeThoughts: true` asks for the reasoning summary, which comes
+/// back as parts marked `thought: true` (Y10.3).
 pub(crate) fn thinking_config_to_google_value(config: &ThinkingConfig) -> Option<Value> {
   if config.is_disabled() {
     return Some(json!({ "thinkingBudget": 0 }));
   }
-  match config.to_token_budget() {
-    Some(budget) => Some(json!({ "thinkingBudget": budget })),
-    None => Some(json!({ "thinkingBudget": -1 })),
-  }
+  let budget = config.to_token_budget().map_or(-1, i64::from);
+  Some(json!({ "thinkingBudget": budget, "includeThoughts": true }))
+}
+
+/// Y10.3: the text of the `thought: true` parts — Gemini's reasoning
+/// summary, kept out of the answer.
+fn google_thought_text(parts: &[GooglePart]) -> String {
+  parts
+    .iter()
+    .filter(|part| part.thought)
+    .filter_map(|part| part.text.as_deref())
+    .collect()
 }
 
 /// Pull `functionCall` parts out of the first candidate and convert them to
@@ -477,10 +487,9 @@ impl LLMProvider for GoogleProvider {
       metadata: Some(serde_json::to_value(&google_response)?),
       tool_calls,
       stop_reason,
-      // Gemini 2.5+ returns reasoning text on parts with `thought: true`;
-      // capturing that is part of a future patch. For now we surface
-      // None so the response shape matches other providers.
-      thinking: None,
+      thinking: first_candidate
+        .map(|c| google_thought_text(&c.content.parts))
+        .filter(|text| !text.is_empty()),
     })
   }
 
@@ -582,6 +591,9 @@ struct GoogleContent {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct GooglePart {
   pub text: Option<String>,
+  /// Y10.3: set on reasoning-summary parts when `includeThoughts` is on.
+  #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+  pub thought: bool,
   /// Y6.6 (M7): inline media in a reply, e.g. the image of a Gemini
   /// image-output model. Not re-serialized into the response metadata:
   /// the decoded bytes are already in `content`.
@@ -630,7 +642,7 @@ fn inline_data_block(inline: &GoogleInlineData) -> Result<ContentBlock> {
 /// calls are not content (they become `tool_calls`).
 pub(crate) fn google_parts_to_content(parts: &[GooglePart]) -> Result<ContentType> {
   let mut blocks: Vec<ContentBlock> = Vec::new();
-  for part in parts {
+  for part in parts.iter().filter(|part| !part.thought) {
     if let Some(text) = &part.text {
       match blocks.last_mut() {
         Some(ContentBlock::Text(previous)) => previous.push_str(text),
@@ -734,8 +746,11 @@ impl GoogleStreamingResponse {
     let mut content_text = String::new();
     let mut tool_call_deltas = Vec::new();
     let mut media = Vec::new();
+    let thinking = google_thought_text(&candidate.content.parts);
     for part in &candidate.content.parts {
-      if let Some(text) = &part.text {
+      if let Some(text) = &part.text
+        && !part.thought
+      {
         content_text.push_str(text);
       }
       // Y8.2: an image arrives as one complete part; a broken one fails
@@ -765,7 +780,12 @@ impl GoogleStreamingResponse {
     // the final marker — so a tool-call-only chunk (no text) doesn't get
     // silently dropped, mirroring the same fix already applied to OpenAI's
     // `parse_sse_chunk` for the identical class of bug.
-    if content_text.is_empty() && tool_call_deltas.is_empty() && media.is_empty() && !is_final {
+    if content_text.is_empty()
+      && thinking.is_empty()
+      && tool_call_deltas.is_empty()
+      && media.is_empty()
+      && !is_final
+    {
       return Ok(None);
     }
 
@@ -773,7 +793,7 @@ impl GoogleStreamingResponse {
       return Ok(None);
     };
     Ok(Some(StreamChunk {
-      thinking: String::new(),
+      thinking,
       media,
       content: content_text,
       is_final,
@@ -1220,6 +1240,7 @@ mod tests {
   fn parse_google_function_calls_text_only_returns_empty() {
     let parts = vec![GooglePart {
       text: Some("hi".to_string()),
+      thought: false,
       inline_data: None,
       function_call: None,
     }];
@@ -1513,6 +1534,40 @@ mod tests {
   /// `Vec::new()`. Gemini gives function calls no id, so one is synthesised
   /// (`call_<index>`); the full `args` object is serialized whole into
   /// `arguments_delta` since Gemini never fragments it across chunks.
+  /// Y10.3: `thought: true` parts are reasoning, not answer text — in a
+  /// whole reply and in a streamed chunk alike.
+  #[test]
+  fn thought_parts_become_thinking_not_content() {
+    let parts: Vec<GooglePart> = serde_json::from_value(json!([
+      {"text": "weighing it", "thought": true},
+      {"text": "391"}
+    ]))
+    .unwrap();
+    assert_eq!(google_thought_text(&parts), "weighing it");
+    match google_parts_to_content(&parts).unwrap() {
+      ContentType::Text(text) => assert_eq!(text, "391"),
+      other => panic!("expected text, got {other:?}"),
+    }
+
+    let mut response = test_streaming_response();
+    let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"weighing it","thought":true}],"role":"model"}}]}"#;
+    let chunk = response
+      .parse_json_chunk(line)
+      .unwrap()
+      .expect("thought chunk");
+    assert_eq!(chunk.thinking, "weighing it");
+    assert!(chunk.content.is_empty());
+  }
+
+  #[test]
+  fn thinking_config_asks_for_thoughts_unless_disabled() {
+    let on = thinking_config_to_google_value(&ThinkingConfig::Low).unwrap();
+    assert_eq!(on["includeThoughts"], true);
+    assert_eq!(on["thinkingBudget"], 1024);
+    let off = thinking_config_to_google_value(&ThinkingConfig::Disabled).unwrap();
+    assert!(off.get("includeThoughts").is_none());
+  }
+
   #[test]
   fn parse_json_chunk_extracts_function_call_part() {
     let mut response = test_streaming_response();
