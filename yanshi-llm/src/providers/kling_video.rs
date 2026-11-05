@@ -12,9 +12,10 @@
 //! A fresh token is signed per request: tokens expire, and signing is
 //! cheap.
 //!
-//! The default base URL is the international host
-//! (`api-singapore.klingai.com`); the mainland host is set per model with
-//! `base_url`.
+//! The default base URL is the mainland host (`api-beijing.klingai.com`),
+//! as for MiniMax; a key issued by the international site is rejected
+//! there with 401 `api key not found`, so international accounts set the
+//! model's `base_url` to `https://api-singapore.klingai.com`.
 
 use super::modality::{
   GeneratedVideo, Text2VideoProvider, Text2VideoRequest, VideoGenerationResponse,
@@ -97,7 +98,7 @@ impl KlingVideoProvider {
       client,
       credentials,
       base_url: base_url
-        .unwrap_or_else(|| "https://api-singapore.klingai.com".to_string())
+        .unwrap_or_else(|| "https://api-beijing.klingai.com".to_string())
         .trim_end_matches('/')
         .to_string(),
     })

@@ -64,7 +64,7 @@ providers:
       tokens_per_minute: 80000
   kling:
     api_key_env: KLING_API_KEY
-    base_url: https://api-singapore.klingai.com
+    base_url: https://api-beijing.klingai.com
     timeout_seconds: 60
 defaults:
   timeout_seconds: 60

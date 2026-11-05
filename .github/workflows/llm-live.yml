@@ -67,6 +67,7 @@ jobs:
       # each job is billed and takes minutes, so never nightly.
       YANSHI_LIVE_VIDEO_TESTS: ${{ inputs.video && '1' || '' }}
       KLING_API_KEY: ${{ secrets.KLING_API_KEY }}
+      KLING_VIDEO_BASE_URL: ${{ secrets.KLING_VIDEO_BASE_URL }}
       MINIMAX_VIDEO_BASE_URL: ${{ secrets.MINIMAX_VIDEO_BASE_URL }}
     steps:
       - uses: actions/checkout@v4

@@ -2170,7 +2170,7 @@ async fn dashscope_wan_text_to_video_live() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn minimax_hailuo_text_to_video_live() {
-  let mut request = live_video_request("MiniMax-Hailuo-02");
+  let mut request = live_video_request("MiniMax-Hailuo-2.3");
   request.resolution = Some("768P".to_string());
   request.duration_seconds = Some(6);
   live_video(
@@ -2211,7 +2211,7 @@ async fn kling_text_to_video_live() {
         yanshi_llm::providers::kling_video::KlingVideoProvider::with_client(
           no_proxy_client(),
           key,
-          None,
+          kling_base_url(),
         )
         .expect("provider"),
       )
@@ -2219,6 +2219,14 @@ async fn kling_text_to_video_live() {
     request,
   )
   .await;
+}
+
+/// `KLING_VIDEO_BASE_URL` for international accounts
+/// (`https://api-singapore.klingai.com`); the mainland host otherwise.
+fn kling_base_url() -> Option<String> {
+  std::env::var("KLING_VIDEO_BASE_URL")
+    .ok()
+    .filter(|v| !v.trim().is_empty())
 }
 
 // ── Y6.6: image-to-image, one call per vendor (YANSHI_LIVE_IMAGE_TESTS) ──

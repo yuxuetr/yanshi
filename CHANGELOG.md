@@ -1714,6 +1714,14 @@ _New entries go here. Will roll into the next tag (likely
   every subcommand (both default and `--no-default-features` builds)
   before and after.
 
+### Changed
+
+- Kling text-to-video now defaults to the mainland host
+  (`api-beijing.klingai.com`), like MiniMax; international accounts set
+  the model's `base_url` to `https://api-singapore.klingai.com`. The live
+  test reads `KLING_VIDEO_BASE_URL`, and its MiniMax case uses
+  `MiniMax-Hailuo-2.3`.
+
 ### Removed
 
 - The ten retired Claude models are gone from the bundled registry
