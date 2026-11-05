@@ -81,6 +81,11 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Security
 
+- **Skill workflow tools take only declared, plain-JSON inputs (Y8.5).**
+  An agent could pass inputs a workflow never declared, which override
+  that workflow's node parameters (e.g. a `file` node's `path`), or a
+  value shaped like a serialized `File` that hands any host file to a
+  node. Both are refused, on the CLI and the gateway.
 - **`arxiv` node: HTTPS only, bounded download and unpack.** Search used
   plain `http://export.arxiv.org`; requests had no timeout; the e-print
   archive was read and gunzipped without a size cap (a gzip bomb could
@@ -99,6 +104,21 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Fixed
 
+- **Keg-only Homebrew renderers start in the sandbox.** A binary under
+  `<root>/Cellar/` (e.g. `ffmpeg-full`, the Homebrew ffmpeg with libass)
+  could not load libraries from `<root>/opt/` and aborted before `main`;
+  the Homebrew root is now readable, as it already was for regular
+  formulae.
+- **`input_mapping` wins over a same-named workflow input (Y8.1).** Flow
+  inputs used to override a node's mapped value. Order is now
+  `input_mapping` > workflow inputs > static parameters
+  (`docs/CONFIGURATION.md`).
+- **A Map item skipped by `run_if` is not an error.** It was counted in
+  the Map's failed indexes and logged as a warning.
+- **`text_to_video` in workflow YAML.** The node had no schema entry, so
+  no config-first workflow could use it.
+- **The mock video vendor returns a playable MP4** (1 s, 64×36 H.264),
+  so ffmpeg-based tests can use it.
 - **Billed media nodes retry only what a retry can fix (Y2.5).** The
   modality nodes flattened every vendor error into an
   `AsyncExecutionError` string, which node retry (`max_retries`,
@@ -304,6 +324,30 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- **Skill `[[workflows]]` on the gateway (Y8.5).**
+  `/v1/skills/{name}:run` hands the skill's workflows to the agent as
+  tools, as `yanshi skill run` does (shared `yanshi_config::skill_workflows`).
+  Sub-runs use the skill run's base dir, cancellation and concurrency;
+  their files are registered as the run's artifacts, also when the agent
+  then fails. Every template passes `GatewayPolicy::check_workflow` at
+  submit (400 otherwise). Under the production profile each workflow
+  call needs approval.
+- **`render_video` can burn subtitles in (Y8.6).** `burn_subtitles: true`
+  draws the captions into the picture with ffmpeg's `subtitles` filter
+  (libass) instead of a toggleable track; the `.srt` is still written.
+  Without libass the node fails and says so rather than falling back.
+  `video_overview` gains the same input.
+- **Chemistry and block-diagram figure domains (Y8.4).** `domain:
+  chemistry` (chemfig; spec: molecules with formulas, checked for every
+  named molecule and its heteroatom counts) and `domain: block` (TikZ;
+  spec: blocks and directed links, every one checked). A figure that
+  compiles but leaves something out goes back to the model.
+- **Generated video shots in `video_overview` (Y8.3).** Off by default;
+  with `video_model` set, the script may mark scenes as moving and those
+  get a `text_to_video` clip instead of a still. `text_to_video` takes
+  `model` / `aspect_ratio` / `duration_seconds` from its inputs as well.
+- **Images in streamed Gemini replies (Y8.2).** `StreamChunk.media`
+  carries `inlineData` parts and `collect_streaming_response` keeps them.
 - **`figure` renders D2 (`language: d2`).** `d2 fig.d2 fig.svg` under the
   OS sandbox lays boxes and arrows out automatically, so the model gives
   no coordinates. d2's `fig.d2:<line>:<col>: ...` errors go back to the
