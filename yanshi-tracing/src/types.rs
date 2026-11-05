@@ -562,7 +562,7 @@ pub enum NodeStatus {
 /// LLM execution details
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMTrace {
-  /// Model used (e.g., "gpt-4", "claude-3-opus")
+  /// Model used (e.g., "gpt-4", "claude-opus-5")
   pub model: String,
 
   /// Provider name (e.g., "openai", "anthropic")

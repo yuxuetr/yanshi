@@ -17,7 +17,7 @@ The granular type system replaces broad categories like "multimodal" with specif
 - **Use Cases**: Conversation, Q&A, text generation, summarization
 - **Supports Streaming**: ✅
 - **Supports Tools**: ✅
-- **Example**: `step-1-8k`, `gpt-4o`, `claude-3-5-sonnet`
+- **Example**: `step-1-8k`, `gpt-4o`, `claude-sonnet-5`
 
 #### `codegen`
 - **Description**: Code generation and completion  

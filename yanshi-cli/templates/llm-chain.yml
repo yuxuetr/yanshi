@@ -55,7 +55,7 @@ workflow:
       depends_on: ["research_topic"]
       description: "Analyze the research findings"
       config:
-        model: "claude-3-sonnet"
+        model: "claude-sonnet-5"
         prompt: |
           Based on this research about {{ inputs.topic }}:
           

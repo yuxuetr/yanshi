@@ -851,7 +851,7 @@ impl LLMClientBuilder {
   /// Maps the unified [`ThinkingConfig`] onto the provider's native wire
   /// shape (Anthropic `thinking` block, OpenAI `reasoning_effort`, Google
   /// `thinkingConfig`). For models without thinking support (e.g.
-  /// `gpt-4o`, `claude-3-5-sonnet-20241022`), `execute*` returns
+  /// `gpt-4o`, `claude-sonnet-5`), `execute*` returns
   /// [`LLMError::UnsupportedFeature`] before any HTTP call — silent
   /// drops on the provider side would otherwise mask the misconfiguration.
   ///

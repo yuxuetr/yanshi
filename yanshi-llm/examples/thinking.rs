@@ -25,7 +25,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // shape (Anthropic thinking block, OpenAI reasoning_effort, Google
   // thinkingConfig).
   let candidates = &[
-    ("claude-sonnet-4-20250514", "Anthropic Claude Sonnet 4"),
     ("gemini-2.5-pro", "Google Gemini 2.5 Pro"),
     ("deepseek-reasoner", "DeepSeek-R1 (output-only)"),
   ];

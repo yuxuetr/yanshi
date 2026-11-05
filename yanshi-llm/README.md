@@ -102,7 +102,7 @@ async fn main() -> Result<(), yanshi_llm::LLMError> {
   Yanshi::init_with_env().await?;
   
   // Basic text response
-  let response = Yanshi::model("claude-3-5-sonnet")
+  let response = Yanshi::model("claude-sonnet-5")
     .prompt("Explain quantum computing")
     .temperature(0.7)
     .max_tokens(500)
@@ -146,7 +146,7 @@ async fn main() -> Result<(), yanshi_llm::LLMError> {
 async fn main() -> Result<(), yanshi_llm::LLMError> {
   Yanshi::init_with_env().await?;
   
-  let mut stream = Yanshi::model("claude-3-5-sonnet")
+  let mut stream = Yanshi::model("claude-sonnet-5")
     .prompt("Write a story about AI")
     .temperature(0.8)
     .execute_streaming().await?;
@@ -308,9 +308,9 @@ models:
     max_tokens: 4096
     supports_streaming: true
 
-  claude-3-sonnet:
+  claude-sonnet-5:
     vendor: anthropic
-    model_id: "claude-3-sonnet-20240229"
+    model_id: "claude-sonnet-5"
     temperature: 0.5
     max_tokens: 4096
 
@@ -361,7 +361,7 @@ async fn main() -> Result<(), LLMError> {
     println!("Response: {}", response);
 
     // Streaming usage
-    let mut stream = Yanshi::model("claude-3-sonnet")
+    let mut stream = Yanshi::model("claude-sonnet-5")
         .prompt("Tell me a short story.")
         .streaming(true)
         .execute_streaming()
@@ -411,7 +411,7 @@ println!("{}", report.summary());
 ### Multiple Models
 
 ```rust
-let models = ["gpt-4o", "claude-3-sonnet", "gemini-1.5-pro"];
+let models = ["gpt-4o", "claude-sonnet-5", "gemini-1.5-pro"];
 
 for model in models {
     let response = Yanshi::model(model)
@@ -431,7 +431,7 @@ for model in models {
 - Environment: `OPENAI_API_KEY`
 
 ### Anthropic (Claude)
-- Models: claude-3-5-sonnet, claude-3-opus, claude-3-sonnet, claude-3-haiku
+- Models: claude-opus-5, claude-sonnet-5, claude-fable-5, claude-haiku-4-5
 - Features: Streaming, long context, system prompts
 - Environment: `ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`
 

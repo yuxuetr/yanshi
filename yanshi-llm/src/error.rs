@@ -98,7 +98,7 @@ pub enum LLMError {
   #[error(
     "Model '{model}' does not support feature '{feature}'. \
      Set `supports_thinking: true` and `thinking_kind` on the model in your registry, \
-     or use a model that does (e.g. claude-3-7-sonnet, o3-mini, gemini-2.5-pro, deepseek-reasoner)."
+     or use a model that does (e.g. o3-mini, gemini-2.5-pro, deepseek-reasoner)."
   )]
   UnsupportedFeature { model: String, feature: String },
 }

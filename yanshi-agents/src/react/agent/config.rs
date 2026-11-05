@@ -131,7 +131,7 @@ impl MemorySummaryBackend for CompactMemorySummary {
 /// Configuration for a [`ReActAgent`](crate::react::ReActAgent).
 #[derive(Debug, Clone)]
 pub struct ReActConfig {
-  /// LLM model identifier (e.g. `"gpt-4o"`, `"claude-3-5-sonnet"`)
+  /// LLM model identifier (e.g. `"gpt-4o"`, `"claude-sonnet-5"`)
   pub model: String,
 
   /// Optional persona / task description prepended to the system prompt.

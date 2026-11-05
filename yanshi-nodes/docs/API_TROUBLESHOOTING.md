@@ -78,7 +78,7 @@ curl https://api.anthropic.com/v1/messages \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
-  -d '{"model":"claude-3-haiku-20240307","max_tokens":10,"messages":[{"role":"user","content":"Hi"}]}'
+  -d '{"model":"claude-haiku-4-5","max_tokens":10,"messages":[{"role":"user","content":"Hi"}]}'
 ```
 
 ### 7. Environment Variable Setup
@@ -129,7 +129,7 @@ When you encounter API issues, you can easily switch providers:
 
 ```rust
 // Original (Claude with no credits)
-let node = LlmNode::new("summarizer", "claude-3-haiku-20240307");
+let node = LlmNode::new("summarizer", "claude-haiku-4-5");
 
 // Alternative 1: OpenAI
 let node = LlmNode::new("summarizer", "gpt-3.5-turbo");

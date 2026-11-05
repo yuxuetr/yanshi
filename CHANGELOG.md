@@ -1714,6 +1714,15 @@ _New entries go here. Will roll into the next tag (likely
   every subcommand (both default and `--no-default-features` builds)
   before and after.
 
+### Removed
+
+- The ten retired Claude models are gone from the bundled registry
+  (`templates/models/anthropic.yml`): the Claude 3 / 3.5 / 3.7 family,
+  `claude-opus-4-20250514` and `claude-sonnet-4-20250514`. Anthropic
+  answers requests to them with an error. `AnthropicProvider::supported_models`,
+  the `llm-chain` CLI template, the READMEs, docs and examples now name
+  current models. Configs that still name a removed entry fail at lookup.
+
 ## [v1.0.0-rc.1] — 2026-05-21
 
 The R1 → R4 reflection arc (see `docs/L1_L3_REFLECTION_R*.md`) drove

@@ -1329,11 +1329,12 @@ models:
       );
     }
 
-    // Canonical chat type dominates the registry.
+    // Canonical chat type dominates the registry. (Was ≥ 180 before the
+    // 2026-11-05 removal of the ten retired Claude entries.)
     let chat_count = counts.get("chat").copied().unwrap_or(0);
     assert!(
-      chat_count >= 180,
-      "expected ≥ 180 chat-shaped entries after migration, got {chat_count}"
+      chat_count >= 170,
+      "expected ≥ 170 chat-shaped entries after migration, got {chat_count}"
     );
 
     // Generation/editing types use the new canonical names.

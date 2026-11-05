@@ -502,12 +502,10 @@ impl LLMProvider for AnthropicProvider {
 
   fn supported_models(&self) -> Vec<String> {
     vec![
-      "claude-3-5-sonnet-20241022".to_string(),
-      "claude-3-5-sonnet-20240620".to_string(),
-      "claude-3-5-haiku-20241022".to_string(),
-      "claude-3-opus-20240229".to_string(),
-      "claude-3-sonnet-20240229".to_string(),
-      "claude-3-haiku-20240307".to_string(),
+      "claude-opus-5".to_string(),
+      "claude-sonnet-5".to_string(),
+      "claude-fable-5".to_string(),
+      "claude-haiku-4-5".to_string(),
     ]
   }
 }

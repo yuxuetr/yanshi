@@ -138,7 +138,7 @@ use crate::client::LLMClientBuilder;
 ///     .execute().await?;
 ///
 /// // Streaming request
-/// let stream = Yanshi::model("claude-3-5-sonnet")
+/// let stream = Yanshi::model("claude-sonnet-5")
 ///     .prompt("Tell me a story")
 ///     .temperature(0.7)
 ///     .top_p(0.9)
@@ -157,7 +157,7 @@ use crate::client::LLMClientBuilder;
 ///     .execute().await?;
 ///
 /// // With logging enabled
-/// let response = Yanshi::model("claude-3-5-sonnet")
+/// let response = Yanshi::model("claude-sonnet-5")
 ///     .prompt("Analyze this data")
 ///     .enable_logging(true)
 ///     .execute().await?;
@@ -388,7 +388,7 @@ impl Yanshi {
   ///
   /// Example:
   /// ```ignore
-  /// let exists = Yanshi::model_exists("claude-3-5-sonnet-20241022", "anthropic").await?;
+  /// let exists = Yanshi::model_exists("claude-sonnet-5", "anthropic").await?;
   /// println!("Claude 3.5 Sonnet exists: {}", exists);
   /// ```
   pub async fn model_exists(model_id: &str, vendor: &str) -> Result<bool> {

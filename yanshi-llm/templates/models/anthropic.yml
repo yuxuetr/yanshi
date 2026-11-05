@@ -1,134 +1,4 @@
 models:
-  claude-3-5-haiku-20241022:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  claude-3-5-sonnet:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: claude-3-5-sonnet-20241022
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  claude-3-5-sonnet-20240620:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  claude-3-5-sonnet-20241022:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  claude-3-7-sonnet-20250219:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    supports_thinking: true
-    thinking_kind: budget_tokens
-    response_format: null
-  claude-3-haiku:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: claude-3-haiku-20240307
-    base_url: null
-    temperature: 0.3
-    top_p: null
-    max_tokens: 4096
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  claude-3-haiku-20240307:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
-  claude-3-opus-20240229:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    response_format: null
   claude-fable-5:
     vendor: anthropic
     type: chat
@@ -161,23 +31,6 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
-  claude-opus-4-20250514:
-    vendor: anthropic
-    type: chat
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: false
-    supports_thinking: true
-    thinking_kind: budget_tokens
-    response_format: null
   claude-opus-5:
     vendor: anthropic
     type: chat
@@ -193,24 +46,6 @@ models:
     supports_streaming: true
     supports_tools: true
     supports_multimodal: true
-    response_format: null
-  claude-sonnet-4-20250514:
-    vendor: anthropic
-    type: chat
-    accepts: [text, image, document]
-    model_id: null
-    base_url: null
-    temperature: 0.6
-    top_p: null
-    max_tokens: 8192
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: true
-    supports_tools: true
-    supports_multimodal: true
-    supports_thinking: true
-    thinking_kind: budget_tokens
     response_format: null
   claude-sonnet-5:
     vendor: anthropic
