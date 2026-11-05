@@ -1745,6 +1745,15 @@ _New entries go here. Will roll into the next tag (likely
   `b64_json`.
 - Provider requests carry a `yanshi-llm/<version>` User-Agent; Wikimedia
   refused source-image downloads without one.
+- StepFun follows its current model docs. `step-5-preview` is in the
+  registry (text, image and video in; 1M context, 64K output), and
+  `step-3.7-flash` now accepts video. `.thinking()` on `step-5-preview`,
+  `step-3.7-flash` and `step-3.5-flash-2603` sends `reasoning_effort`
+  (`low` / `medium` / `high`; `medium` rounds up to `high` on 2603, which
+  has only two levels); before, the provider ignored it. `Disabled` is
+  an error, since StepFun has no way to turn reasoning off. Non-streaming
+  responses carry the reasoning text from `reasoning` /
+  `reasoning_content`.
 
 ### Removed
 

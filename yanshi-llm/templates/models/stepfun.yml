@@ -45,10 +45,12 @@ models:
     supports_tools: true
     supports_multimodal: false
     response_format: null
+    supports_thinking: true
+    thinking_kind: effort
   step-3.7-flash:
     vendor: step
     type: chat
-    accepts: [text, image]
+    accepts: [text, image, video]
     model_id: null
     base_url: null
     temperature: 0.7
@@ -61,6 +63,26 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
+    supports_thinking: true
+    thinking_kind: effort
+  step-5-preview:
+    vendor: step
+    type: chat
+    accepts: [text, image, video]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 65536
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: true
+    supports_tools: true
+    supports_multimodal: true
+    response_format: null
+    supports_thinking: true
+    thinking_kind: effort
   step-asr:
     vendor: step
     type: asr

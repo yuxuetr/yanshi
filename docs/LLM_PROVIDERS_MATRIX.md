@@ -84,7 +84,7 @@ show the selected config path/source and redact credential values.
 | Native tool calling (`tool_calls` / `tool_use` / `functionCall`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (injection) |
 | Multimodal text + image (URL or base64) | ✅ | ✅ | ✅ | partial | ✅ | ✅ | n/a |
 | Audio TTS / ASR | – | – | – | – | ✅ | – | n/a |
-| Image generation | – | – | – | – | ✅ | – | n/a |
+| Image generation | – | – | – | – | – | – | n/a |
 | W3C `traceparent` injection | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 | `with_client(...)` for custom `reqwest::Client` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | n/a |
 
@@ -166,7 +166,8 @@ never silently truncate.
 | Google | `gemini-1.5-flash`, `gemini-1.5-pro` | 1M | `tested` (offline; live nightly) |
 | Google | `gemini-2.0-flash`, `gemini-2.0-flash-exp` | 1M | `best_effort` (offline only) |
 | Moonshot | `kimi-k2.6` (`moonshot-v1-*` retired 2026-08-31) | — | `tested` (live + offline) |
-| StepFun | `step-1-8k`, `step-1-128k`, `step-1v-8k`, `step-2-16k` | 8K – 128K | `tested` (live + offline) |
+| StepFun | `step-3.5-flash`, `step-3.5-flash-2603`, `step-3.7-flash` | 256K | `tested` (live + offline) |
+| StepFun | `step-5-preview` | 1M | `best_effort` (offline only) |
 | GLM | `glm-4.5`, `glm-4.5-flash`, `glm-4.5v` | 128K | `tested` (live + offline, vision opt-in) |
 | Mock | `mock-runtime-*`, `mock-*` | configurable per test | n/a |
 

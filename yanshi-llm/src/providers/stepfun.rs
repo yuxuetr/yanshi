@@ -9,6 +9,7 @@ use crate::{
       response_format_to_openai_value, tool_choice_to_openai_value, tool_spec_to_openai_value,
     },
   },
+  thinking::ThinkingConfig,
   tool_calling::StopReason,
 };
 use async_trait::async_trait;
@@ -90,7 +91,7 @@ impl StepFunProvider {
     Ok(headers)
   }
 
-  fn build_request_body(&self, request: &ProviderRequest) -> Value {
+  fn build_request_body(&self, request: &ProviderRequest) -> Result<Value> {
     let mut body = json!({
       "model": request.model,
       "messages": request.messages,
@@ -113,8 +114,22 @@ impl StepFunProvider {
     if let Some(format) = &request.response_format {
       body["response_format"] = response_format_to_openai_value(format);
     }
+    if let Some(thinking) = &request.thinking {
+      if thinking.is_disabled() {
+        // StepFun documents no way to turn reasoning off.
+        return Err(LLMError::ConfigurationError {
+          message: format!(
+            "StepFun model '{}' always reasons; use ThinkingConfig::Low for the lightest effort",
+            request.model
+          ),
+        });
+      }
+      if let Some(effort) = stepfun_reasoning_effort(&request.model, thinking) {
+        body["reasoning_effort"] = Value::String(effort.to_string());
+      }
+    }
 
-    body
+    Ok(body)
   }
 
   fn get_model_type(&self, model: &str) -> ModelType {
@@ -129,9 +144,9 @@ impl StepFunProvider {
       // is the only current vision-understanding entry point.
       "step-1o-turbo-vision" => ModelType::ImageUnderstand,
 
-      // Multimodal models. step-3 (bare) was retired; step-3.7-flash is the
-      // current multimodal (text + image + video) reasoning model.
-      "step-3.7-flash" => ModelType::Multimodal,
+      // Multimodal models. step-3 (bare) was retired; step-3.7-flash and
+      // step-5-preview are the current text + image + video reasoning models.
+      "step-3.7-flash" | "step-5-preview" => ModelType::Multimodal,
 
       // Text-to-Speech models
       "step-tts-vivid" | "step-tts-mini" => ModelType::TTS,
@@ -204,6 +219,14 @@ impl StepFunProvider {
       .and_then(|c| c.message.tool_calls.as_ref())
       .map(|calls| parse_openai_tool_calls(&Value::Array(calls.clone())))
       .unwrap_or_default();
+    // StepFun returns the reasoning text as `reasoning`, and also as the
+    // DeepSeek-compatible `reasoning_content`.
+    let thinking = first_choice.and_then(|c| {
+      c.message
+        .reasoning
+        .clone()
+        .or_else(|| c.message.reasoning_content.clone())
+    });
     let stop_reason = if tool_calls.is_empty() {
       first_choice
         .and_then(|c| c.finish_reason.as_deref())
@@ -218,7 +241,7 @@ impl StepFunProvider {
       metadata: Some(serde_json::to_value(&stepfun_response)?),
       tool_calls,
       stop_reason,
-      thinking: None,
+      thinking,
     })
   }
 
@@ -264,7 +287,7 @@ impl LLMProvider for StepFunProvider {
       ModelType::Text | ModelType::ImageUnderstand | ModelType::Multimodal => {
         // Use chat completions for text, image understanding, and multimodal models
         let url = format!("{}/chat/completions", self.base_url);
-        let body = self.build_request_body(request);
+        let body = self.build_request_body(request)?;
         self.execute_chat_completion(url, body).await
       }
       ModelType::TTS
@@ -298,7 +321,7 @@ impl LLMProvider for StepFunProvider {
       ModelType::Text | ModelType::ImageUnderstand | ModelType::Multimodal => {
         // These models support streaming via chat completions
         let url = format!("{}/chat/completions", self.base_url);
-        let body = self.build_request_body(request);
+        let body = self.build_request_body(request)?;
         self.execute_streaming_chat(url, body).await
       }
       ModelType::TTS
@@ -354,6 +377,7 @@ impl LLMProvider for StepFunProvider {
       "step-1o-turbo-vision".to_string(),
       // Multimodal models
       "step-3.7-flash".to_string(),
+      "step-5-preview".to_string(),
       // Audio models (for chat completions interface)
       "step-tts-vivid".to_string(),
       "step-tts-mini".to_string(),
@@ -363,6 +387,25 @@ impl LLMProvider for StepFunProvider {
 }
 
 // StepFun API response structures (similar to OpenAI but with StepFun specifics)
+/// StepFun's `reasoning_effort` for `thinking`. Most reasoning models take
+/// `low` / `medium` / `high`; `step-3.5-flash-2603` takes only `low` and
+/// `high`, so `medium` rounds up there. `Auto` sends nothing, leaving the
+/// model's default.
+fn stepfun_reasoning_effort(model: &str, thinking: &ThinkingConfig) -> Option<&'static str> {
+  if matches!(thinking, ThinkingConfig::Auto) {
+    return None;
+  }
+  let effort = match thinking.to_openai_effort()? {
+    "minimal" | "low" => "low",
+    "high" => "high",
+    _ => "medium",
+  };
+  if model == "step-3.5-flash-2603" && effort == "medium" {
+    return Some("high");
+  }
+  Some(effort)
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct StepFunResponse {
   id: String,
@@ -396,6 +439,10 @@ struct StepFunMessage {
   function_call: Option<Value>,
   #[serde(skip_serializing_if = "Option::is_none")]
   tool_calls: Option<Vec<Value>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  reasoning: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1460,10 +1507,85 @@ mod tests {
       thinking: None,
       response_format: None,
     };
-    let body = provider.build_request_body(&request);
+    let body = provider.build_request_body(&request).expect("body");
     let tools = body["tools"].as_array().expect("tools array");
     assert_eq!(tools[0]["function"]["name"], "ping");
     assert_eq!(body["tool_choice"], "required");
+  }
+
+  fn thinking_request(model: &str, thinking: ThinkingConfig) -> ProviderRequest {
+    ProviderRequest {
+      model: model.to_string(),
+      messages: vec![],
+      stream: false,
+      parameters: std::collections::HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: Some(thinking),
+      response_format: None,
+    }
+  }
+
+  #[test]
+  fn thinking_maps_to_stepfun_reasoning_effort() {
+    let provider = StepFunProvider::new("test-key", None).unwrap();
+    let effort = |model: &str, thinking: ThinkingConfig| {
+      provider
+        .build_request_body(&thinking_request(model, thinking))
+        .expect("body")
+        .get("reasoning_effort")
+        .cloned()
+    };
+    assert_eq!(
+      effort("step-5-preview", ThinkingConfig::Medium),
+      Some(json!("medium"))
+    );
+    assert_eq!(
+      effort("step-3.7-flash", ThinkingConfig::High),
+      Some(json!("high"))
+    );
+    assert_eq!(
+      effort("step-5-preview", ThinkingConfig::Effort("minimal".into())),
+      Some(json!("low"))
+    );
+    // 2603 has no `medium`.
+    assert_eq!(
+      effort("step-3.5-flash-2603", ThinkingConfig::Medium),
+      Some(json!("high"))
+    );
+    assert_eq!(
+      effort("step-3.5-flash-2603", ThinkingConfig::Low),
+      Some(json!("low"))
+    );
+    assert_eq!(effort("step-5-preview", ThinkingConfig::Auto), None);
+  }
+
+  #[test]
+  fn disabling_thinking_on_stepfun_is_an_error() {
+    let provider = StepFunProvider::new("test-key", None).unwrap();
+    let result = provider.build_request_body(&thinking_request(
+      "step-5-preview",
+      ThinkingConfig::Disabled,
+    ));
+    assert!(matches!(result, Err(LLMError::ConfigurationError { .. })));
+  }
+
+  #[test]
+  fn response_reasoning_is_read_from_either_field() {
+    let message: StepFunMessage = serde_json::from_value(json!({
+      "role": "assistant",
+      "content": "391",
+      "reasoning_content": "17 * 23 = 391"
+    }))
+    .unwrap();
+    assert_eq!(message.reasoning_content.as_deref(), Some("17 * 23 = 391"));
+    let message: StepFunMessage = serde_json::from_value(json!({
+      "role": "assistant",
+      "content": "391",
+      "reasoning": "17 * 23"
+    }))
+    .unwrap();
+    assert_eq!(message.reasoning.as_deref(), Some("17 * 23"));
   }
 
   #[test]
