@@ -23,12 +23,22 @@ on:
         required: false
         default: ""
       image:
-        description: "Also run the billed image jobs (text-to-image on OpenAI, Google, DashScope, GLM, StepFun; image-to-image on OpenAI, DashScope; Gemini chat image)"
+        description: "Also run the billed image jobs (text-to-image on OpenAI, Google, DashScope, GLM; image-to-image on OpenAI, DashScope; Gemini chat image)"
         type: boolean
         required: false
         default: false
       video:
         description: "Also run the billed text-to-video jobs (DashScope Wan, MiniMax Hailuo, Kling); minutes each"
+        type: boolean
+        required: false
+        default: false
+      audio:
+        description: "Also run the billed speech jobs (TTS / ASR on OpenAI, StepFun, Google, MiniMax, DashScope)"
+        type: boolean
+        required: false
+        default: false
+      multimodal:
+        description: "Also run the vision jobs (image-understanding chat on each provider)"
         type: boolean
         required: false
         default: false
@@ -74,6 +84,9 @@ jobs:
       # Y6.6 text-to-video: only on a manual run with `video` ticked —
       # each job is billed and takes minutes, so never nightly.
       YANSHI_LIVE_VIDEO_TESTS: ${{ inputs.video && '1' || '' }}
+      # Speech and vision: manual runs only, like image and video.
+      YANSHI_LIVE_AUDIO_TESTS: ${{ inputs.audio && '1' || '' }}
+      YANSHI_LIVE_MULTIMODAL_TESTS: ${{ inputs.multimodal && '1' || '' }}
       KLING_API_KEY: ${{ secrets.KLING_API_KEY }}
       KLING_VIDEO_BASE_URL: ${{ secrets.KLING_VIDEO_BASE_URL }}
       MINIMAX_VIDEO_BASE_URL: ${{ secrets.MINIMAX_VIDEO_BASE_URL }}

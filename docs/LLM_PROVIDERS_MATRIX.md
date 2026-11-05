@@ -342,6 +342,9 @@ image-to-image on OpenAI and DashScope Wan (both from Alibaba's sample
 image),
 and a Gemini chat reply that carries an image. The `llm-live.yml`
 manual run has an `image` checkbox for them.
+`YANSHI_LIVE_AUDIO_TESTS` (TTS / ASR) and `YANSHI_LIVE_MULTIMODAL_TESTS`
+(image-understanding chat) have the `audio` and `multimodal` checkboxes;
+like `image` and `video`, they never run nightly.
 
 Text-to-video (Y6.6) has one billed job per vendor under
 `YANSHI_LIVE_VIDEO_TESTS`: `dashscope_wan_text_to_video_live` (`wan2.7-t2v`,
