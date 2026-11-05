@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::{asr, clone, tts};
+use super::{asr, tts};
 
 #[derive(Args)]
 pub struct AudioArgs {
@@ -29,19 +29,6 @@ enum AudioCommands {
     #[arg(long, default_value = "text")]
     format: String,
   },
-  /// Voice cloning (experimental - not yet implemented)
-  #[command(hide = true)]
-  Clone {
-    text: String,
-    file_id: String,
-    output: String,
-    #[arg(short, long)]
-    model: Option<String>,
-    #[arg(long)]
-    sample_text: Option<String>,
-    #[arg(long, default_value = "wav")]
-    format: String,
-  },
   Tts {
     input: String,
     voice: String,
@@ -67,14 +54,6 @@ pub async fn dispatch(args: AudioArgs) -> anyhow::Result<()> {
       output,
       format,
     } => asr::execute(file_path, model, format, language, prompt, output).await,
-    AudioCommands::Clone {
-      model,
-      text,
-      file_id,
-      sample_text: _,
-      format,
-      output,
-    } => clone::execute(file_id, text, model, format, output).await,
     AudioCommands::Tts {
       model,
       voice,

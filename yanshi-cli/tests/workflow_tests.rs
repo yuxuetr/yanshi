@@ -1135,7 +1135,7 @@ nodes:
     parameters:
       skill: "/opt/yanshi/skills/review-skill"
       message: "Review this PR"
-      model: "step-2-mini"
+      model: "step-3.5-flash"
       allowed_tools: ["read_file", "search"]
 "#,
   )
@@ -1168,7 +1168,7 @@ fn cli_workflow_validate_explain_permissions_skill_agent_node() {
     .stdout(predicate::str::contains(
       "skill: /opt/yanshi/skills/review-skill",
     ))
-    .stdout(predicate::str::contains("model: step-2-mini"))
+    .stdout(predicate::str::contains("model: step-3.5-flash"))
     .stdout(predicate::str::contains(
       "allowed_tools: [read_file, search]",
     ))
@@ -1405,7 +1405,7 @@ async fn test_simple_two_step_llm_workflow() {
     run_if: None,
     initial_inputs: {
       let mut map = HashMap::new();
-      map.insert("model".to_string(), FlowValue::Json(json!("step-2-mini")));
+      map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
       map
     },
   };
@@ -1442,7 +1442,7 @@ async fn test_conditional_workflow_runs() {
     run_if: None,
     initial_inputs: {
       let mut map = HashMap::new();
-      map.insert("model".to_string(), FlowValue::Json(json!("step-2-mini")));
+      map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
       map.insert(
         "prompt".to_string(),
         FlowValue::Json(json!(
@@ -1495,7 +1495,7 @@ async fn test_conditional_workflow_skips() {
     run_if: None,
     initial_inputs: {
       let mut map = HashMap::new();
-      map.insert("model".to_string(), FlowValue::Json(json!("step-2-mini")));
+      map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
       map.insert(
         "prompt".to_string(),
         FlowValue::Json(json!(
@@ -1560,7 +1560,7 @@ async fn test_parallel_map_workflow() {
       run_if: None,
       initial_inputs: {
         let mut map = HashMap::new();
-        map.insert("model".to_string(), FlowValue::Json(json!("step-2-mini")));
+        map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
         map
       },
     },
@@ -1637,7 +1637,7 @@ async fn test_stateful_while_loop_workflow() {
       run_if: None,
       initial_inputs: {
         let mut map = HashMap::new();
-        map.insert("model".to_string(), FlowValue::Json(json!("step-2-mini")));
+        map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
         map
       },
     },

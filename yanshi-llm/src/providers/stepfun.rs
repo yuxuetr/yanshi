@@ -624,71 +624,8 @@ impl StreamingResponse for StepFunStreamingResponse {
 // STEPFUN SPECIALIZED APIS
 // =============================================================================
 //
-// This section provides specialized support for StepFun's image generation,
-// audio synthesis, and voice processing APIs beyond standard chat completions.
-
-/// Image generation parameters for text2image
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Text2ImageRequest {
-  pub model: String,
-  pub prompt: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub size: Option<String>, // "1024x1024", "512x512", "1280x800", etc.
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub n: Option<u32>, // Currently only supports 1
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub response_format: Option<String>, // "b64_json" or "url"
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub seed: Option<i32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub steps: Option<u32>, // 1-100
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub cfg_scale: Option<f32>, // 1-10
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub style_reference: Option<StyleReference>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StyleReference {
-  pub source_url: String, // URL or base64
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub weight: Option<f32>, // (0, 2], default 1
-}
-
-/// Image-to-image generation parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Image2ImageRequest {
-  pub model: String,
-  pub prompt: String,
-  pub source_url: String, // URL or base64
-  pub source_weight: f32, // (0, 1]
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub size: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub n: Option<u32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub response_format: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub seed: Option<i32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub steps: Option<u32>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub cfg_scale: Option<f32>,
-}
-
-/// Image edit parameters (multipart form data)
-#[derive(Debug, Clone)]
-pub struct ImageEditRequest {
-  pub model: String,
-  pub image_data: Vec<u8>, // Binary image data
-  pub image_filename: String,
-  pub prompt: String,
-  pub seed: Option<i32>,
-  pub steps: Option<u32>,              // Default 28
-  pub cfg_scale: Option<f32>,          // Default 6
-  pub size: Option<String>,            // "512x512", "768x768", "1024x1024"
-  pub response_format: Option<String>, // "b64_json" or "url"
-}
+// This section provides specialized support for StepFun's audio synthesis,
+// speech recognition and voice processing APIs beyond standard chat completions.
 
 /// Text-to-speech parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -735,25 +672,6 @@ pub struct ASRRequest {
   pub response_format: String, // "json", "text", "srt", "vtt"
   pub audio_data: Vec<u8>,
   pub filename: String,
-}
-
-/// Image generation response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageGenerationResponse {
-  pub created: u64,
-  pub data: Vec<ImageData>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageData {
-  pub finish_reason: String, // "success" or "content_filtered"
-  pub seed: i32,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub image: Option<String>, // Base64 when response_format is "b64_json"
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub url: Option<String>, // URL when response_format is "url"
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub b64_json: Option<String>, // Alternative field name for base64
 }
 
 /// Voice cloning response
@@ -835,134 +753,6 @@ impl StepFunSpecializedClient {
     );
     crate::trace_context::inject_into_headers(&mut headers);
     Ok(headers)
-  }
-
-  /// Generate image from text prompt
-  pub async fn text_to_image(&self, request: Text2ImageRequest) -> Result<ImageGenerationResponse> {
-    use reqwest::header::{CONTENT_TYPE, HeaderValue};
-
-    let url = format!("{}/images/generations", self.base_url);
-
-    let mut headers = self.build_auth_headers()?;
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-    let response = self
-      .client
-      .post(&url)
-      .headers(headers)
-      .json(&request)
-      .send()
-      .await?;
-
-    if !response.status().is_success() {
-      let status_code = response.status().as_u16();
-      let error_text = response.text().await.unwrap_or_default();
-      return Err(LLMError::HttpError {
-        status_code,
-        message: error_text,
-      });
-    }
-
-    let result: ImageGenerationResponse = response.json().await?;
-    Ok(result)
-  }
-
-  /// Transform image using another image as reference
-  pub async fn image_to_image(
-    &self,
-    request: Image2ImageRequest,
-  ) -> Result<ImageGenerationResponse> {
-    use reqwest::header::{CONTENT_TYPE, HeaderValue};
-
-    let url = format!("{}/images/image2image", self.base_url);
-
-    let mut headers = self.build_auth_headers()?;
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-    let response = self
-      .client
-      .post(&url)
-      .headers(headers)
-      .json(&request)
-      .send()
-      .await?;
-
-    if !response.status().is_success() {
-      let status_code = response.status().as_u16();
-      let error_text = response.text().await.unwrap_or_default();
-      return Err(LLMError::HttpError {
-        status_code,
-        message: error_text,
-      });
-    }
-
-    let result: ImageGenerationResponse = response.json().await?;
-    Ok(result)
-  }
-
-  /// Edit image with text instructions
-  pub async fn edit_image(&self, request: ImageEditRequest) -> Result<ImageGenerationResponse> {
-    let url = format!("{}/images/edits", self.base_url);
-
-    let form = reqwest::multipart::Form::new()
-      .text("model", request.model.clone())
-      .text("prompt", request.prompt.clone())
-      .part(
-        "image",
-        reqwest::multipart::Part::bytes(request.image_data)
-          .file_name(request.image_filename)
-          .mime_str("image/jpeg")?,
-      );
-
-    let form = if let Some(seed) = request.seed {
-      form.text("seed", seed.to_string())
-    } else {
-      form
-    };
-
-    let form = if let Some(steps) = request.steps {
-      form.text("steps", steps.to_string())
-    } else {
-      form
-    };
-
-    let form = if let Some(cfg_scale) = request.cfg_scale {
-      form.text("cfg_scale", cfg_scale.to_string())
-    } else {
-      form
-    };
-
-    let form = if let Some(size) = request.size {
-      form.text("size", size)
-    } else {
-      form
-    };
-
-    let form = if let Some(response_format) = request.response_format {
-      form.text("response_format", response_format)
-    } else {
-      form
-    };
-
-    let response = self
-      .client
-      .post(&url)
-      .headers(self.build_auth_headers()?)
-      .multipart(form)
-      .send()
-      .await?;
-
-    if !response.status().is_success() {
-      let status_code = response.status().as_u16();
-      let error_text = response.text().await.unwrap_or_default();
-      return Err(LLMError::HttpError {
-        status_code,
-        message: error_text,
-      });
-    }
-
-    let result: ImageGenerationResponse = response.json().await?;
-    Ok(result)
   }
 
   /// Convert text to speech
@@ -1127,66 +917,6 @@ impl StepFunSpecializedClient {
   }
 }
 
-/// Builder for Text2Image requests
-pub struct Text2ImageBuilder {
-  request: Text2ImageRequest,
-}
-
-impl Text2ImageBuilder {
-  pub fn new(model: &str, prompt: &str) -> Self {
-    Self {
-      request: Text2ImageRequest {
-        model: model.to_string(),
-        prompt: prompt.to_string(),
-        size: None,
-        n: None,
-        response_format: None,
-        seed: None,
-        steps: None,
-        cfg_scale: None,
-        style_reference: None,
-      },
-    }
-  }
-
-  pub fn size(mut self, size: &str) -> Self {
-    self.request.size = Some(size.to_string());
-    self
-  }
-
-  pub fn response_format(mut self, format: &str) -> Self {
-    self.request.response_format = Some(format.to_string());
-    self
-  }
-
-  pub fn seed(mut self, seed: i32) -> Self {
-    self.request.seed = Some(seed);
-    self
-  }
-
-  pub fn steps(mut self, steps: u32) -> Self {
-    self.request.steps = Some(steps);
-    self
-  }
-
-  pub fn cfg_scale(mut self, scale: f32) -> Self {
-    self.request.cfg_scale = Some(scale);
-    self
-  }
-
-  pub fn style_reference(mut self, source_url: &str, weight: Option<f32>) -> Self {
-    self.request.style_reference = Some(StyleReference {
-      source_url: source_url.to_string(),
-      weight,
-    });
-    self
-  }
-
-  pub fn build(self) -> Text2ImageRequest {
-    self.request
-  }
-}
-
 /// Builder for TTS requests
 pub struct TTSBuilder {
   request: TTSRequest,
@@ -1271,34 +1001,8 @@ impl TTSBuilder {
 // ============================================================================
 
 use crate::providers::modality::{
-  AsrProvider, AsrRequest, AsrResponse, GeneratedImage, Image2ImageProvider,
-  Image2ImageRequest as ModalityImage2ImageRequest, ImageEditProvider,
-  ImageEditRequest as ModalityImageEditRequest,
-  ImageGenerationResponse as ModalityImageGenerationResponse, Text2ImageProvider,
-  Text2ImageRequest as ModalityText2ImageRequest, TtsProvider, TtsRequest, TtsResponse,
+  AsrProvider, AsrRequest, AsrResponse, TtsProvider, TtsRequest, TtsResponse,
 };
-
-fn into_modality_image_response(
-  stepfun: ImageGenerationResponse,
-) -> ModalityImageGenerationResponse {
-  let images = stepfun
-    .data
-    .into_iter()
-    .map(|data| GeneratedImage {
-      // StepFun uses either `image` (legacy field) or `b64_json` for base64;
-      // collapse both onto the modality-level `b64_json` slot to keep the
-      // contract minimal.
-      url: data.url,
-      b64_json: data.b64_json.or(data.image),
-      seed: Some(data.seed),
-    })
-    .collect();
-  ModalityImageGenerationResponse {
-    created: stepfun.created,
-    images,
-    metadata: None,
-  }
-}
 
 fn tts_mime_type_for(response_format: Option<&str>) -> &'static str {
   match response_format {
@@ -1354,88 +1058,6 @@ impl TtsProvider for StepFunSpecializedClient {
     };
     let audio = self.text_to_speech(stepfun_request).await?;
     Ok(TtsResponse { audio, mime_type })
-  }
-}
-
-#[async_trait]
-impl Text2ImageProvider for StepFunSpecializedClient {
-  fn name(&self) -> &str {
-    "stepfun"
-  }
-
-  async fn generate(
-    &self,
-    request: ModalityText2ImageRequest,
-  ) -> Result<ModalityImageGenerationResponse> {
-    let stepfun_request = Text2ImageRequest {
-      model: request.model,
-      prompt: request.prompt,
-      size: request.size,
-      n: request.n,
-      response_format: request.response_format,
-      seed: request.seed,
-      steps: request.steps,
-      cfg_scale: request.cfg_scale,
-      style_reference: None,
-    };
-    Ok(into_modality_image_response(
-      self.text_to_image(stepfun_request).await?,
-    ))
-  }
-}
-
-#[async_trait]
-impl Image2ImageProvider for StepFunSpecializedClient {
-  fn name(&self) -> &str {
-    "stepfun"
-  }
-
-  async fn transform(
-    &self,
-    request: ModalityImage2ImageRequest,
-  ) -> Result<ModalityImageGenerationResponse> {
-    let stepfun_request = Image2ImageRequest {
-      model: request.model,
-      prompt: request.prompt,
-      source_url: request.source_url,
-      source_weight: request.source_weight,
-      size: request.size,
-      n: request.n,
-      response_format: request.response_format,
-      seed: request.seed,
-      steps: request.steps,
-      cfg_scale: request.cfg_scale,
-    };
-    Ok(into_modality_image_response(
-      self.image_to_image(stepfun_request).await?,
-    ))
-  }
-}
-
-#[async_trait]
-impl ImageEditProvider for StepFunSpecializedClient {
-  fn name(&self) -> &str {
-    "stepfun"
-  }
-
-  async fn edit(
-    &self,
-    request: ModalityImageEditRequest,
-  ) -> Result<ModalityImageGenerationResponse> {
-    let stepfun_request = ImageEditRequest {
-      model: request.model,
-      image_data: request.image_data,
-      image_filename: request.image_filename,
-      prompt: request.prompt,
-      seed: request.seed,
-      steps: request.steps,
-      cfg_scale: request.cfg_scale,
-      size: request.size,
-      response_format: request.response_format,
-    };
-    Ok(into_modality_image_response(
-      self.edit_image(stepfun_request).await?,
-    ))
   }
 }
 
@@ -1598,22 +1220,6 @@ mod tests {
   }
 
   #[test]
-  fn test_text2image_builder() {
-    let request = Text2ImageBuilder::new("step-2x-large", "A beautiful landscape")
-      .size("1024x1024")
-      .response_format("b64_json")
-      .seed(12345)
-      .steps(50)
-      .cfg_scale(7.5)
-      .build();
-
-    assert_eq!(request.model, "step-2x-large");
-    assert_eq!(request.prompt, "A beautiful landscape");
-    assert_eq!(request.size, Some("1024x1024".to_string()));
-    assert_eq!(request.seed, Some(12345));
-  }
-
-  #[test]
   fn test_tts_builder() {
     let request = TTSBuilder::new("step-tts-mini", "Hello world", "default_voice")
       .response_format("mp3")
@@ -1643,59 +1249,10 @@ mod tests {
     }
     let _: Box<dyn AsrProvider> = Box::new(make());
     let _: Box<dyn TtsProvider> = Box::new(make());
-    let _: Box<dyn Text2ImageProvider> = Box::new(make());
-    let _: Box<dyn Image2ImageProvider> = Box::new(make());
-    let _: Box<dyn ImageEditProvider> = Box::new(make());
 
     // Also assert each trait reports the canonical provider name.
     let asr: Box<dyn AsrProvider> = Box::new(make());
     assert_eq!(asr.name(), "stepfun");
-  }
-
-  #[test]
-  fn modality_to_stepfun_image_response_translates_url_and_b64() {
-    // Verifies the `into_modality_image_response` shape adapter: both
-    // the `url` and `b64_json` (or legacy `image`) fields surface
-    // through the modality envelope.
-    let stepfun_response = ImageGenerationResponse {
-      created: 1234,
-      data: vec![
-        ImageData {
-          finish_reason: "success".into(),
-          seed: 42,
-          image: None,
-          url: Some("https://cdn.example/a.png".into()),
-          b64_json: None,
-        },
-        ImageData {
-          finish_reason: "success".into(),
-          seed: 99,
-          image: Some("legacy-b64".into()),
-          url: None,
-          b64_json: None,
-        },
-        ImageData {
-          finish_reason: "success".into(),
-          seed: 7,
-          image: None,
-          url: None,
-          b64_json: Some("modern-b64".into()),
-        },
-      ],
-    };
-    let modality = into_modality_image_response(stepfun_response);
-    assert_eq!(modality.created, 1234);
-    assert_eq!(modality.images.len(), 3);
-    assert_eq!(
-      modality.images[0].url.as_deref(),
-      Some("https://cdn.example/a.png")
-    );
-    assert_eq!(modality.images[0].b64_json, None);
-    assert_eq!(modality.images[0].seed, Some(42));
-    // Legacy `image` field collapses onto `b64_json`.
-    assert_eq!(modality.images[1].b64_json.as_deref(), Some("legacy-b64"));
-    // Modern `b64_json` field passes through.
-    assert_eq!(modality.images[2].b64_json.as_deref(), Some("modern-b64"));
   }
 
   #[test]

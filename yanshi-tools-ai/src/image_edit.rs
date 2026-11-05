@@ -47,7 +47,7 @@ impl Tool for ImageEditTool {
       "properties": {
         "model": {
           "type": "string",
-          "description": "Image-edit model name from the model registry (e.g. \"dall-e-2\", \"step-1x-edit\")."
+          "description": "Image-edit model name from the model registry (e.g. \"dall-e-2\", \"gpt-image-2\")."
         },
         "image_data": {
           "type": "string",

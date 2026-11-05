@@ -85,24 +85,6 @@ fn build_stepfun_asr(api_key: &str, base_url: Option<String>) -> Result<Box<dyn 
 fn build_stepfun_tts(api_key: &str, base_url: Option<String>) -> Result<Box<dyn TtsProvider>> {
   Ok(Box::new(StepFunSpecializedClient::new(api_key, base_url)?))
 }
-fn build_stepfun_text2image(
-  api_key: &str,
-  base_url: Option<String>,
-) -> Result<Box<dyn Text2ImageProvider>> {
-  Ok(Box::new(StepFunSpecializedClient::new(api_key, base_url)?))
-}
-fn build_stepfun_image2image(
-  api_key: &str,
-  base_url: Option<String>,
-) -> Result<Box<dyn Image2ImageProvider>> {
-  Ok(Box::new(StepFunSpecializedClient::new(api_key, base_url)?))
-}
-fn build_stepfun_image_edit(
-  api_key: &str,
-  base_url: Option<String>,
-) -> Result<Box<dyn ImageEditProvider>> {
-  Ok(Box::new(StepFunSpecializedClient::new(api_key, base_url)?))
-}
 fn build_openai_asr(api_key: &str, base_url: Option<String>) -> Result<Box<dyn AsrProvider>> {
   Ok(Box::new(OpenAIAsrProvider::new(api_key, base_url)?))
 }
@@ -236,8 +218,6 @@ const TTS_PROVIDERS: &[(&str, Ctor<dyn TtsProvider>)] = &[
   ("mock", build_mock_tts),
 ];
 const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
-  ("stepfun", build_stepfun_text2image),
-  ("step", build_stepfun_text2image),
   ("openai", build_openai_text2image),
   ("google", build_google_text2image),
   ("dashscope", build_dashscope_text2image),
@@ -245,15 +225,11 @@ const TEXT2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Text2ImageProvider>)] = &[
   ("mock", build_mock_text2image),
 ];
 const IMAGE2IMAGE_PROVIDERS: &[(&str, Ctor<dyn Image2ImageProvider>)] = &[
-  ("stepfun", build_stepfun_image2image),
-  ("step", build_stepfun_image2image),
   ("openai", build_openai_image2image),
   ("dashscope", build_dashscope_image2image),
   ("mock", build_mock_image2image),
 ];
 const IMAGE_EDIT_PROVIDERS: &[(&str, Ctor<dyn ImageEditProvider>)] = &[
-  ("stepfun", build_stepfun_image_edit),
-  ("step", build_stepfun_image_edit),
   ("openai", build_openai_image_edit),
   ("mock", build_mock_image_edit),
 ];
@@ -462,7 +438,7 @@ mod tests {
     let err = unsupported_vendor::<()>("openai", "text-to-video").unwrap_err();
     let msg = err.to_string();
     assert!(
-      msg.contains("implements: ASR, TTS, text-to-image, image-to-image, image-edit"),
+      msg.contains("implements: ASR, TTS"),
       "should list openai's existing modality support: {msg}"
     );
   }
@@ -478,18 +454,9 @@ mod tests {
   }
 
   #[test]
-  fn implemented_modalities_for_stepfun_covers_all_five() {
-    let modalities = implemented_modalities_for("stepfun");
-    assert_eq!(
-      modalities,
-      vec![
-        "ASR",
-        "TTS",
-        "text-to-image",
-        "image-to-image",
-        "image-edit"
-      ]
-    );
+  fn implemented_modalities_for_stepfun_are_speech_only() {
+    // StepFun shut down its image endpoints on 2026-10-10.
+    assert_eq!(implemented_modalities_for("stepfun"), vec!["ASR", "TTS"]);
   }
 
   #[test]
@@ -516,13 +483,13 @@ mod tests {
 
   #[test]
   fn unsupported_vendor_message_for_text_to_video_names_the_modality() {
-    // stepfun implements the other 5 modalities but not text-to-video.
+    // stepfun implements speech only.
     let err = unsupported_vendor::<()>("stepfun", "text-to-video").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("stepfun"), "vendor missing: {msg}");
     assert!(msg.contains("text-to-video"), "modality missing: {msg}");
     assert!(
-      msg.contains("implements: ASR, TTS, text-to-image, image-to-image, image-edit"),
+      msg.contains("implements: ASR, TTS"),
       "should list stepfun's other implemented modalities: {msg}"
     );
   }

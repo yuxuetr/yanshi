@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// as multipart form data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageEditRequest {
-  /// Model identifier (e.g. `"step-1x-edit"`, `"dall-e-2"`).
+  /// Model identifier (e.g. `"dall-e-2"`, `"gpt-image-2"`).
   pub model: String,
   /// Raw image bytes to be edited.
   pub image_data: Vec<u8>,

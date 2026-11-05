@@ -136,7 +136,7 @@ mod tests {
   async fn execute_rejects_missing_source_url() {
     let tool = Image2ImageTool::new();
     let err = tool
-      .execute(json!({"model": "step-1x-edit", "prompt": "make it blue"}))
+      .execute(json!({"model": "gpt-image-2", "prompt": "make it blue"}))
       .await
       .expect_err("missing source_url must fail params validation");
     assert!(matches!(err, ToolError::InvalidParams { .. }));

@@ -220,7 +220,7 @@ const OPENAI_SUCCESS: &str = r#"{"id":"chatcmpl-test","object":"chat.completion"
 const ANTHROPIC_SUCCESS: &str = r#"{"id":"msg_test","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":1}}"#;
 const GOOGLE_SUCCESS: &str = r#"{"candidates":[{"content":{"parts":[{"text":"ok"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}"#;
 const MOONSHOT_SUCCESS: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"moonshot-v1-8k","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}"#;
-const STEPFUN_SUCCESS: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"step-1-8k","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}"#;
+const STEPFUN_SUCCESS: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"step-3.5-flash","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}"#;
 
 // -----------------------------------------------------------------------------
 // Success-path consistency: every provider returns text + StopReason::Stop +
@@ -289,7 +289,7 @@ async fn stepfun_success_path() {
   let provider =
     StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
   let response = provider
-    .execute(&provider_request("step-1-8k"))
+    .execute(&provider_request("step-3.5-flash"))
     .await
     .expect("ok");
   assert_text(&response.content, "ok");
@@ -315,7 +315,7 @@ const ANTHROPIC_TOOL_CALL: &str = r#"{"id":"msg_test","type":"message","role":"a
 // the provider adapter overrides to `ToolCalls` when functionCall parts exist.
 const GOOGLE_TOOL_CALL: &str = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Tokyo"}}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}"#;
 const MOONSHOT_TOOL_CALL: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"moonshot-v1-8k","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
-const STEPFUN_TOOL_CALL: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"step-1-8k","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
+const STEPFUN_TOOL_CALL: &str = r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"step-3.5-flash","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
 
 // -----------------------------------------------------------------------------
 // Tool-calling consistency: every provider parses a model-issued tool call
@@ -383,7 +383,7 @@ async fn stepfun_tool_call_path() {
   let provider =
     StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
   let response = provider
-    .execute(&provider_request_with_tools("step-1-8k"))
+    .execute(&provider_request_with_tools("step-3.5-flash"))
     .await
     .expect("ok");
   assert_tool_call(&response.tool_calls, "get_weather", "Tokyo");
@@ -459,7 +459,7 @@ async fn stepfun_maps_401_to_http_error() {
   assert_status_maps_to_http_error(401, |base_url| async move {
     let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
       .expect("provider");
-    provider.execute(&provider_request("step-1-8k")).await
+    provider.execute(&provider_request("step-3.5-flash")).await
   })
   .await;
 }
@@ -517,7 +517,7 @@ async fn stepfun_json_schema_request_sets_native_response_format() {
   let provider =
     StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
   provider
-    .execute(&provider_request_with_json_schema("step-1-8k"))
+    .execute(&provider_request_with_json_schema("step-3.5-flash"))
     .await
     .expect("ok");
   let sent = captured.lock().await.clone().expect("request captured");
@@ -899,11 +899,11 @@ async fn moonshot_streaming_path() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stepfun_streaming_path() {
-  let base_url = spawn_streaming_mock_server(openai_compat_stream_events("step-1-8k")).await;
+  let base_url = spawn_streaming_mock_server(openai_compat_stream_events("step-3.5-flash")).await;
   let provider =
     StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
   let stream = provider
-    .execute_streaming(&provider_request_streaming("step-1-8k"))
+    .execute_streaming(&provider_request_streaming("step-3.5-flash"))
     .await
     .expect("stream");
   assert_stream_yields_hello_world(stream).await;
@@ -1029,11 +1029,11 @@ async fn moonshot_streaming_tool_call_path() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stepfun_streaming_tool_call_path() {
   let base_url =
-    spawn_streaming_mock_server(openai_compat_tool_call_stream_events("step-1-8k")).await;
+    spawn_streaming_mock_server(openai_compat_tool_call_stream_events("step-3.5-flash")).await;
   let provider =
     StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url)).expect("provider");
   let stream = provider
-    .execute_streaming(&provider_request_streaming("step-1-8k"))
+    .execute_streaming(&provider_request_streaming("step-3.5-flash"))
     .await
     .expect("stream");
   assert_stream_yields_get_weather_tokyo_tool_call(stream).await;
@@ -1215,7 +1215,7 @@ async fn stepfun_multimodal_path() {
     let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
       .expect("provider");
     let response = provider
-      .execute(&provider_request_multimodal_openai_style("step-1-8k"))
+      .execute(&provider_request_multimodal_openai_style("step-3.5-flash"))
       .await
       .expect("ok");
     assert_text(&response.content, "ok");
@@ -1285,7 +1285,7 @@ async fn run_stepfun_status(status: u16) {
   assert_status_maps_to_http_error(status, |base_url| async move {
     let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
       .expect("provider");
-    provider.execute(&provider_request("step-1-8k")).await
+    provider.execute(&provider_request("step-3.5-flash")).await
   })
   .await;
 }
@@ -1494,7 +1494,10 @@ async fn stepfun_tool_choice_all_modes() {
     let provider = StepFunProvider::with_client(no_proxy_client(), "test-key", Some(base_url))
       .expect("provider");
     let _ = provider
-      .execute(&provider_request_with_choice("step-1-8k", choice.clone()))
+      .execute(&provider_request_with_choice(
+        "step-3.5-flash",
+        choice.clone(),
+      ))
       .await
       .expect("ok");
     let captured = captured.lock().await;
@@ -1766,7 +1769,7 @@ async fn drive_all_providers_through_success_path()
   out.push((
     "stepfun",
     provider
-      .execute(&provider_request("step-1-8k"))
+      .execute(&provider_request("step-3.5-flash"))
       .await
       .expect("stepfun ok"),
   ));
@@ -1875,7 +1878,7 @@ async fn cross_provider_tool_call_paths_produce_uniform_canonical_shape() {
   responses.push((
     "stepfun",
     provider
-      .execute(&provider_request_with_tools("step-1-8k"))
+      .execute(&provider_request_with_tools("step-3.5-flash"))
       .await
       .expect("stepfun tool ok"),
   ));
@@ -1972,7 +1975,7 @@ async fn drive_all_providers_through_status(status: u16) -> Vec<(&'static str, L
   errors.push((
     "stepfun",
     provider
-      .execute(&provider_request("step-1-8k"))
+      .execute(&provider_request("step-3.5-flash"))
       .await
       .expect_err("stepfun must surface error"),
   ));
@@ -2064,11 +2067,11 @@ async fn cross_provider_streaming_paths_yield_uniform_hello_world_concatenation(
     .expect("moonshot stream");
   assert_stream_yields_hello_world(stream).await;
 
-  let base_url = spawn_streaming_mock_server(openai_compat_stream_events("step-1-8k")).await;
+  let base_url = spawn_streaming_mock_server(openai_compat_stream_events("step-3.5-flash")).await;
   let provider =
     StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
   let stream = provider
-    .execute_streaming(&provider_request_streaming("step-1-8k"))
+    .execute_streaming(&provider_request_streaming("step-3.5-flash"))
     .await
     .expect("stepfun stream");
   assert_stream_yields_hello_world(stream).await;
@@ -2192,7 +2195,7 @@ async fn cross_provider_multimodal_paths_produce_uniform_response_shape() {
   responses.push((
     "stepfun",
     provider
-      .execute(&provider_request_multimodal_openai_style("step-1-8k"))
+      .execute(&provider_request_multimodal_openai_style("step-3.5-flash"))
       .await
       .expect("stepfun multimodal ok"),
   ));
@@ -2295,7 +2298,7 @@ async fn drive_all_providers_through_tool_choice(
   let provider =
     StepFunProvider::with_client(no_proxy_client(), "k", Some(base_url)).expect("stepfun provider");
   let _ = provider
-    .execute(&provider_request_with_choice("step-1-8k", choice))
+    .execute(&provider_request_with_choice("step-3.5-flash", choice))
     .await
     .expect("stepfun tool_choice ok");
   let raw = captured

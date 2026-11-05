@@ -13,7 +13,7 @@ pub async fn execute(
   max_tokens: Option<u32>,
   output: Option<String>,
 ) -> Result<()> {
-  let model = model.unwrap_or_else(|| "step-1v-8k".to_string());
+  let model = model.unwrap_or_else(|| "step-1o-turbo-vision".to_string());
 
   println!("👁️  Yanshi Image Understanding");
   println!("Model: {}", model);
