@@ -335,6 +335,12 @@ YANSHI_LIVE_AUDIO_TESTS=1
 YANSHI_LIVE_VIDEO_TESTS=1
 ```
 
+`YANSHI_LIVE_IMAGE_TESTS` gates the billed image jobs: text-to-image
+through the modality dispatcher on OpenAI, Google, DashScope and GLM,
+StepFun's own image path, image-to-image on OpenAI and DashScope Wan,
+and a Gemini chat reply that carries an image. The `llm-live.yml`
+manual run has an `image` checkbox for them.
+
 Text-to-video (Y6.6) has one billed job per vendor under
 `YANSHI_LIVE_VIDEO_TESTS`: `dashscope_wan_text_to_video_live` (`wan2.7-t2v`,
 2 s at 720P), `minimax_hailuo_text_to_video_live` (`MiniMax-Hailuo-2.3`,

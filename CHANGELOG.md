@@ -1737,6 +1737,9 @@ _New entries go here. Will roll into the next tag (likely
   / 4.5), marks them all as supporting thinking (before, `.thinking()` on
   any Claude model was refused), and leaves `temperature` null on models
   that reject non-default sampling parameters.
+- The `llm-live.yml` manual run has an `image` checkbox that sets
+  `YANSHI_LIVE_IMAGE_TESTS`, so the billed image jobs can run on demand
+  like the video ones; nightly runs still skip them.
 
 ### Removed
 

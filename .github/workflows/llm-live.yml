@@ -22,6 +22,11 @@ on:
         description: "Comma-separated subset (openai,anthropic,google,moonshot,stepfun,glm); empty = all"
         required: false
         default: ""
+      image:
+        description: "Also run the billed image jobs (text-to-image on OpenAI, Google, DashScope, GLM, StepFun; image-to-image on OpenAI, DashScope; Gemini chat image)"
+        type: boolean
+        required: false
+        default: false
       video:
         description: "Also run the billed text-to-video jobs (DashScope Wan, MiniMax Hailuo, Kling); minutes each"
         type: boolean
@@ -63,6 +68,9 @@ jobs:
       # (note the `i` in `minimaxi`, this is 海螺 AI's official host).
       # Default cheap model: `MiniMax-M2`.
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      # Image generation: only on a manual run with `image` ticked —
+      # billed per image, so never nightly.
+      YANSHI_LIVE_IMAGE_TESTS: ${{ inputs.image && '1' || '' }}
       # Y6.6 text-to-video: only on a manual run with `video` ticked —
       # each job is billed and takes minutes, so never nightly.
       YANSHI_LIVE_VIDEO_TESTS: ${{ inputs.video && '1' || '' }}
