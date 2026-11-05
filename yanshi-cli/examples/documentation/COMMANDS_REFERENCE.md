@@ -6,7 +6,7 @@ Complete reference for all Yanshi CLI commands, parameters, and usage patterns.
 
 ### `yanshi image generate` (alias: `gen`)
 
-Generate images from text descriptions using StepFun's image generation models.
+Generate images from text descriptions. The default model is OpenAI's `gpt-image-2` (needs `OPENAI_API_KEY`); any registry model of type `text_to_image` works — list them with `yanshi llm models --type text_to_image`.
 
 #### Syntax
 ```bash
@@ -20,25 +20,22 @@ yanshi image generate <PROMPT> --output <OUTPUT_FILE> [OPTIONS]
 #### Optional Parameters
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--model`, `-m` | `step-1x-medium` | Model name (`step-1x-medium`, `step-2x-large`) |
-| `--size`, `-s` | `1024x1024` | Image dimensions (`512x512`, `768x768`, `1024x1024`, `1280x800`) |
+| `--model`, `-m` | `gpt-image-2` | Model name (e.g. `gpt-image-2`, `imagen-4.0-generate-preview-06-06`, `wan2.5-t2i-preview`) |
+| `--size`, `-s` | `1024x1024` | Image dimensions (supported sizes depend on the model) |
 | `--format`, `-f` | `b64_json` | Response format (`b64_json`, `url`) |
-| `--steps` | `30` | Number of inference steps (10-100, higher = better quality) |
-| `--cfg-scale` | `7.5` | CFG scale for prompt adherence (1.0-20.0) |
-| `--seed` | Random | Seed for reproducible generation (integer) |
+| `--steps` | `20` | Inference steps (only honored by diffusion-style models) |
+| `--cfg-scale` | `7.5` | CFG scale (only honored by diffusion-style models) |
+| `--seed` | Random | Seed for reproducible generation, where the model supports it |
 
 #### Examples
 ```bash
 # Basic image generation
 yanshi image generate "A sunset over mountains" --output sunset.png
 
-# High quality with specific parameters
+# Explicit model and size
 yanshi image generate "Cyberpunk cityscape with neon lights" \
-  --model step-2x-large \
-  --size 1280x800 \
-  --steps 50 \
-  --cfg-scale 8.0 \
-  --seed 42 \
+  --model gpt-image-2 \
+  --size 1536x1024 \
   --output cyberpunk.png
 
 # Using alias
@@ -47,7 +44,7 @@ yanshi image gen "Abstract art" --output abstract.png
 
 ### `yanshi image understand` (alias: `analyze`)
 
-Analyze and describe images using StepFun's vision models.
+Analyze and describe images using a vision-capable chat model.
 
 #### Syntax
 ```bash
@@ -61,7 +58,7 @@ yanshi image understand <IMAGE_PATH> <PROMPT> [OPTIONS]
 #### Optional Parameters
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--model`, `-m` | `step-1v-8k` | Vision model name |
+| `--model`, `-m` | — | Vision model name (e.g. `step-1o-turbo-vision`, `step-3.7-flash`) |
 | `--temperature`, `-t` | `0.7` | Response creativity (0.0-1.0) |
 | `--max-tokens` | `800` | Maximum response length |
 | `--output`, `-o` | Console | Save analysis to file |
@@ -74,7 +71,7 @@ yanshi image understand photo.jpg "What do you see in this image?"
 # Detailed analysis with output file
 yanshi image understand artwork.png \
   "Analyze the artistic style, composition, and color palette" \
-  --model step-1v-8k \
+  --model step-1o-turbo-vision \
   --temperature 0.8 \
   --max-tokens 1000 \
   --output detailed_analysis.md
@@ -168,18 +165,6 @@ yanshi audio asr lecture.wav \
   --output subtitles.srt
 ```
 
-### `yanshi audio clone` (alias: `audio voice-clone`)
-
-Clone voice from reference audio (currently shows implementation status).
-
-#### Syntax
-```bash
-yanshi audio clone <REFERENCE_AUDIO> <TEXT> --output <OUTPUT_FILE> [OPTIONS]
-```
-
-#### Status
-⚠️ **Implementation Note**: Voice cloning requires file upload functionality that's not yet implemented in the StepFun client. The command will show an informative message about the implementation status.
-
 ## 💬 LLM Commands
 
 ### `yanshi llm prompt`
@@ -208,7 +193,7 @@ yanshi llm prompt "Explain quantum computing"
 
 # With specific model and parameters
 yanshi llm prompt "Write a Python function to sort a list" \
-  --model step-2-16k \
+  --model step-3.5-flash \
   --temperature 0.5 \
   --max-tokens 500 \
   --output code_example.py
@@ -220,9 +205,9 @@ The standalone `yanshi llm chat` command has been retired. Yanshi
 interactions should go through Skills, Agents, or workflows:
 
 ```bash
-yanshi skill chat ./skills/code-reviewer --model step-2-16k
-yanshi skill run ./skills/code-reviewer --message "Review this" --model step-2-16k
-yanshi workflow run flow.yml --model step-2-16k
+yanshi skill chat ./skills/code-reviewer --model step-3.5-flash
+yanshi skill run ./skills/code-reviewer --message "Review this" --model step-3.5-flash
+yanshi workflow run flow.yml --model step-3.5-flash
 ```
 
 ## ⚙️ Configuration Commands
@@ -374,7 +359,6 @@ For faster usage, many commands have shorter aliases:
 | `image understand` | `image analyze` |
 | `audio text-to-speech` | `audio tts` |
 | `audio speech-to-text` | `audio asr` |
-| `audio voice-clone` | `audio clone` |
 | `llm prompt` | `llm p` |
 
 ## 💡 Usage Tips
@@ -396,7 +380,6 @@ For faster usage, many commands have shorter aliases:
 
 ### Performance Tips
 - Use smaller image sizes for testing
-- Lower `--steps` for faster generation
 - Use appropriate models for your use case
 
 ### Scripting

@@ -70,11 +70,11 @@ fi
 
 # Check 5: Quick API Test (if API key is available)
 echo ""
-echo "🌐 Testing API connectivity..."
-if [[ -n "$STEP_API_KEY" ]]; then
+echo "🌐 Testing API connectivity (image generation via gpt-image-2)..."
+if [[ -n "$OPENAI_API_KEY" ]]; then
     # Test with a minimal API call that should fail quickly if there are issues
     TEMP_OUTPUT=$(mktemp)
-    if timeout 30s yanshi image generate "test validation" --size 512x512 --output "$TEMP_OUTPUT" >/dev/null 2>&1; then
+    if timeout 30s yanshi image generate "test validation" --output "$TEMP_OUTPUT" >/dev/null 2>&1; then
         if [[ -f "$TEMP_OUTPUT" ]] && [[ -s "$TEMP_OUTPUT" ]]; then
             check_success "API connectivity confirmed - test image generated"
             rm -f "$TEMP_OUTPUT"
@@ -84,7 +84,7 @@ if [[ -n "$STEP_API_KEY" ]]; then
     else
         # Check if it's an API key issue specifically
         if yanshi image generate "test" --output "$TEMP_OUTPUT" 2>&1 | grep -q "401\|Incorrect API key"; then
-            check_error "API key is invalid. Please check your STEP_API_KEY."
+            check_error "API key is invalid. Please check your OPENAI_API_KEY."
         else
             check_warning "API test failed - this might be due to network, credits, or temporary service issues"
             echo "   Try running the full test suite for more detailed diagnostics."
@@ -92,7 +92,7 @@ if [[ -n "$STEP_API_KEY" ]]; then
     fi
     rm -f "$TEMP_OUTPUT"
 else
-    check_warning "Skipping API test - no API key configured"
+    check_warning "Skipping API test - OPENAI_API_KEY not configured"
 fi
 
 # Check 6: File System Permissions

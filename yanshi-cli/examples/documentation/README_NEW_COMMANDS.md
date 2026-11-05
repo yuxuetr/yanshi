@@ -1,6 +1,6 @@
 # Yanshi CLI: New Image and Audio Commands
 
-This document describes the newly implemented image and audio commands that provide a unified, discoverable CLI interface for StepFun's specialized APIs.
+This document describes the newly implemented image and audio commands that provide a unified, discoverable CLI interface for image and audio models.
 
 ## 🎯 Overview
 
@@ -10,8 +10,10 @@ Previously, image generation, image understanding, and audio processing required
 
 ### Prerequisites
 ```bash
-# Set your StepFun API key
+# StepFun key: audio (step-tts-mini / step-asr) and StepFun vision models
 export STEP_API_KEY="your-stepfun-api-key"
+# OpenAI key: image generation defaults to gpt-image-2
+export OPENAI_API_KEY="your-openai-api-key"
 
 # Install Yanshi CLI (if not already installed)
 cargo install --path yanshi-cli
@@ -38,11 +40,8 @@ yanshi image generate "A serene mountain landscape at sunset" --output landscape
 
 # Advanced generation with parameters
 yanshi image generate "A cyberpunk cityscape with neon lights" \
-  --model step-1x-medium \
+  --model gpt-image-2 \
   --size 1024x1024 \
-  --steps 50 \
-  --cfg-scale 7.5 \
-  --seed 42 \
   --output cyberpunk.png
 
 # Using alias
@@ -56,7 +55,7 @@ yanshi image understand photo.jpg "Describe this image in detail"
 
 # Advanced analysis with output
 yanshi image understand artwork.png "Analyze the artistic style and composition" \
-  --model step-1v-8k \
+  --model step-1o-turbo-vision \
   --temperature 0.7 \
   --max-tokens 500 \
   --output analysis.md
@@ -104,38 +103,25 @@ yanshi audio asr lecture.wav --format srt --output subtitles.srt
 yanshi audio asr meeting.wav --output meeting_notes.txt
 ```
 
-### Voice Cloning
-```bash
-# Note: Voice cloning requires file upload functionality
-# Currently shows informative implementation message
-yanshi audio clone reference.wav "Hello from the cloned voice!" --output cloned.mp3
-
-# Using alias
-yanshi audio clone sample.wav "Test message" --output test_clone.mp3
-```
-
 ## 📊 Command Comparison
 
 | Feature | Before | After |
 |---------|--------|-------|
-| **Image Generation** | `cargo run --example stepfun_image_demo -- args...` | `yanshi image generate "prompt" --output image.png` |
 | **Image Understanding** | `yanshi llm prompt "text" --file image.jpg` | `yanshi image understand image.jpg "question"` |
 | **Text-to-Speech** | `./stepfun_tts_cli.sh` (limited) | `yanshi audio tts "text" --output audio.mp3` |
 | **Speech Recognition** | `./stepfun_asr_cli.sh` (limited) | `yanshi audio asr audio.wav --output transcript.txt` |
-| **Voice Cloning** | `./stepfun_voice_cloning_cli.sh` | `yanshi audio clone ref.wav "text" --output clone.mp3` |
 
 ## 🎛️ Available Parameters
 
 ### Image Generate
-- `--model`: Model name (default: step-1x-medium)
+- `--model`: Model name (default: gpt-image-2)
 - `--size`: Image dimensions (default: 1024x1024)
-- `--steps`: Inference steps (default: 30)
-- `--cfg-scale`: Guidance scale (default: 7.5)
+- `--steps` / `--cfg-scale`: Only honored by diffusion-style models
 - `--seed`: Random seed for reproducibility
 - `--format`: Output format (b64_json, url)
 
 ### Image Understand
-- `--model`: Model name (default: step-1v-8k)
+- `--model`: Vision model name (e.g. step-1o-turbo-vision, step-3.7-flash)
 - `--temperature`: Creativity (0.0-1.0)
 - `--max-tokens`: Response length
 - `--output`: Save analysis to file
@@ -186,9 +172,6 @@ export STEP_API_KEY="your-actual-api-key"
 cargo install --path yanshi-cli --force
 ```
 
-### Voice Cloning Not Working
-Voice cloning requires file upload functionality that's not yet implemented in the StepFun client. The command will show an informative error message explaining the next steps.
-
 ## 📝 Command Aliases
 
 All commands support shorter aliases for convenience:
@@ -199,7 +182,6 @@ All commands support shorter aliases for convenience:
 | `image understand` | `image analyze` |
 | `audio text-to-speech` | `audio tts` |
 | `audio speech-to-text` | `audio asr` |
-| `audio voice-clone` | `audio clone` |
 
 ## 🎉 Benefits
 
@@ -214,7 +196,7 @@ All commands support shorter aliases for convenience:
 
 ## 🚀 Next Steps
 
-1. **Set your API key**: Get a StepFun API key and export it
+1. **Set your API keys**: Export `STEP_API_KEY` (audio, StepFun models) and `OPENAI_API_KEY` (image generation)
 2. **Try the commands**: Start with simple examples
 3. **Read the help**: Use `--help` on any command for details
 4. **Integrate workflows**: Use these commands in your automation scripts

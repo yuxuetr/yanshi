@@ -7,11 +7,8 @@ Welcome to the Yanshi CLI examples directory! This collection demonstrates all c
 ```
 examples/
 ├── README.md                     # This file - main overview and quick start
-├── assets/                      # Sample files and generated outputs
-│   ├── sample_images/          # Test images for understanding
-│   ├── stepfun_image_examples/ # Generated image samples
-│   ├── stepfun_vision_examples/
-│   └── yanshi_demo_output/  # Generated demo files
+├── assets/                      # Sample inputs
+│   └── sample_images/          # Test images for understanding
 ├── documentation/              # Detailed guides and references
 │   ├── GETTING_STARTED.md     # Step-by-step setup guide
 │   ├── COMMANDS_REFERENCE.md  # Complete command reference
@@ -23,7 +20,6 @@ examples/
 │   └── quick_validation.sh    # Quick API connectivity test
 └── tutorials/                  # Step-by-step learning examples
     ├── 01_quick_start.sh      # Basic usage tutorial
-    ├── 02_image_workflows.sh  # Image generation and understanding
     └── 03_audio_workflows.sh  # Audio processing examples
 ```
 
@@ -36,8 +32,11 @@ examples/
    cargo install --path yanshi-cli
    ```
 
-2. **Set your StepFun API key**:
+2. **Set your provider API keys**:
    ```bash
+   # Image generation defaults to OpenAI's gpt-image-2
+   export OPENAI_API_KEY="your-openai-api-key-here"
+   # Audio (step-tts-mini / step-asr) and StepFun chat models
    export STEP_API_KEY="your-stepfun-api-key-here"
    ```
 
@@ -52,7 +51,7 @@ examples/
 # Test connectivity first (recommended)
 ./tests/test_api_connectivity.sh
 
-# Generate an image
+# Generate an image (defaults to gpt-image-2)
 yanshi image generate "A serene mountain landscape at sunset" --output mountain.png
 
 # Understand an image
@@ -93,19 +92,16 @@ Complete setup guide from installation to first API call
 ### 2. **Basic Tutorial** → [`tutorials/01_quick_start.sh`](tutorials/01_quick_start.sh)
 Learn core commands with hands-on examples
 
-### 3. **Image Workflows** → [`tutorials/02_image_workflows.sh`](tutorials/02_image_workflows.sh)
-Master image generation and understanding
-
-### 4. **Audio Processing** → [`tutorials/03_audio_workflows.sh`](tutorials/03_audio_workflows.sh)
+### 3. **Audio Processing** → [`tutorials/03_audio_workflows.sh`](tutorials/03_audio_workflows.sh)
 Explore text-to-speech and speech recognition
 
-### 5. **Commands Reference** → [`documentation/COMMANDS_REFERENCE.md`](documentation/COMMANDS_REFERENCE.md)
+### 4. **Commands Reference** → [`documentation/COMMANDS_REFERENCE.md`](documentation/COMMANDS_REFERENCE.md)
 Complete parameter guide for all commands
 
 ## 🎯 Key Features Demonstrated
 
 ### ✅ **Unified CLI Experience**
-- All StepFun capabilities in one command
+- Text, vision, image and audio capabilities across providers in one command
 - Consistent parameter patterns
 - Comprehensive help system
 
@@ -153,7 +149,7 @@ yanshi audio asr recording.wav --format json --output transcript.json
 
 ## 🎉 What's New
 
-**Yanshi CLI now provides a unified interface for all StepFun capabilities!**
+**Yanshi CLI now provides a unified interface for text, vision, image and audio models!**
 
 ❌ **Before**: Separate Rust binaries, complex shell scripts, inconsistent interfaces  
 ✅ **After**: One CLI, discoverable commands, professional UX

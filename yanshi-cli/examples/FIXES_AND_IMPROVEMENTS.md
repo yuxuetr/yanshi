@@ -80,15 +80,17 @@ This document summarizes the fixes and improvements made to the Yanshi CLI examp
 - ✅ Tiered testing approach
 
 ### **🔄 Dependent on API Key**
-The following require a valid StepFun API key to test:
-- Image generation functionality
-- Image understanding capabilities  
+The following require a valid StepFun API key (`STEP_API_KEY`) to test:
+- Image understanding capabilities (e.g. `step-1o-turbo-vision`)
 - Text-to-speech conversion
 - Speech recognition features
 
-### **📋 Test Results with Valid API Key**
-When user provides valid `STEP_API_KEY`, all functionality should work:
-- Image generation: ~15-30 seconds, produces PNG files
+Image generation defaults to OpenAI's `gpt-image-2` and needs `OPENAI_API_KEY`
+(StepFun retired its image-generation APIs on 2026-10-10).
+
+### **📋 Test Results with Valid API Keys**
+With valid `STEP_API_KEY` and `OPENAI_API_KEY`, all functionality should work:
+- Image generation: ~15-60 seconds, produces PNG files
 - Image understanding: ~10-20 seconds, generates text analysis
 - Text-to-speech: ~5-15 seconds, creates MP3 audio files
 - Speech recognition: ~5-10 seconds, produces text transcripts
@@ -100,8 +102,9 @@ When user provides valid `STEP_API_KEY`, all functionality should work:
 # 1. Install Yanshi CLI
 cargo install --path yanshi-cli
 
-# 2. Set API key
+# 2. Set API keys
 export STEP_API_KEY="your-stepfun-api-key-here"
+export OPENAI_API_KEY="your-openai-api-key-here"  # image generation
 
 # 3. Run diagnostics
 ./tests/test_api_connectivity.sh

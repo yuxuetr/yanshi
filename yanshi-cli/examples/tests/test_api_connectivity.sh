@@ -120,7 +120,7 @@ cd "$TEST_DIR"
 
 echo "   Testing with minimal text generation..."
 if timeout 30s yanshi llm prompt "Say hello" \
-    --model step-2-mini \
+    --model step-3.5-flash \
     --max-tokens 10 \
     --output test_response.txt >/dev/null 2>&1; then
     

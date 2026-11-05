@@ -51,7 +51,7 @@ nodes:
     input_mapping:
       prompt: "{{ nodes.search_loop.outputs.paper_content }}"
     parameters:
-      model: "step-2-mini"
+      model: "step-3.5-flash"
       system: "You are a research paper summarizer. Summarize the following paper content in about 200 words."
 
   - id: detect_language
@@ -60,7 +60,7 @@ nodes:
     input_mapping:
       summary: "{{ nodes.summarize_paper.outputs.output }}"
     parameters:
-      model: "step-2-mini"
+      model: "step-3.5-flash"
       prompt: "Is the following text primarily in English or another language? Respond with only the word 'english' or 'other'.\n\nText: {{ summary }}"
 
   - id: translate_summary
@@ -70,7 +70,7 @@ nodes:
     input_mapping:
       summary_to_translate: "{{ nodes.summarize_paper.outputs.output }}"
     parameters:
-      model: "step-2-mini"
+      model: "step-3.5-flash"
       prompt: "Translate the following summary into Chinese:\n\n{{ summary_to_translate }}"
 
   - id: final_summary_selector

@@ -216,61 +216,54 @@ Common issues and solutions for Yanshi CLI usage.
 
 ## 🎨 Image Generation Issues
 
+`yanshi image generate` defaults to OpenAI's `gpt-image-2`, so it needs
+`OPENAI_API_KEY` (StepFun retired its image-generation APIs on 2026-10-10).
+List the other registered image models with
+`yanshi llm models --type text_to_image`.
+
 ### "Image generation failed" with no specific error
 **Problem**: Generic generation failure
 
 **Solutions**:
-1. **Simplify the prompt**:
+1. **Check the key for the model's provider**:
+   ```bash
+   echo ${OPENAI_API_KEY:+set}  # gpt-image-2
+   ```
+
+2. **Simplify the prompt**:
    ```bash
    yanshi image generate "simple red circle" --output test.png
    ```
 
-2. **Try different parameters**:
-   ```bash
-   yanshi image generate "your prompt" \
-     --size 512x512 \
-     --steps 20 \
-     --cfg-scale 7.0 \
-     --output test.png
-   ```
-
-3. **Check prompt content** for potentially problematic terms
+3. **Check prompt content** for terms the provider's safety filter may reject
 
 ### Generated images are low quality
 **Problem**: Poor image quality results
 
 **Solutions**:
-1. **Increase steps**:
+1. **Use a larger size**:
    ```bash
-   yanshi image generate "prompt" --steps 40 --output high_quality.png
+   yanshi image generate "prompt" --size 1536x1024 --output large.png
    ```
 
-2. **Adjust CFG scale**:
+2. **Improve prompt specificity**:
    ```bash
-   yanshi image generate "prompt" --cfg-scale 8.5 --output better.png
+   yanshi image generate "detailed, high quality, professional photo of [subject]" --output detailed.png
    ```
 
-3. **Use larger size**:
-   ```bash
-   yanshi image generate "prompt" --size 1024x1024 --output large.png
-   ```
-
-4. **Improve prompt specificity**:
-   ```bash
-   yanshi image generate "detailed, high quality, professional photo of [subject]"
-   ```
+3. **Try another model**: `--steps` / `--cfg-scale` only affect diffusion-style
+   models; for `gpt-image-2` the prompt and size are the main levers.
 
 ### "Invalid size" errors
 **Problem**: Unsupported image dimensions
 
 **Solutions**:
-1. **Use standard sizes**:
-   - `512x512`, `768x768`, `1024x1024`
-   - `1280x800` for widescreen
+1. **Use sizes the model supports** — for `gpt-image-2`:
+   `1024x1024`, `1536x1024`, `1024x1536`
 
-2. **Check available sizes**:
+2. **Check the command's options**:
    ```bash
-   yanshi image generate --help | grep -A 10 "size"
+   yanshi image generate --help
    ```
 
 ## 🎵 Audio Processing Issues
@@ -445,7 +438,7 @@ Common issues and solutions for Yanshi CLI usage.
 1. **Check internet connection speed**
 2. **Use smaller parameters for testing**:
    ```bash
-   yanshi image generate "test" --size 512x512 --steps 20
+   yanshi image generate "test" --output /tmp/test.png
    ```
 
 3. **Monitor system resources** (CPU, memory, disk)
@@ -492,7 +485,7 @@ yanshi --version
 yanshi --help
 
 # Test API connectivity (minimal)
-yanshi image generate "test" --size 512x512 --output /tmp/test.png
+yanshi image generate "test" --output /tmp/test.png
 ```
 
 ## 📞 Getting Additional Help

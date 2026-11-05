@@ -47,12 +47,9 @@ echo "----------------------------"
 echo "Command: yanshi image generate 'A serene mountain landscape at sunset' --output mountain.png"
 
 if yanshi image generate "A serene mountain landscape at sunset" \
-    --model step-1x-medium \
+    --model gpt-image-2 \
     --size 1024x1024 \
-    --output mountain.png \
-    --steps 30 \
-    --cfg-scale 7.5 \
-    --seed 42; then
+    --output mountain.png; then
     echo "✅ Image generation command executed successfully"
     if [ -f "mountain.png" ]; then
         echo "✅ Image file created: mountain.png ($(stat -f%z mountain.png) bytes)"
@@ -60,7 +57,7 @@ if yanshi image generate "A serene mountain landscape at sunset" \
         echo "⚠️  Image file not found (API may have failed)"
     fi
 else
-    echo "❌ Image generation failed (likely API key issue)"
+    echo "❌ Image generation failed (gpt-image-2 needs a valid OPENAI_API_KEY)"
 fi
 echo
 
@@ -87,7 +84,7 @@ if [ -n "$test_image" ]; then
     echo "Command: yanshi image understand '$test_image' 'Describe this image in detail'"
     
     if yanshi image understand "$test_image" "Describe this image in detail, including colors, composition, and mood." \
-        --model step-1v-8k \
+        --model step-1o-turbo-vision \
         --temperature 0.7 \
         --max-tokens 500 \
         --output image_analysis.md; then
@@ -163,34 +160,8 @@ else
 fi
 echo
 
-# Test 5: Voice Cloning (Expected to show informative error)
-echo "🎭 Test 5: Voice Cloning"
-echo "------------------------"
-echo "Command: yanshi audio clone reference.wav 'Test cloning' --output cloned.mp3"
-
-if [ -n "$test_audio" ]; then
-    echo "Testing with audio file: $test_audio"
-    if yanshi audio clone "$test_audio" "This is a test of voice cloning functionality." \
-        --model step-speech \
-        --format mp3 \
-        --output cloned.mp3 2>&1; then
-        echo "⚠️  Voice cloning unexpectedly succeeded (this should show implementation message)"
-    else
-        echo "✅ Voice cloning showed expected implementation message"
-    fi
-else
-    echo "ℹ️  No test audio available - testing with dummy file"
-    if yanshi audio clone "nonexistent.wav" "Test text" \
-        --output cloned.mp3 2>&1; then
-        echo "⚠️  Voice cloning unexpectedly succeeded"
-    else
-        echo "✅ Voice cloning properly handled missing file or showed implementation message"
-    fi
-fi
-echo
-
-# Test 6: Command Help and Discovery
-echo "📖 Test 6: Command Help and Discovery"
+# Test 5: Command Help and Discovery
+echo "📖 Test 5: Command Help and Discovery"
 echo "-------------------------------------"
 echo "Testing help output for discoverability..."
 
@@ -213,8 +184,8 @@ echo "- Audio TTS: $(yanshi audio tts --help | grep -c 'Options:')"
 echo "- Audio ASR: $(yanshi audio asr --help | grep -c 'Options:')"
 echo
 
-# Test 7: Alias Commands
-echo "🔗 Test 7: Command Aliases"
+# Test 6: Alias Commands
+echo "🔗 Test 6: Command Aliases"
 echo "---------------------------"
 echo "Testing command aliases..."
 
@@ -230,8 +201,6 @@ yanshi audio tts --help >/dev/null 2>&1 && echo "✅ 'tts' alias works" || echo 
 echo "Audio ASR alias:"
 yanshi audio asr --help >/dev/null 2>&1 && echo "✅ 'asr' alias works" || echo "❌ 'asr' alias failed"
 
-echo "Audio clone alias:"
-yanshi audio clone --help >/dev/null 2>&1 && echo "✅ 'clone' alias works" || echo "❌ 'clone' alias failed"
 echo
 
 # Summary
@@ -249,7 +218,7 @@ echo "   • All commands are properly integrated into the CLI"
 echo "   • Help system works correctly for discovery"
 echo "   • Command aliases are functional"
 echo "   • File I/O parameters are properly handled"
-echo "   • Actual API functionality depends on valid STEP_API_KEY"
+echo "   • Actual API functionality depends on valid STEP_API_KEY (audio/vision) and OPENAI_API_KEY (image generation)"
 echo
 echo "🚀 Next steps:"
 echo "   1. Set a real StepFun API key: export STEP_API_KEY='your-real-key'"

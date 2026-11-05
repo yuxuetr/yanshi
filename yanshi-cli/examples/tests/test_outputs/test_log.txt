@@ -1,8 +1,0 @@
-Yanshi CLI Test Suite - Mon Aug 11 22:17:18 CST 2025
-SUCCESS: API key configured
-SUCCESS: Yanshi CLI installed
-SUCCESS: CLI structure validated
-INFO: Test Group: Image Generation
-INFO: Testing: Basic image generation
-COMMAND: yanshi image generate 'A simple red circle on white background' --size 512x512 --output './test_outputs/test_circle.png'
-SUCCESS: Basic image generation - Output file created (286844 bytes)

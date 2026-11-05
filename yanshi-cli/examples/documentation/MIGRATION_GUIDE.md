@@ -14,34 +14,6 @@ This guide helps you migrate from the old fragmented examples to the unified Yan
 
 ## 🔄 Command Migrations
 
-### Image Generation
-
-#### ❌ Old Way (Rust Binary)
-```bash
-# Required compiling separate binary
-cargo run --example stepfun_image_demo -- \
-  step-1x-medium \
-  "A beautiful sunset" \
-  1024x1024 \
-  sunset.png \
-  b64_json
-```
-
-#### ✅ New Way (Unified CLI)  
-```bash
-# No compilation needed, intuitive parameters
-yanshi image generate "A beautiful sunset" \
-  --model step-1x-medium \
-  --size 1024x1024 \
-  --output sunset.png \
-  --format b64_json
-```
-
-**Migration Benefits:**
-- 🎯 **Intuitive**: Named parameters instead of positional arguments
-- 🔍 **Discoverable**: `yanshi image generate --help` shows all options
-- ⚡ **Fast**: No compilation step required
-
 ### Image Understanding
 
 #### ❌ Old Way (Inconsistent)
@@ -49,14 +21,14 @@ yanshi image generate "A beautiful sunset" \
 # Used different command pattern than other image operations
 yanshi llm prompt "Describe this image" \
   --file image.jpg \
-  --model step-1v-8k
+  --model step-1o-turbo-vision
 ```
 
 #### ✅ New Way (Consistent)
 ```bash
 # Dedicated image understanding command
 yanshi image understand image.jpg "Describe this image" \
-  --model step-1v-8k \
+  --model step-1o-turbo-vision \
   --output description.txt
 ```
 
@@ -117,7 +89,6 @@ yanshi audio asr recording.wav \
 ### Old Structure Problems
 ```
 examples/
-├── stepfun_image_demo.rs          # Separate binary
 ├── stepfun_vision_demo.rs         # Another separate binary  
 ├── stepfun_tts_cli.sh            # Shell script
 ├── stepfun_asr_cli.sh            # Another shell script
@@ -139,35 +110,12 @@ examples/
 │   └── quick_validation.sh    # Fast verification
 ├── tutorials/                  # Learning examples
 │   ├── 01_quick_start.sh      # Basic tutorial
-│   ├── 02_image_workflows.sh  # Image processing
 │   └── 03_audio_workflows.sh  # Audio processing
 └── assets/                     # Sample files
-    ├── sample_images/         # Test images
-    └── generated_examples/    # Example outputs
+    └── sample_images/         # Test images
 ```
 
 ## 📝 Script Migration Examples
-
-### Old Script Pattern
-```bash
-#!/bin/bash
-# Old approach - complex setup
-
-# Set variables
-MODEL="step-1x-medium"
-PROMPT="A landscape"
-SIZE="1024x1024"
-OUTPUT="output.png"
-
-# Compile and run
-cargo run --example stepfun_image_demo -- "$MODEL" "$PROMPT" "$SIZE" "$OUTPUT" "b64_json"
-
-# Limited error handling
-if [ $? -ne 0 ]; then
-    echo "Failed"
-    exit 1
-fi
-```
 
 ### New Script Pattern
 ```bash
@@ -176,15 +124,15 @@ fi
 
 set -e  # Exit on error
 
-# Generate image with clear parameters
+# Generate image with clear parameters (defaults to gpt-image-2)
 yanshi image generate "A landscape" \
-    --model step-1x-medium \
     --size 1024x1024 \
     --output landscape.png
 
 # Analyze the generated image
 yanshi image understand landscape.png \
     "Describe the landscape and mood" \
+    --model step-1o-turbo-vision \
     --output analysis.txt
 
 echo "✅ Workflow completed successfully!"
@@ -197,12 +145,6 @@ echo "Generated: landscape.png, analysis.txt"
 - 📋 **Clear Intent**: Self-documenting parameter names
 
 ## ⚡ Quick Migration Checklist
-
-### For Image Generation Users
-- [ ] Replace `cargo run --example stepfun_image_demo` with `yanshi image generate`
-- [ ] Convert positional arguments to named parameters (`--model`, `--size`, `--output`)
-- [ ] Remove compilation steps from scripts
-- [ ] Add error handling for API key issues
 
 ### For Image Understanding Users
 - [ ] Replace `yanshi llm prompt ... --file` with `yanshi image understand`

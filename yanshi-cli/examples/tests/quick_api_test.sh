@@ -16,6 +16,12 @@ if [[ -z "$STEP_API_KEY" ]]; then
     exit 1
 fi
 
+if [[ -z "$OPENAI_API_KEY" ]]; then
+    echo "❌ OPENAI_API_KEY not set (image generation defaults to gpt-image-2)"
+    echo "   Please set your API key: export OPENAI_API_KEY='your-key'"
+    exit 1
+fi
+
 if ! command -v yanshi &> /dev/null; then
     echo "❌ yanshi command not found"
     echo "   Please install: cargo install --path yanshi-cli"
@@ -39,10 +45,8 @@ echo "Command: yanshi image generate 'A serene mountain landscape at sunset' --o
 
 # Add timeout and better error handling
 if timeout 120s yanshi image generate "A simple red circle on white background" \
-    --model step-1x-medium \
-    --size 512x512 \
-    --steps 15 \
-    --cfg-scale 7.0 \
+    --model gpt-image-2 \
+    --size 1024x1024 \
     --output circle.png 2>&1 | tee generation.log; then
     
     if [[ -f "circle.png" && -s "circle.png" ]]; then
@@ -61,7 +65,7 @@ else
     
     # Check for specific error patterns
     if grep -q "401" generation.log 2>/dev/null; then
-        echo "💡 Suggestion: API key may be invalid - check StepFun dashboard"
+        echo "💡 Suggestion: API key may be invalid - gpt-image-2 needs a valid OPENAI_API_KEY"
     elif grep -q "timeout\|connection" generation.log 2>/dev/null; then
         echo "💡 Suggestion: Network issue - check internet connection"
     elif grep -q "rate.limit\|quota" generation.log 2>/dev/null; then
@@ -80,7 +84,7 @@ if [[ -f "circle.png" && -s "circle.png" ]]; then
     
     if timeout 60s yanshi image understand "circle.png" \
         "What do you see in this image? Describe it briefly in one sentence." \
-        --model step-1v-8k \
+        --model step-1o-turbo-vision \
         --max-tokens 100 \
         --temperature 0.7 \
         --output image_analysis.txt 2>&1 | tee understanding.log; then

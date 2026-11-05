@@ -83,7 +83,13 @@ if [[ -z "$STEP_API_KEY" ]]; then
     echo "export STEP_API_KEY=\"your-stepfun-api-key-here\""
     exit 1
 fi
-log_success "API key configured"
+if [[ -z "$OPENAI_API_KEY" ]]; then
+    log_error "OPENAI_API_KEY environment variable not set"
+    echo "Image generation defaults to OpenAI's gpt-image-2:"
+    echo "export OPENAI_API_KEY=\"your-openai-api-key-here\""
+    exit 1
+fi
+log_success "API keys configured"
 
 # Check Yanshi CLI
 if ! command -v yanshi &> /dev/null; then
@@ -115,7 +121,7 @@ echo ""
 log_info "Test Group: Image Generation"
 if test_command \
     "Basic image generation" \
-    "yanshi image generate 'A simple red circle on white background' --size 512x512 --output '$OUTPUT_DIR/test_circle.png'" \
+    "yanshi image generate 'A simple red circle on white background' --output '$OUTPUT_DIR/test_circle.png'" \
     "$OUTPUT_DIR/test_circle.png"; then
     ((PASSED++))
 else
@@ -124,7 +130,7 @@ fi
 
 if test_command \
     "Advanced image generation" \
-    "yanshi image generate 'Cyberpunk cityscape at night with neon lights' --model step-1x-medium --size 768x768 --steps 25 --cfg-scale 7.5 --seed 42 --output '$OUTPUT_DIR/test_cyberpunk.png'" \
+    "yanshi image generate 'Cyberpunk cityscape at night with neon lights' --model gpt-image-2 --size 1536x1024 --output '$OUTPUT_DIR/test_cyberpunk.png'" \
     "$OUTPUT_DIR/test_cyberpunk.png"; then
     ((PASSED++))
 else

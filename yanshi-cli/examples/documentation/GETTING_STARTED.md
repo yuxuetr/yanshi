@@ -7,12 +7,12 @@ This guide will take you from zero to running your first Yanshi commands in just
 ### System Requirements
 - **Rust**: Version 1.70+ (for installation from source)
 - **Operating System**: macOS, Linux, or Windows
-- **Internet Connection**: For API calls to StepFun services
+- **Internet Connection**: For API calls to model providers
 
-### StepFun Account
-1. Visit [StepFun](https://www.stepfun.com/) and create an account
-2. Navigate to API settings and generate an API key
-3. Copy your API key - you'll need it shortly
+### Provider Accounts
+1. **StepFun** ([stepfun.com](https://www.stepfun.com/)) — used by the audio commands (`step-tts-mini`, `step-asr`) and StepFun chat/vision models (`step-3.5-flash`, `step-1o-turbo-vision`)
+2. **OpenAI** — `yanshi image generate` defaults to `gpt-image-2` (StepFun retired its image-generation APIs on 2026-10-10)
+3. Generate an API key in each provider's dashboard — you'll need them shortly
 
 ## 🔧 Installation
 
@@ -44,6 +44,9 @@ cargo build --package yanshi-cli
 ```bash
 # Set API key for current session
 export STEP_API_KEY="your-stepfun-api-key-here"
+
+# Image generation (gpt-image-2)
+export OPENAI_API_KEY="your-openai-api-key-here"
 
 # Add to your shell profile for persistence
 echo 'export STEP_API_KEY="your-stepfun-api-key-here"' >> ~/.bashrc
@@ -81,9 +84,9 @@ yanshi audio --help
 
 ### 2. Test with Simple Commands
 ```bash
-# Generate a simple image (this makes an API call)
+# Generate a simple image (this makes an API call to gpt-image-2)
 yanshi image generate "A red circle on white background" \
-  --size 512x512 \
+  --size 1024x1024 \
   --output my_first_image.png
 
 # Check if the image was created
@@ -103,6 +106,7 @@ ls -la my_first_audio.mp3
 # Analyze the image you just created
 yanshi image understand my_first_image.png \
   "What do you see in this image?" \
+  --model step-1o-turbo-vision \
   --output image_analysis.txt
 
 # Read the analysis
@@ -152,9 +156,8 @@ cd yanshi-cli/examples
 
 ### Ready to Learn More?
 1. **Basic Tutorial**: Run `./tutorials/01_quick_start.sh`
-2. **Image Workflows**: Run `./tutorials/02_image_workflows.sh`  
-3. **Audio Processing**: Run `./tutorials/03_audio_workflows.sh`
-4. **Full Reference**: Read [`COMMANDS_REFERENCE.md`](COMMANDS_REFERENCE.md)
+2. **Audio Processing**: Run `./tutorials/03_audio_workflows.sh`
+3. **Full Reference**: Read [`COMMANDS_REFERENCE.md`](COMMANDS_REFERENCE.md)
 
 ### Ready for Production?
 1. **Test Everything**: Run `./tests/test_all_commands.sh`
@@ -173,9 +176,9 @@ cd yanshi-cli/examples
 - **Solution**: Reinstall with `cargo install --path yanshi-cli --force`
 
 ### "Incorrect API key provided"
-- **Solution**: Double-check your StepFun API key
+- **Solution**: Double-check the key for the provider that serves the model (`OPENAI_API_KEY` for `gpt-image-2`, `STEP_API_KEY` for `step-*` models)
 - **Check**: Ensure no extra spaces or quotes in the key
-- **Verify**: Log into StepFun dashboard and regenerate if needed
+- **Verify**: Log into the provider dashboard and regenerate if needed
 
 ### Command works but no output file
 - **Check**: Permissions in the output directory
@@ -184,8 +187,7 @@ cd yanshi-cli/examples
 
 ### Image generation is very slow
 - **Normal**: First generation may take 15-30 seconds
-- **Optimize**: Use smaller sizes for testing (`--size 512x512`)
-- **Reduce**: Lower `--steps` parameter for faster generation
+- **Optimize**: Keep the default `--size 1024x1024` while testing
 
 ---
 

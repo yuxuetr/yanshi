@@ -77,12 +77,7 @@ if yanshi audio --help >/dev/null 2>&1; then
     else
         echo "❌ 'audio speech-to-text' subcommand NOT found"
     fi
-    
-    if echo "$audio_help" | grep -q "voice-clone"; then
-        echo "✅ 'audio voice-clone' subcommand found"
-    else
-        echo "❌ 'audio voice-clone' subcommand NOT found"
-    fi
+
 else
     echo "❌ 'yanshi audio' command failed"
 fi
@@ -96,7 +91,6 @@ commands=(
     "image understand" 
     "audio text-to-speech"
     "audio speech-to-text"
-    "audio voice-clone"
 )
 
 for cmd in "${commands[@]}"; do
@@ -134,12 +128,6 @@ if yanshi audio asr --help >/dev/null 2>&1; then
 else
     echo "❌ 'audio asr' alias failed"
 fi
-
-if yanshi audio clone --help >/dev/null 2>&1; then
-    echo "✅ 'audio clone' alias works"
-else
-    echo "❌ 'audio clone' alias failed"
-fi
 echo
 
 # Test 6: Parameter validation (without API calls)
@@ -172,7 +160,7 @@ echo
 echo "🔑 Test 7: Error Handling (No API Key)"
 echo "--------------------------------------"
 # Temporarily unset API keys to test error handling
-unset STEPFUN_API_KEY STEP_API_KEY
+unset STEPFUN_API_KEY STEP_API_KEY OPENAI_API_KEY
 
 echo "Testing image generate without API key..."
 if yanshi image generate "test" --output test.png 2>&1 | grep -q "API_KEY.*must be set"; then
@@ -202,7 +190,7 @@ echo "   • Parameter validation is working"
 echo "   • Error messages are informative"
 echo ""
 echo "🚀 Ready for Production Use!"
-echo "   Set STEP_API_KEY and start using the new commands:"
+echo "   Set STEP_API_KEY (audio/vision) and OPENAI_API_KEY (image generation) and start using the new commands:"
 echo ""
 echo "   # Image Generation"
 echo "   yanshi image generate 'A sunset' --output sunset.png"

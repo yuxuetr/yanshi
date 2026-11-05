@@ -89,6 +89,14 @@ if [[ -z "$STEP_API_KEY" ]]; then
     exit 1
 fi
 
+if [[ -z "$OPENAI_API_KEY" ]]; then
+    echo -e "${RED}❌ OPENAI_API_KEY not set${NC}"
+    echo ""
+    echo "Image generation defaults to OpenAI's gpt-image-2:"
+    echo -e "${YELLOW}export OPENAI_API_KEY=\"your-openai-api-key-here\"${NC}"
+    exit 1
+fi
+
 if ! command -v yanshi &> /dev/null; then
     echo -e "${RED}❌ Yanshi CLI not found${NC}"
     echo ""
@@ -126,21 +134,19 @@ explain "Let's create an image from text using AI. This demonstrates the 'text-t
 
 run_command \
     "Generate a simple test image" \
-    "yanshi image generate 'A cheerful robot waving hello, cartoon style' --size 512x512 --output '$TUTORIAL_DIR/hello_robot.png'" \
+    "yanshi image generate 'A cheerful robot waving hello, cartoon style' --output '$TUTORIAL_DIR/hello_robot.png'" \
     "$TUTORIAL_DIR/hello_robot.png"
 
 explain "The image generation process typically takes 15-30 seconds. The AI model interprets your text and creates a corresponding image."
 
 run_command \
     "Generate a more complex image with specific parameters" \
-    "yanshi image generate 'A serene Japanese garden with cherry blossoms, soft lighting, peaceful atmosphere' --model step-1x-medium --size 768x768 --steps 30 --cfg-scale 8.0 --seed 123 --output '$TUTORIAL_DIR/zen_garden.png'" \
+    "yanshi image generate 'A serene Japanese garden with cherry blossoms, soft lighting, peaceful atmosphere' --model gpt-image-2 --size 1536x1024 --output '$TUTORIAL_DIR/zen_garden.png'" \
     "$TUTORIAL_DIR/zen_garden.png"
 
 explain "Notice the additional parameters:"
-echo "  • --model: Specifies which AI model to use"
-echo "  • --steps: Higher values = better quality (but slower)"
-echo "  • --cfg-scale: How closely to follow your prompt"
-echo "  • --seed: Makes results reproducible"
+echo "  • --model: Specifies which AI model to use (default: gpt-image-2)"
+echo "  • --size: Output dimensions supported by the model (1536x1024 = landscape)"
 
 wait_for_user
 
@@ -259,7 +265,7 @@ explain "Let's create a complete creative workflow that combines multiple AI cap
 
 run_command \
     "Create a landscape image" \
-    "yanshi image generate 'A majestic mountain landscape with a crystal-clear lake reflecting snow-capped peaks, golden hour lighting' --size 1024x1024 --steps 35 --output '$TUTORIAL_DIR/final_landscape.png'" \
+    "yanshi image generate 'A majestic mountain landscape with a crystal-clear lake reflecting snow-capped peaks, golden hour lighting' --size 1024x1024 --output '$TUTORIAL_DIR/final_landscape.png'" \
     "$TUTORIAL_DIR/final_landscape.png"
 
 run_command \
@@ -297,7 +303,6 @@ echo ""
 echo "📁 Your tutorial outputs are saved in: $TUTORIAL_DIR"
 echo ""
 echo -e "${CYAN}🚀 Next Steps:${NC}"
-echo "  • Try the image workflow tutorial: ./tutorials/02_image_workflows.sh"
 echo "  • Try the audio processing tutorial: ./tutorials/03_audio_workflows.sh"
 echo "  • Read the commands reference: ./documentation/COMMANDS_REFERENCE.md"
 echo "  • Run comprehensive tests: ./tests/test_all_commands.sh"

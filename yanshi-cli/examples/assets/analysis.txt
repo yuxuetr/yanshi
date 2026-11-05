@@ -1,8 +1,0 @@
-# Image Analysis Results
-
-**Model:** step-1v-8k
-**Image:** test_circle.png
-**Prompt:** What do you see in this image? Describe it briefly.
-
-**Analysis:**
-The image shows a red circular object with a white center, set against a plain, light background. The red portion of the circle appears slightly thicker than the white center. The object has a smooth, clean appearance with no additional details or textures visible.
