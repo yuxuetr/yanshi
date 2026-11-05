@@ -21,9 +21,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde_json::json;
-use yanshi_llm::providers::stepfun::{
-  ASRRequest, StepFunSpecializedClient, TTSBuilder, Text2ImageBuilder,
-};
+use yanshi_llm::providers::stepfun::{ASRRequest, StepFunSpecializedClient, TTSBuilder};
 use yanshi_llm::providers::{
   AnthropicProvider, ContentType, GoogleProvider, LLMProvider, MoonshotProvider, OpenAIProvider,
   ProviderRequest, StepFunProvider, TokenUsage,
