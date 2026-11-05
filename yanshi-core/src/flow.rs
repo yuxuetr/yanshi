@@ -1588,7 +1588,7 @@ impl<'f> FlowExecutor<'f> {
           .await?;
         // F-A6-3: track per-sub-flow node-level failures (see the
         // parallel branch for the design rationale).
-        if sub_flow_result.values().any(|r| r.is_err()) {
+        if sub_flow_result.values().any(is_genuine_failure) {
           err_indexes.push(idx);
         }
         let json_state = serde_json::to_value(sub_flow_result)?;
@@ -1693,7 +1693,8 @@ impl<'f> FlowExecutor<'f> {
             // here so we can emit a top-level `results_summary` that
             // downstream nodes / operators can route on without
             // re-parsing the nested JSON.
-            let had_err = sub_flow_result.values().any(|r| r.is_err());
+            // A `run_if` skip is a choice, not an error (Y8.3).
+            let had_err = sub_flow_result.values().any(is_genuine_failure);
             if had_err {
               err_indexes.push(idx);
             }
@@ -4255,6 +4256,62 @@ mod tests {
     };
 
     assert_eq!(results_array.len(), 5);
+  }
+
+  /// Y8.3: a sub-flow node skipped by its `run_if` is a choice, not a
+  /// failure, so it must not put the item in `err_indexes` (it did, in
+  /// both the sequential and the parallel Map).
+  #[tokio::test]
+  async fn map_items_with_a_run_if_skip_are_not_errors() {
+    use_writable_home();
+    struct Noop;
+    #[async_trait]
+    impl AsyncNode for Noop {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::from([(
+          "done".to_string(),
+          FlowValue::Json(json!(true)),
+        )]))
+      }
+    }
+
+    for parallel in [false, true] {
+      let ran = GraphNode {
+        id: "ran".to_string(),
+        node_type: NodeType::Standard(Arc::new(Noop)),
+        dependencies: vec![],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      };
+      let skipped = GraphNode {
+        id: "skipped".to_string(),
+        node_type: NodeType::Standard(Arc::new(Noop)),
+        dependencies: vec!["ran".to_string()],
+        input_mapping: None,
+        run_if: Some("{{ !nodes.ran.outputs.done }}".to_string()),
+        initial_inputs: HashMap::new(),
+      };
+      let map_node = GraphNode {
+        id: "map_node".to_string(),
+        node_type: NodeType::Map {
+          template: vec![ran, skipped],
+          parallel,
+          max_concurrent: Some(2),
+        },
+        dependencies: vec![],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: HashMap::from([("input_list".to_string(), FlowValue::Json(json!([1, 2])))]),
+      };
+
+      let state = Flow::new(vec![map_node]).run().await.unwrap();
+      let outputs = state.get("map_node").unwrap().as_ref().unwrap();
+      let Some(FlowValue::Json(summary)) = outputs.get("results_summary") else {
+        panic!("results_summary");
+      };
+      assert_eq!(summary["err_indexes"], json!([]), "parallel={parallel}");
+    }
   }
 
   /// W1.1 regression: pre-fix, `execute_map_node_parallel` built each
