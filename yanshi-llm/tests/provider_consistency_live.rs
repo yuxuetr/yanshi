@@ -903,10 +903,15 @@ async fn anthropic_live_adaptive_thinking() {
     response.content,
     response.thinking.as_deref().map_or(0, str::len)
   );
+  let ContentType::Text(answer) = &response.content else {
+    panic!(
+      "anthropic {model}: expected text, got {:?}",
+      response.content
+    );
+  };
   assert!(
-    response.content.contains("391"),
-    "anthropic {model}: expected 391, got {:?}",
-    response.content
+    answer.contains("391"),
+    "anthropic {model}: expected 391, got {answer:?}"
   );
   assert_eq!(response.stop_reason, Some(StopReason::Stop));
 }
