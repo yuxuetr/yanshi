@@ -1405,7 +1405,10 @@ async fn test_simple_two_step_llm_workflow() {
     run_if: None,
     initial_inputs: {
       let mut map = HashMap::new();
-      map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
+      map.insert(
+        "model".to_string(),
+        FlowValue::Json(json!("step-3.5-flash")),
+      );
       map
     },
   };
@@ -1442,7 +1445,10 @@ async fn test_conditional_workflow_runs() {
     run_if: None,
     initial_inputs: {
       let mut map = HashMap::new();
-      map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
+      map.insert(
+        "model".to_string(),
+        FlowValue::Json(json!("step-3.5-flash")),
+      );
       map.insert(
         "prompt".to_string(),
         FlowValue::Json(json!(
@@ -1495,7 +1501,10 @@ async fn test_conditional_workflow_skips() {
     run_if: None,
     initial_inputs: {
       let mut map = HashMap::new();
-      map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
+      map.insert(
+        "model".to_string(),
+        FlowValue::Json(json!("step-3.5-flash")),
+      );
       map.insert(
         "prompt".to_string(),
         FlowValue::Json(json!(
@@ -1560,7 +1569,10 @@ async fn test_parallel_map_workflow() {
       run_if: None,
       initial_inputs: {
         let mut map = HashMap::new();
-        map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
+        map.insert(
+          "model".to_string(),
+          FlowValue::Json(json!("step-3.5-flash")),
+        );
         map
       },
     },
@@ -1637,7 +1649,10 @@ async fn test_stateful_while_loop_workflow() {
       run_if: None,
       initial_inputs: {
         let mut map = HashMap::new();
-        map.insert("model".to_string(), FlowValue::Json(json!("step-3.5-flash")));
+        map.insert(
+          "model".to_string(),
+          FlowValue::Json(json!("step-3.5-flash")),
+        );
         map
       },
     },
