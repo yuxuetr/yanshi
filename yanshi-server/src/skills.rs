@@ -197,6 +197,26 @@ pub async fn run_skill(
     ))
   })?;
 
+  // Y8.5: a skill's `[[workflows]]` run in this process as agent tools,
+  // so they meet the same policy as a workflow submitted to /v1/runs.
+  // A manifest that does not load is left to the executor to report.
+  if let Ok(manifest) = yanshi_skills::SkillLoader::load(&resolved.path) {
+    let definitions =
+      yanshi_config::skill_workflows::load_definitions(&manifest, &resolved.path)
+        .map_err(|e| ApiError::BadRequest(format!("skill '{}': {e:#}", resolved.name)))?;
+    for (name, definition) in &definitions {
+      state
+        .gateway_policy
+        .check_workflow(definition)
+        .map_err(|e| {
+          ApiError::BadRequest(format!(
+            "skill '{}' workflow tool '{name}': {e}",
+            resolved.name
+          ))
+        })?;
+    }
+  }
+
   let workflow = match req.input.as_deref() {
     Some(input) if !input.is_empty() => format!("@skill:{}\n---\n{}", resolved.name, input),
     _ => format!("@skill:{}", resolved.name),

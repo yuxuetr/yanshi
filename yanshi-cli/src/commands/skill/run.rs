@@ -124,7 +124,12 @@ pub async fn execute(args: RunArgs) -> Result<()> {
   let super::workflow_tools::WorkflowTools {
     tools: workflow_tools,
     runs: workflow_runs,
-  } = super::workflow_tools::build(&manifest, dir, Some(resolved_model), &run_base_dir)?;
+  } = super::workflow_tools::build(
+    &manifest,
+    dir,
+    Some(resolved_model),
+    yanshi_core::FlowExecutionConfig::serial().with_run_base_dir(&run_base_dir),
+  )?;
   if !workflow_tools.is_empty() && matches!(output, OutputFormat::Text) {
     println!(
       "🧰 Workflow tools: {}",

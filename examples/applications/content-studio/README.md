@@ -42,6 +42,18 @@ Each tool directory also has an `artifacts.json` (size and SHA-256 per
 file). The planner receives each generator's `Deliverable` (title,
 content, citations, file names), not the runs' full state.
 
+### On the gateway
+
+When the skill is in the gateway's skill index (`YANSHI_SKILLS_INDEX`),
+`POST /v1/skills/content-studio:run` with `{"input": "..."}` runs the same
+planner. Each generator call waits for approval at
+`/v1/runs/{id}/approvals`, since the production profile does not treat a
+workflow tool as idempotent. The files then appear under
+`GET /v1/runs/{id}/artifacts`. The templates must pass the gateway policy,
+so a skill whose workflow uses a host-reaching node is refused at submit
+time. The planner may pass only each template's declared inputs, as plain
+JSON values.
+
 ## Tests
 
 - CI: `cargo test -p yanshi-cli --test content_studio_cli_tests` scripts

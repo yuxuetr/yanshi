@@ -982,7 +982,27 @@ async fn run_skill_agent(
   let _warnings = SkillLoader::validate(&manifest, skill_dir)
     .map_err(|e| anyhow::anyhow!("skill validation failed: {e}"))?;
   let model = manifest.model.resolved_model().to_owned();
-  let mut agent = SkillBuilder::build(&manifest, skill_dir)
+  // Y8.5: the skill's `[[workflows]]` become agent tools, as under
+  // `yanshi skill run`. Their runs share this run's base dir and
+  // cancellation; their files are registered as this run's artifacts.
+  let run_base_dir = ctx
+    .run_base_dir
+    .clone()
+    .unwrap_or_else(default_run_base_dir);
+  let yanshi_config::skill_workflows::WorkflowTools {
+    tools: workflow_tools,
+    runs: workflow_runs,
+  } = yanshi_config::skill_workflows::build(
+    &manifest,
+    skill_dir,
+    Some(&model),
+    server_execution_config(
+      Some(run_base_dir.clone()),
+      ctx.cancellation_token.clone(),
+      ctx.run_max_concurrency,
+    ),
+  )?;
+  let mut agent = SkillBuilder::build_with_extra_tools(&manifest, skill_dir, workflow_tools)
     .await
     .map_err(|e| anyhow::anyhow!("failed to build agent from skill manifest: {e}"))?;
 
@@ -1018,9 +1038,20 @@ async fn run_skill_agent(
   // `ReActAgent` has an inherent `run(&mut self, &str) -> Result<String, _>`
   // that shadows the `AgentRuntime` trait method of the same name for
   // direct calls — UFCS picks the trait method we actually want.
-  let result = AgentRuntime::run(&mut agent, context)
-    .await
-    .map_err(|e| anyhow::anyhow!("skill agent run failed: {e}"))?;
+  let result = AgentRuntime::run(&mut agent, context).await;
+  // Register what the workflow tools made even when the agent then
+  // failed: the files exist and were paid for.
+  for recorded in workflow_runs.take() {
+    crate::artifacts::register_run_artifacts(
+      &ctx.repos,
+      ctx.run_id,
+      &ctx.tenant_id,
+      &recorded.state,
+      &run_base_dir,
+    )
+    .await?;
+  }
+  let result = result.map_err(|e| anyhow::anyhow!("skill agent run failed: {e}"))?;
 
   let next_seq = seq_counter.load(std::sync::atomic::Ordering::SeqCst);
   Ok((result, next_seq))

@@ -31,6 +31,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 async-trait = "0.1"
+# Y8.5: run ids of skill workflow-tool runs.
+uuid = { workspace = true }
 # Used by the diagnostics report builder (doctor): `dirs`/`which` for path +
 # command probes, `reqwest` for the optional server health probe.
 dirs = "5.0"
