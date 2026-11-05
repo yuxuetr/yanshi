@@ -215,18 +215,22 @@ skeleton. A `spec` parts list (`[{id, kind, value}]`) is also checked
 against the source: every part must be drawn as a bipole of its kind and
 labelled with its id. A missing or wrongly drawn part is fed back like a
 compile error. `examples/generators/circuit_diagram.yml` is the sample
-domain template. Y8.4 added two more domains of the same shape, both
-tikz only:
+domain template. Y8.4 added two more domains of the same shape:
 
 - `chemistry`: chemfig, with a spec of molecules (`[{name, formula}]`, or
   `{molecules, reaction: true}` for a `\schemestart` scheme). Each molecule
   must be drawn as `\chemname{\chemfig{…}}{name}`, and its atoms other than
   C and H must match the formula. Skeletal formulas leave C and H
   implicit, but heteroatoms are always written out.
-- `block`: TikZ, with a spec of blocks (`[{id, label}]`) and links
-  (`[{from, to}]`). Each block must be a node named by its id that shows
-  its label. Each link needs a `\draw` path on which `from` comes directly
-  before `to`; a path drawn with `<-` counts reversed.
+- `block`: TikZ or D2, with a spec of blocks (`[{id, label}]`) and links
+  (`[{from, to}]`). In TikZ each block must be a node named by its id that
+  shows its label, and each link needs a `\draw` path on which `from`
+  comes directly before `to`; a path drawn with `<-` counts reversed. In
+  D2 (2026-11-05) each block must be a shape keyed by its id with its
+  label (`ctl: Controller`, or `ctl.label: ...`), and each link a
+  connection `from -> to`, `to <- from` or `<->`, chains included. A
+  shape inside a container counts by its last key. D2 lays the blocks
+  out itself, so the model writes no coordinates.
 
 `d2` (2026-11-05) runs in the OS sandbox unchanged, about 0.1 s per
 diagram; its errors carry `file:line:col`, which the node passes back

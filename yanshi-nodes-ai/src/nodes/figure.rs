@@ -27,12 +27,12 @@
 //!   dna_features_viewer, biopython, networkx. `YANSHI_FIGURE_PYTHON_IMAGE`
 //!   overrides the tag.
 //!
-//! Domains (`domain`, all tikz only) add conventions to the prompt and,
-//! with a `spec`, check the source against it before every render, so a
-//! figure that compiles but leaves something out is sent back too:
-//! `circuit` (Y6.5, circuitikz, a parts list), `chemistry` (Y8.4,
-//! chemfig, molecules with formulas) and `block` (Y8.4, TikZ, blocks and
-//! links). See the module of each.
+//! Domains (`domain`) add conventions to the prompt and, with a `spec`,
+//! check the source against it before every render, so a figure that
+//! compiles but leaves something out is sent back too: `circuit` (Y6.5,
+//! circuitikz, a parts list), `chemistry` (Y8.4, chemfig, molecules with
+//! formulas) and `block` (Y8.4, TikZ or D2, blocks and links). See the
+//! module of each.
 //!
 //! The external renderers run under the OS sandbox
 //! (`yanshi_nodes::common::sandboxed`), writing only inside a per-call
@@ -135,7 +135,7 @@ impl Language {
 enum Domain {
   Circuit(Vec<circuit::Component>),
   Chemistry(chemistry::Scheme),
-  Block(block::Diagram),
+  Block(block::Diagram, Language),
 }
 
 impl Domain {
@@ -143,24 +143,25 @@ impl Domain {
     let domain = match name {
       "circuit" => Self::Circuit(circuit::parse_spec(spec)?),
       "chemistry" => Self::Chemistry(chemistry::parse_spec(spec)?),
-      "block" => Self::Block(block::parse_spec(spec)?),
+      "block" => Self::Block(block::parse_spec(spec)?, language),
       other => {
         return Err(format!(
           "unknown domain '{other}': expected circuit, chemistry or block"
         ));
       }
     };
-    if language != Language::Tikz {
-      return Err(format!("domain {name} needs language tikz"));
+    match (&domain, language) {
+      (_, Language::Tikz) | (Self::Block(..), Language::D2) => Ok(domain),
+      (Self::Block(..), _) => Err(format!("domain {name} needs language tikz or d2")),
+      _ => Err(format!("domain {name} needs language tikz")),
     }
-    Ok(domain)
   }
 
   fn instructions(&self) -> String {
     match self {
       Self::Circuit(parts) => circuit::instructions(parts),
       Self::Chemistry(scheme) => chemistry::instructions(scheme),
-      Self::Block(diagram) => block::instructions(diagram),
+      Self::Block(diagram, language) => block::instructions(diagram, *language),
     }
   }
 
@@ -168,7 +169,7 @@ impl Domain {
     match self {
       Self::Circuit(parts) => circuit::check(source, parts),
       Self::Chemistry(scheme) => chemistry::check(source, scheme),
-      Self::Block(diagram) => block::check(source, diagram),
+      Self::Block(diagram, language) => block::check(source, diagram, *language),
     }
   }
 }
@@ -676,6 +677,22 @@ mod tests {
       Some("! Undefined control sequence.\nl.4 \\drawx\n (0,0)")
     );
     assert_eq!(latex_errors("all good"), None);
+  }
+
+  #[test]
+  fn the_block_domain_takes_tikz_or_d2_and_the_others_tikz_only() {
+    let parse = |name, language| Domain::parse(name, language, None).map(|_| ());
+    assert_eq!(parse("block", Language::D2), Ok(()));
+    assert_eq!(parse("block", Language::Tikz), Ok(()));
+    assert_eq!(
+      parse("block", Language::Typst),
+      Err("domain block needs language tikz or d2".to_string())
+    );
+    assert_eq!(
+      parse("chemistry", Language::D2),
+      Err("domain chemistry needs language tikz".to_string())
+    );
+    assert_eq!(parse("circuit", Language::Tikz), Ok(()));
   }
 
   #[test]

@@ -324,6 +324,10 @@ _New entries go here. Will roll into the next tag (likely
 
 ### Added
 
+- `figure`'s `domain: block` takes `language: d2` as well as `tikz`: the
+  prompt carries D2 conventions and the source is checked against the
+  spec's blocks and links (shapes `id: label`, connections `->` / `<-` /
+  `<->`) before it renders. The other domains stay TikZ-only.
 - **Skill `[[workflows]]` on the gateway (Y8.5).**
   `/v1/skills/{name}:run` hands the skill's workflows to the agent as
   tools, as `yanshi skill run` does (shared `yanshi_config::skill_workflows`).

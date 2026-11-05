@@ -1,16 +1,20 @@
 //! `domain: block` (Y8.4): block diagrams (systems, pipelines, control
-//! loops) in TikZ.
+//! loops) in TikZ or D2.
 //!
 //! With a `spec` (`{blocks: [{id, label}], links: [{from, to, label?}]}`),
-//! the source is checked before it is rendered: every block must be a
-//! TikZ node named by its id and showing its label, and every link a
+//! the source is checked before it is rendered. In TikZ every block must
+//! be a node named by its id and showing its label, and every link a
 //! `\draw` path on which `from` comes right before `to` (a path drawn
-//! with `<-` counts backwards). A violation is fed back to the model like
-//! a compile error.
+//! with `<-` counts backwards). In D2 every block must be a shape keyed by
+//! its id with its label, and every link a connection `from -> to` (or
+//! `to <- from`, or `<->`). A violation is fed back to the model like a
+//! compile error.
 
 use std::collections::HashMap;
 
 use serde_json::Value;
+
+use super::Language;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Block {
@@ -31,22 +35,34 @@ pub(super) struct Diagram {
   links: Vec<Link>,
 }
 
+const TIKZ_CONVENTIONS: &str = "Draw a block diagram with TikZ. Conventions:\n\
+  - \\documentclass[border=4pt]{standalone}, \\usepackage{tikz}, \
+  \\usetikzlibrary{positioning,arrows.meta}, one tikzpicture environment.\n\
+  - Draw each block as a named node, `\\node[draw, rounded corners, minimum width=2.6cm, \
+  minimum height=1cm] (<id>) {<label>};`, using the id as the node name and the label as \
+  its text; place blocks with `right=of <id>` / `below=of <id>`.\n\
+  - Draw each link as its own arrow from block to block, `\\draw[-{Stealth}] (<from>) -- \
+  (<to>);` (use -| or |- for bends, and `node[midway, above]{<label>}` for a label).\n\
+  Skeleton:\n\
+  \\begin{tikzpicture}\n\\node[draw, rounded corners, minimum width=2.6cm, minimum height=1cm] \
+  (in) {Input};\n\\node[draw, rounded corners, minimum width=2.6cm, minimum height=1cm, \
+  right=of in] (out) {Output};\n\\draw[-{Stealth}] (in) -- (out);\n\\end{tikzpicture}\n";
+
+const D2_CONVENTIONS: &str = "Draw a block diagram with D2. Conventions:\n\
+  - Start with `direction: right`.\n\
+  - Declare each block as `<id>: <label>`, using the id as the key and the label as its text \
+  (quote a label that contains a colon).\n\
+  - Draw each link as its own connection from block to block, `<from> -> <to>`, or \
+  `<from> -> <to>: <label>` for a label.\n\
+  Skeleton:\n\
+  direction: right\nin: Input\nout: Output\nin -> out\n";
+
 /// The prompt addendum: conventions, a skeleton, and the diagram.
-pub(super) fn instructions(diagram: &Diagram) -> String {
-  let mut text = String::from(
-    "Draw a block diagram with TikZ. Conventions:\n\
-     - \\documentclass[border=4pt]{standalone}, \\usepackage{tikz}, \
-     \\usetikzlibrary{positioning,arrows.meta}, one tikzpicture environment.\n\
-     - Draw each block as a named node, `\\node[draw, rounded corners, minimum width=2.6cm, \
-     minimum height=1cm] (<id>) {<label>};`, using the id as the node name and the label as \
-     its text; place blocks with `right=of <id>` / `below=of <id>`.\n\
-     - Draw each link as its own arrow from block to block, `\\draw[-{Stealth}] (<from>) -- \
-     (<to>);` (use -| or |- for bends, and `node[midway, above]{<label>}` for a label).\n\
-     Skeleton:\n\
-     \\begin{tikzpicture}\n\\node[draw, rounded corners, minimum width=2.6cm, minimum height=1cm] \
-     (in) {Input};\n\\node[draw, rounded corners, minimum width=2.6cm, minimum height=1cm, \
-     right=of in] (out) {Output};\n\\draw[-{Stealth}] (in) -- (out);\n\\end{tikzpicture}\n",
-  );
+pub(super) fn instructions(diagram: &Diagram, language: Language) -> String {
+  let mut text = String::from(match language {
+    Language::D2 => D2_CONVENTIONS,
+    _ => TIKZ_CONVENTIONS,
+  });
   if !diagram.blocks.is_empty() {
     text.push_str("Blocks (draw every one):\n");
     for block in &diagram.blocks {
@@ -226,9 +242,12 @@ fn named_nodes(source: &str) -> HashMap<String, String> {
   nodes
 }
 
-/// Each `\draw` / `\path`: the node names it passes through, in arrow
-/// order (reversed for `<-`), and whether it points both ways.
-fn paths(source: &str, nodes: &HashMap<String, String>) -> Vec<(Vec<String>, bool)> {
+/// A drawn link: from, to, and whether it points both ways.
+type Edge = (String, String, bool);
+
+/// The links of each `\draw` / `\path`: consecutive node names it passes
+/// through, in arrow order (reversed for `<-`).
+fn tikz_edges(source: &str, nodes: &HashMap<String, String>) -> Vec<Edge> {
   let chars: Vec<char> = source.chars().collect();
   let mut found = Vec::new();
   let mut i = 0;
@@ -276,7 +295,11 @@ fn paths(source: &str, nodes: &HashMap<String, String>) -> Vec<(Vec<String>, boo
     if options.contains("<-") && !both {
       sequence.reverse();
     }
-    found.push((sequence, both));
+    found.extend(
+      sequence
+        .windows(2)
+        .map(|pair| (pair[0].clone(), pair[1].clone(), both)),
+    );
     i = at;
   }
   found
@@ -299,15 +322,195 @@ fn normalise(text: &str) -> String {
   out
 }
 
-/// Check `source` against `diagram`; the error lists every violation.
-pub(super) fn check(source: &str, diagram: &Diagram) -> Result<(), String> {
-  let mut problems = Vec::new();
-  if !source.contains("\\begin{tikzpicture}") {
-    problems.push("draw the diagram inside a tikzpicture environment".to_string());
+/// Keys that set attributes rather than name shapes.
+const D2_KEYWORDS: &[&str] = &[
+  "direction",
+  "shape",
+  "style",
+  "icon",
+  "near",
+  "tooltip",
+  "link",
+  "width",
+  "height",
+  "class",
+  "classes",
+  "vars",
+  "label",
+  "grid-rows",
+  "grid-columns",
+];
+
+/// D2 statements with `#` comments dropped: the text between newlines,
+/// `;`, `{` and `}` outside quotes.
+fn d2_statements(source: &str) -> Vec<String> {
+  let mut statements = vec![String::new()];
+  let mut quote = None;
+  let mut comment = false;
+  for c in source.chars() {
+    let current = statements.len() - 1;
+    match (quote, comment, c) {
+      (_, _, '\n') => {
+        quote = None;
+        comment = false;
+        statements.push(String::new());
+      }
+      (_, true, _) => {}
+      (Some(open), _, c) => {
+        if c == open {
+          quote = None;
+        }
+        statements[current].push(c);
+      }
+      (None, _, '"' | '\'') => {
+        quote = Some(c);
+        statements[current].push(c);
+      }
+      (None, _, '#') => comment = true,
+      (None, _, ';' | '{' | '}') => statements.push(String::new()),
+      (None, _, c) => statements[current].push(c),
+    }
   }
-  let nodes = named_nodes(source);
+  statements
+    .into_iter()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .collect()
+}
+
+/// A statement's key and, after the first `:` outside quotes, its value.
+fn d2_key_value(statement: &str) -> (&str, Option<&str>) {
+  let mut quote = None;
+  for (at, c) in statement.char_indices() {
+    match (quote, c) {
+      (Some(open), c) if c == open => quote = None,
+      (Some(_), _) => {}
+      (None, '"' | '\'') => quote = Some(c),
+      (None, ':') => return (&statement[..at], Some(&statement[at + 1..])),
+      _ => {}
+    }
+  }
+  (statement, None)
+}
+
+/// A key split at its arrows (`->`, `<-`, `<->`, `--`, any number of
+/// dashes): the endpoints and the arrows between them.
+fn d2_arrows(key: &str) -> (Vec<String>, Vec<String>) {
+  let chars: Vec<char> = key.chars().collect();
+  let mut ends = vec![String::new()];
+  let mut arrows = Vec::new();
+  let mut quote = None;
+  let mut i = 0;
+  while i < chars.len() {
+    let c = chars[i];
+    if let Some(open) = quote {
+      if c == open {
+        quote = None;
+      }
+    } else if c == '"' || c == '\'' {
+      quote = Some(c);
+    } else if c == '<' || c == '-' {
+      let mut j = i + usize::from(c == '<');
+      let dashes = chars[j..].iter().take_while(|&&d| d == '-').count();
+      j += dashes;
+      let head = chars.get(j) == Some(&'>');
+      j += usize::from(head);
+      if dashes > 0 && (c == '<' || head || dashes > 1) {
+        arrows.push(chars[i..j].iter().collect());
+        ends.push(String::new());
+        i = j;
+        continue;
+      }
+    }
+    if let Some(end) = ends.last_mut() {
+      end.push(c);
+    }
+    i += 1;
+  }
+  (ends, arrows)
+}
+
+fn unquote(text: &str) -> String {
+  let text = text.trim();
+  ['"', '\'']
+    .into_iter()
+    .find_map(|q| text.strip_prefix(q).and_then(|t| t.strip_suffix(q)))
+    .unwrap_or(text)
+    .to_string()
+}
+
+/// The shapes (key → label; a shape named only in a connection is
+/// labelled by its key, as D2 does) and the connections of a D2 source. A
+/// shape inside a container (`group.a`) counts by its last key.
+fn d2_diagram(source: &str) -> (HashMap<String, String>, Vec<Edge>) {
+  let mut shapes = HashMap::new();
+  let mut edges = Vec::new();
+  for statement in d2_statements(source) {
+    let (key, value) = d2_key_value(&statement);
+    let (ends, arrows) = d2_arrows(key);
+    if arrows.is_empty() {
+      let mut segments: Vec<String> = key.split('.').map(unquote).collect();
+      let labelled = segments.len() > 1 && segments.last().is_some_and(|s| s == "label");
+      if labelled {
+        segments.pop();
+      }
+      if segments.iter().any(|s| D2_KEYWORDS.contains(&s.as_str())) {
+        continue;
+      }
+      let Some(name) = segments.pop().filter(|name| !name.is_empty()) else {
+        continue;
+      };
+      match value.map(unquote).filter(|label| !label.is_empty()) {
+        Some(label) => {
+          shapes.insert(name, label);
+        }
+        None => {
+          shapes.entry(name.clone()).or_insert(name);
+        }
+      }
+      continue;
+    }
+    let names: Vec<String> = ends
+      .iter()
+      .map(|end| unquote(end.rsplit('.').next().unwrap_or_default()))
+      .collect();
+    for name in names.iter().filter(|name| !name.is_empty()) {
+      shapes.entry(name.clone()).or_insert_with(|| name.clone());
+    }
+    for (pair, arrow) in names.windows(2).zip(&arrows) {
+      let both = arrow.starts_with('<') && arrow.ends_with('>');
+      let (from, to) = if arrow.starts_with('<') && !both {
+        (&pair[1], &pair[0])
+      } else {
+        (&pair[0], &pair[1])
+      };
+      edges.push((from.clone(), to.clone(), both));
+    }
+  }
+  (shapes, edges)
+}
+
+/// Check `source` (TikZ or D2) against `diagram`; the error lists every
+/// violation.
+pub(super) fn check(source: &str, diagram: &Diagram, language: Language) -> Result<(), String> {
+  let mut problems = Vec::new();
+  let d2 = language == Language::D2;
+  let (nodes, edges) = if d2 {
+    d2_diagram(source)
+  } else {
+    if !source.contains("\\begin{tikzpicture}") {
+      problems.push("draw the diagram inside a tikzpicture environment".to_string());
+    }
+    let nodes = named_nodes(source);
+    let edges = tikz_edges(source, &nodes);
+    (nodes, edges)
+  };
   for block in &diagram.blocks {
     match nodes.get(&block.id) {
+      None if d2 => problems.push(format!(
+        "block {} (\"{}\") is missing: declare it as `{}: {}`",
+        block.id, block.label, block.id, block.label
+      )),
       None => problems.push(format!(
         "block {} (\"{}\") is missing: draw it as \\node[draw] ({}) {{{}}};",
         block.id, block.label, block.id, block.label
@@ -323,20 +526,22 @@ pub(super) fn check(source: &str, diagram: &Diagram) -> Result<(), String> {
       Some(_) => {}
     }
   }
-  let drawn = paths(source, &nodes);
   for link in &diagram.links {
-    let linked = drawn.iter().any(|(sequence, both)| {
-      sequence.windows(2).any(|pair| {
-        (pair[0] == link.from && pair[1] == link.to)
-          || (*both && pair[0] == link.to && pair[1] == link.from)
-      })
+    let linked = edges.iter().any(|(from, to, both)| {
+      (*from == link.from && *to == link.to) || (*both && *from == link.to && *to == link.from)
     });
-    if !linked {
-      problems.push(format!(
-        "the link {} -> {} is missing: draw it as \\draw[-{{Stealth}}] ({}) -- ({});",
-        link.from, link.to, link.from, link.to
-      ));
+    if linked {
+      continue;
     }
+    let hint = if d2 {
+      format!("`{} -> {}`", link.from, link.to)
+    } else {
+      format!("\\draw[-{{Stealth}}] ({}) -- ({});", link.from, link.to)
+    };
+    problems.push(format!(
+      "the link {} -> {} is missing: draw it as {hint}",
+      link.from, link.to
+    ));
   }
   if problems.is_empty() {
     Ok(())
@@ -383,8 +588,8 @@ mod tests {
 
   #[test]
   fn a_diagram_with_every_block_and_link_passes() {
-    assert_eq!(check(LOOP, &control_loop()), Ok(()));
-    let text = instructions(&control_loop());
+    assert_eq!(check(LOOP, &control_loop(), Language::Tikz), Ok(()));
+    let text = instructions(&control_loop(), Language::Tikz);
     assert!(text.contains("- (plant) Plant (motor)"), "{text}");
     assert!(text.contains("- ctl -> plant, labelled \"u\""), "{text}");
   }
@@ -396,7 +601,7 @@ mod tests {
 \node[draw] (plant) {Plant (motor)};
 \draw[->] (plant) -- (ctl);
 \end{tikzpicture}";
-    let error = check(source, &control_loop()).expect_err("violations");
+    let error = check(source, &control_loop(), Language::Tikz).expect_err("violations");
     assert!(
       error.contains("block ctl shows \"Regulator\" but should show \"Controller\""),
       "{error}"
@@ -416,7 +621,8 @@ mod tests {
     assert!(
       check(
         "\\node (a) {A};",
-        &diagram(json!({"blocks": [{"id": "a", "label": "A"}]}))
+        &diagram(json!({"blocks": [{"id": "a", "label": "A"}]})),
+        Language::Tikz
       )
       .expect_err("no environment")
       .contains("tikzpicture")
@@ -441,5 +647,61 @@ mod tests {
         .label,
       "a"
     );
+  }
+
+  const D2_LOOP: &str = r#"# a control loop
+direction: right
+ctl: Controller { shape: rectangle }
+plant.label: "Plant (motor)"
+sensor
+ctl -> plant: u
+plant -> "sensor"; sensor <- nothing
+ctl <- sensor # feedback
+"#;
+
+  #[test]
+  fn a_d2_diagram_with_every_block_and_link_passes() {
+    let sensor_labelled = diagram(json!({
+      "blocks": [
+        {"id": "ctl", "label": "Controller"},
+        {"id": "plant", "label": "Plant (motor)"},
+        {"id": "sensor"}
+      ],
+      "links": [
+        {"from": "ctl", "to": "plant"},
+        {"from": "plant", "to": "sensor"},
+        {"from": "sensor", "to": "ctl"}
+      ]
+    }));
+    assert_eq!(check(D2_LOOP, &sensor_labelled, Language::D2), Ok(()));
+    let both_ways = "a: A\nb: B\na <-> b\nc: C\nb -> c -> a\n";
+    let spec = diagram(json!({
+      "blocks": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}, {"id": "c", "label": "C"}],
+      "links": [{"from": "b", "to": "a"}, {"from": "c", "to": "a"}, {"from": "b", "to": "c"}]
+    }));
+    assert_eq!(check(both_ways, &spec, Language::D2), Ok(()));
+    let text = instructions(&control_loop(), Language::D2);
+    assert!(text.contains("D2"), "{text}");
+    assert!(text.contains("- ctl -> plant, labelled \"u\""), "{text}");
+    assert!(!text.contains("tikz"), "{text}");
+  }
+
+  #[test]
+  fn d2_violations_are_reported_in_d2_terms() {
+    let source = "ctl: Regulator\nplant: Plant (motor)\nplant -> ctl\n# sensor: Sensor\n";
+    let error = check(source, &control_loop(), Language::D2).expect_err("violations");
+    assert!(
+      error.contains("block ctl shows \"Regulator\" but should show \"Controller\""),
+      "{error}"
+    );
+    assert!(
+      error.contains("block sensor (\"Sensor\") is missing: declare it as `sensor: Sensor`"),
+      "commented out: {error}"
+    );
+    assert!(
+      error.contains("the link ctl -> plant is missing: draw it as `ctl -> plant`"),
+      "reversed: {error}"
+    );
+    assert!(!error.contains("tikzpicture"), "{error}");
   }
 }
