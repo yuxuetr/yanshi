@@ -459,9 +459,9 @@ impl LLMProvider for GoogleProvider {
       .usage_metadata
       .clone()
       .map(|u| crate::providers::TokenUsage {
-        prompt_tokens: Some(u.prompt_token_count),
-        completion_tokens: Some(u.candidates_token_count),
-        total_tokens: Some(u.total_token_count),
+        prompt_tokens: u.prompt_token_count,
+        completion_tokens: u.candidates_token_count,
+        total_tokens: u.total_token_count,
       });
 
     let tool_calls = first_candidate
@@ -664,13 +664,16 @@ pub(crate) fn google_parts_to_content(parts: &[GooglePart]) -> Result<ContentTyp
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+/// Every count is optional: a thought-only stream chunk has no
+/// `candidatesTokenCount`, and a required field would fail the whole
+/// chunk's parse and drop its thought text.
 struct GoogleUsage {
-  #[serde(rename = "promptTokenCount")]
-  prompt_token_count: u32,
-  #[serde(rename = "candidatesTokenCount")]
-  candidates_token_count: u32,
-  #[serde(rename = "totalTokenCount")]
-  total_token_count: u32,
+  #[serde(rename = "promptTokenCount", default)]
+  prompt_token_count: Option<u32>,
+  #[serde(rename = "candidatesTokenCount", default)]
+  candidates_token_count: Option<u32>,
+  #[serde(rename = "totalTokenCount", default)]
+  total_token_count: Option<u32>,
 }
 
 pub struct GoogleStreamingResponse {
@@ -799,9 +802,9 @@ impl GoogleStreamingResponse {
       is_final,
       metadata: Some(metadata),
       usage: response.usage_metadata.map(|u| TokenUsage {
-        prompt_tokens: Some(u.prompt_token_count),
-        completion_tokens: Some(u.candidates_token_count),
-        total_tokens: Some(u.total_token_count),
+        prompt_tokens: u.prompt_token_count,
+        completion_tokens: u.candidates_token_count,
+        total_tokens: u.total_token_count,
       }),
       content_type: Some("text".to_string()),
       tool_call_deltas,
@@ -1557,6 +1560,19 @@ mod tests {
       .expect("thought chunk");
     assert_eq!(chunk.thinking, "weighing it");
     assert!(chunk.content.is_empty());
+  }
+
+  /// A thought-only chunk carries `usageMetadata` without
+  /// `candidatesTokenCount` (nothing answered yet); it must still parse.
+  #[test]
+  fn thought_chunk_without_candidate_tokens_is_not_dropped() {
+    let mut response = test_streaming_response();
+    let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"weighing it","thought":true}],"role":"model"}}],"usageMetadata":{"promptTokenCount":20,"totalTokenCount":120,"thoughtsTokenCount":100}}"#;
+    let chunk = response
+      .parse_json_chunk(line)
+      .unwrap()
+      .expect("thought chunk");
+    assert_eq!(chunk.thinking, "weighing it");
   }
 
   #[test]
