@@ -309,8 +309,8 @@ fn classify_node(node: &NodeDefinitionV2) -> NodePermission {
       );
       (PermissionCategory::Agent, vec!["agent.runtime".to_string()])
     }
-    "rag" | "arxiv" | "asr" | "tts" | "text_to_image" | "image_to_image" | "image_edit"
-    | "image_understand" => (PermissionCategory::Network, vec!["net".to_string()]),
+    "rag" | "arxiv" | "asr" | "tts" | "text_to_image" | "text_to_video" | "image_to_image"
+    | "image_edit" | "image_understand" => (PermissionCategory::Network, vec!["net".to_string()]),
     _ => (PermissionCategory::Unknown, vec![]),
   };
 

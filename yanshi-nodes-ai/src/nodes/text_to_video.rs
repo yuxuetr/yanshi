@@ -52,6 +52,13 @@ pub struct TextToVideoNode {
   pub max_download_bytes: u64,
 }
 
+/// What one call asks the vendor for, after input overrides.
+struct Shot {
+  model: String,
+  aspect_ratio: Option<String>,
+  duration_seconds: Option<u32>,
+}
+
 impl TextToVideoNode {
   pub fn new(name: &str, model: &str) -> Self {
     Self {
@@ -139,30 +146,60 @@ impl TextToVideoNode {
     Ok(resolved)
   }
 
+  /// Y8.3: `model` / `aspect_ratio` / `duration_seconds` may also arrive
+  /// as inputs (a Map item picks them per scene), overriding the
+  /// build-time parameters, as `text_to_image` does for `model` / `size`.
+  fn shot(&self, inputs: &AsyncNodeInputs) -> Shot {
+    let string_input = |key: &str| match inputs.get(key) {
+      Some(FlowValue::Json(Value::String(s))) if !s.trim().is_empty() => Some(s.clone()),
+      _ => None,
+    };
+    let seconds_input = match inputs.get("duration_seconds") {
+      Some(FlowValue::Json(Value::Number(n))) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+      // `--input duration_seconds 5` on the CLI arrives as a string.
+      Some(FlowValue::Json(Value::String(s))) => s.trim().parse().ok(),
+      _ => None,
+    };
+    Shot {
+      model: string_input("model").unwrap_or_else(|| self.model.clone()),
+      aspect_ratio: string_input("aspect_ratio").or_else(|| self.aspect_ratio.clone()),
+      duration_seconds: seconds_input.or(self.duration_seconds),
+    }
+  }
+
   /// Execute real video generation through the modality dispatcher,
   /// submitting the job and polling until it completes.
-  async fn execute_real_video_generation(&self, prompt: &str) -> Result<FlowValue, YanshiError> {
+  async fn execute_real_video_generation(
+    &self,
+    prompt: &str,
+    shot: Shot,
+  ) -> Result<FlowValue, YanshiError> {
+    let Shot {
+      model,
+      aspect_ratio,
+      duration_seconds,
+    } = shot;
     tracing::debug!(
-      model = %self.model,
+      model = %model,
       prompt = %prompt,
       "executing text-to-video request via modality dispatcher"
     );
 
     let provider =
-      Yanshi::text2video_for(&self.model)
+      Yanshi::text2video_for(&model)
         .await
         .map_err(|e| YanshiError::ConfigurationError {
           message: format!(
             "Failed to resolve text-to-video provider for '{}': {}",
-            self.model, e
+            model, e
           ),
         })?;
 
     let request = ModalityText2VideoRequest {
-      model: self.model.clone(),
+      model: model.clone(),
       prompt: prompt.to_string(),
-      aspect_ratio: self.aspect_ratio.clone(),
-      duration_seconds: self.duration_seconds,
+      aspect_ratio,
+      duration_seconds,
       resolution: self.resolution.clone(),
       seed: self.seed,
       extra: None,
@@ -190,10 +227,10 @@ impl TextToVideoNode {
     let seconds: f64 = video_response
       .videos
       .iter()
-      .filter_map(|video| video.duration_seconds.or(self.duration_seconds))
+      .filter_map(|video| video.duration_seconds.or(duration_seconds))
       .map(f64::from)
       .sum();
-    crate::cost::record(&self.model, |p| p.cost_for_seconds(seconds))?;
+    crate::cost::record(&model, |p| p.cost_for_seconds(seconds))?;
 
     let result = match self.output_format {
       ArtifactOutputFormat::File => {
@@ -238,10 +275,11 @@ impl AsyncNode for TextToVideoNode {
     }
 
     let enriched_prompt = self.resolve_prompt(inputs)?;
+    let shot = self.shot(inputs);
 
     tracing::debug!(
       name = %self.name,
-      model = %self.model,
+      model = %shot.model,
       prompt = %enriched_prompt,
       "TextToVideo node prepared"
     );
@@ -250,7 +288,9 @@ impl AsyncNode for TextToVideoNode {
     // fallback, matching `TextToImageNode`'s Q1.3.3 precedent.
     // Y2.5: passed through unchanged; the variant tells retry whether
     // repeating the billed call can help.
-    let response = self.execute_real_video_generation(&enriched_prompt).await?;
+    let response = self
+      .execute_real_video_generation(&enriched_prompt, shot)
+      .await?;
 
     let mut outputs = HashMap::new();
     outputs.insert(self.output_key.clone(), response);
@@ -262,6 +302,30 @@ impl AsyncNode for TextToVideoNode {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn inputs_override_model_aspect_ratio_and_duration() {
+    let node = TextToVideoNode::new("clip", "built-in")
+      .with_aspect_ratio("1:1")
+      .with_duration_seconds(10);
+    let inputs = AsyncNodeInputs::from([
+      (
+        "model".to_string(),
+        FlowValue::Json(Value::from("per-scene")),
+      ),
+      (
+        "duration_seconds".to_string(),
+        FlowValue::Json(Value::from(5)),
+      ),
+    ]);
+    let shot = node.shot(&inputs);
+    assert_eq!(shot.model, "per-scene");
+    assert_eq!(shot.duration_seconds, Some(5));
+    assert_eq!(shot.aspect_ratio.as_deref(), Some("1:1"));
+    let defaults = node.shot(&AsyncNodeInputs::new());
+    assert_eq!(defaults.model, "built-in");
+    assert_eq!(defaults.duration_seconds, Some(10));
+  }
 
   /// Without a configured API key, the real video generation path must
   /// surface a real error — no silent placeholder, mirroring

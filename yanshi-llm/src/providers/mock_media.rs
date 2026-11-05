@@ -15,8 +15,8 @@
 //! - Text-to-image / image-to-image / image-edit: a 1×1 PNG as
 //!   `b64_json` regardless of the requested `response_format`.
 //! - Text-to-video: `submit` returns a task, the first `poll` completes
-//!   with a tiny `b64_data` payload labelled `video/mp4` — enough for
-//!   artifact plumbing, not a playable file.
+//!   with [`MOCK_MP4_BASE64`], a real one-second 64×36 H.264 MP4, so a
+//!   generator can hand the clip to ffmpeg (Y8.3).
 //!
 //! Registered under vendor `mock` in `crate::modality_dispatch`, so a
 //! registry entry like
@@ -62,6 +62,37 @@ fn injected_status(prompt: &str) -> Option<u16> {
 /// A minimal valid 1×1 opaque PNG, base64-encoded (no `data:` prefix).
 pub const MOCK_PNG_BASE64: &str =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+/// A playable one-second, 64×36, 4 fps H.264 MP4 (no audio), base64.
+/// Made with `ffmpeg -f lavfi -i color=c=0x3366aa:s=64x36:d=1:r=4
+/// -c:v libx264 -pix_fmt yuv420p -crf 40 -movflags +faststart -an`.
+pub const MOCK_MP4_BASE64: &str = concat!(
+  "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAANkbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+",
+  "gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "AAAAAAAAAAAAAAAAAgAAAo90cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAA",
+  "AAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAEAAAAAkAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAA",
+  "AAEAAAPoAAAgAAABAAAAAAIHbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAQABVxAAAAAAALWhkbHIAAAAAAA",
+  "AAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABsm1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5m",
+  "AAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAXJzdGJsAAAAwnN0c2QAAAAAAAAAAQAAALJhdmMxAAAAAAAAAA",
+  "EAAAAAAAAAAAAAAAAAAAAAAEAAJABIAAAASAAAAAAAAAABFExhdmM2My4xLjEwMiBsaWJ4MjY0AAAAAAAAAAAAAAAA",
+  "GP//AAAAOGF2Y0MBZAAK/+EAGmdkAAqscgREf58BEAAAAwAQAAADAIDxIlhGAQAHaOhDg5LIsP34+AAAAAAQcGFzcA",
+  "AAAAEAAAABAAAAFGJ0cnQAAAAAAAAX4AAAAAAAAAAYc3R0cwAAAAAAAAABAAAABAAAEAAAAAAUc3RzcwAAAAAAAAAB",
+  "AAAAAQAAAChjdHRzAAAAAAAAAAMAAAABAAAgAAAAAAEAAEAAAAAAAgAAEAAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAA",
+  "QAAAABAAAAJHN0c3oAAAAAAAAAAAAAAAQAAALVAAAADQAAAA0AAAANAAAAFHN0Y28AAAAAAAAAAQAAA5QAAABhdWR0",
+  "YQAAAFltZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAACxpbHN0AAAAJKl0b28AAAAcZG",
+  "F0YQAAAAEAAAAATGF2ZjYzLjEuMTAyAAAACGZyZWUAAAMEbWRhdAAAAq8GBf//q9xF6b3m2Ui3lizYINkj7u94MjY0",
+  "IC0gY29yZSAxNjUgcjMyMjIgYjM1NjA1YSAtIEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLT",
+  "IwMjUgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0xIHJlZj0xNiBk",
+  "ZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTMzIG1lPXVtaCBzdWJtZT0xMCBwc3k9MSBwc3lfcmQ9MS4wMDowLj",
+  "AwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTI0IGNocm9tYV9tZT0xIHRyZWxsaXM9MiA4eDhkY3Q9MSBjcW09MCBkZWFk",
+  "em9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTEgbG9va2FoZWFkX3Rocm",
+  "VhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0w",
+  "IGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz04IGJfcHlyYW1pZD0yIGJfYWRhcHQ9MiBiX2JpYXM9MCBkaXJlY3",
+  "Q9MyB3ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWlnaHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTQgc2NlbmVjdXQ9",
+  "NDAgaW50cmFfcmVmcmVzaD0wIHJjX2xvb2thaGVhZD02MCByYz1jcmYgbWJ0cmVlPTEgY3JmPTQwLjAgcWNvbXA9MC",
+  "42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3RlcD00IGlwX3JhdGlvPTEuNDAgYXE9MToxLjAwAIAAAAAeZYiBAAJf/juz",
+  "wKMohNyZyQq1hGqi4ksyWzk+pjzZAAAACUGaCG2IIf8CNgAAAAlBnhAnEEf/PiEAAAAJAZ4YTUgh/0nA",
+);
 
 /// Milliseconds of audio the mock synthesises per input character.
 const MS_PER_CHAR: usize = 100;
@@ -202,9 +233,7 @@ impl Text2VideoProvider for MockMediaProvider {
       created: 0,
       videos: vec![GeneratedVideo {
         url: None,
-        // "mock-video" — not a playable container, just bytes with a
-        // stable length so artifact plumbing can be asserted on.
-        b64_data: Some("bW9jay12aWRlbw==".to_string()),
+        b64_data: Some(MOCK_MP4_BASE64.to_string()),
         duration_seconds: Some(1),
       }],
       metadata: None,

@@ -656,6 +656,7 @@ jobs:
           cargo test -p yanshi-nodes --lib render_video -- --ignored
           cargo test -p yanshi-config --test generator_audio -- --ignored
           cargo test -p yanshi-config --test generator_video -- --ignored
+          cargo test -p yanshi-config --test generator_video_motion -- --ignored
           cargo test -p yanshi-cli --test generators_cli_tests audio_overview -- --ignored
 
   release-gate:

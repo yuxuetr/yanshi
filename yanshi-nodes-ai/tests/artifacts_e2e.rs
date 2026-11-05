@@ -187,5 +187,6 @@ async fn text_to_video_persists_the_fetched_bytes() {
     path,
     &run.path().join("artifacts").join("clip").join("1.mp4")
   );
-  assert_eq!(std::fs::read(path).expect("mp4 exists"), b"mock-video");
+  let bytes = std::fs::read(path).expect("mp4 exists");
+  assert_eq!(&bytes[4..8], b"ftyp", "the mock's clip is a real MP4");
 }

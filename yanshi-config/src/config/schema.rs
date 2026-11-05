@@ -480,6 +480,17 @@ fn specs_for_node_type(node_type: &str) -> Option<Vec<ParamSpec>> {
       ParamSpec::optional("size", ParamType::String),
       ParamSpec::optional("output_format", ParamType::String),
     ]),
+    // Y8.3: absent from this table until now, so no YAML workflow could
+    // use the node the factory builds. `model` / `duration_seconds` /
+    // `aspect_ratio` may come from `input_mapping` (a Map item).
+    "text_to_video" => Some(vec![
+      ParamSpec::required_input("model", ParamType::String),
+      ParamSpec::required_input("prompt", ParamType::String),
+      ParamSpec::optional("aspect_ratio", ParamType::String),
+      ParamSpec::optional("resolution", ParamType::String),
+      ParamSpec::optional("duration_seconds", ParamType::Integer),
+      ParamSpec::optional("output_format", ParamType::String),
+    ]),
     // Y3.1 renderers.
     "render_table" => Some(vec![
       ParamSpec::required_input("rows", ParamType::Any),

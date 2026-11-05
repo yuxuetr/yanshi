@@ -7,6 +7,11 @@
 # sandboxed): each picture held for its narration, joined into one MP4
 # with the narration as a soft subtitle track, plus an .srt.
 #
+# With `video_model` set, the script may mark one or two scenes as moving
+# shots; those get a short text_to_video clip (looped for the narration)
+# instead of a picture. Clips are billed per second, so this is off by
+# default.
+#
 #   yanshi workflow run examples/generators/video_overview.yml \
 #     --input url https://example.org/article \
 #     --input image_model <text-to-image model> \
@@ -45,6 +50,12 @@ inputs:
   voice:
     description: "Narrator voice"
     default: "alloy"
+  video_model:
+    description: "Registry name of a text-to-video model; empty (the default) keeps every scene a still picture"
+    default: ""
+  video_seconds:
+    description: "Length of each generated clip, in seconds (it loops for the narration)"
+    default: 5
   chunks:
     description: "Notebook passages to work from instead of url / text: [{chunk_id, source_id, content}]. Citations then point at these ids."
     default: []
@@ -83,7 +94,10 @@ nodes:
         describing a single still picture that illustrates it (a scene,
         object or diagram-like composition; never text, letters or
         logos). The first scene introduces the subject, the last sums up.
-        Every fact must come from the source; when its passages carry
+        {% if video_model %}Set `"motion": true` on the one or two scenes
+        whose picture most needs movement to be understood (a process, a
+        change over time); leave it out everywhere else.
+        {% endif %}        Every fact must come from the source; when its passages carry
         [ids], give each scene the chunk_id of its passage.
 
         SOURCE:
@@ -111,6 +125,7 @@ nodes:
               properties:
                 narration: { type: string }
                 visual: { type: string }
+                motion: { type: boolean }
                 chunk_id: { type: string }
 
   # One Map item per scene, carrying what its picture and voice need (a
@@ -123,7 +138,7 @@ nodes:
     parameters:
       output_format: json
       template: |
-        {"items": [{% for s in plan.scenes %}{% set visual = s.visual ~ " Style: " ~ style ~ "." %}{"visual": {{ visual | json_encode() }}, "narration": {{ s.narration | json_encode() }}, "image_model": {{ image_model | json_encode() }}, "image_size": {{ image_size | json_encode() }}, "tts_model": {{ tts_model | json_encode() }}, "voice": {{ voice | json_encode() }}}{% if not loop.last %},{% endif %}{% endfor %}]}
+        {"items": [{% for s in plan.scenes %}{% set visual = s.visual ~ " Style: " ~ style ~ "." %}{"visual": {{ visual | json_encode() }}, "narration": {{ s.narration | json_encode() }}, "image_model": {{ image_model | json_encode() }}, "image_size": {{ image_size | json_encode() }}, "tts_model": {{ tts_model | json_encode() }}, "voice": {{ voice | json_encode() }}, "moving": {% if s.motion and video_model %}true{% else %}false{% endif %}, "video_model": {{ video_model | json_encode() }}, "video_seconds": {{ video_seconds | json_encode() }}}{% if not loop.last %},{% endif %}{% endfor %}]}
 
   - id: produce
     type: map
@@ -134,12 +149,33 @@ nodes:
       parallel: true
       max_concurrent: 4
       template:
+        # `run_if` reads node outputs, not `item`, so the choice is
+        # surfaced as an output first.
+        - id: mode
+          type: template
+          input_mapping:
+            moving: "{{ item.moving }}"
+          parameters:
+            output_format: json
+            template: '{"moving": {{ moving }}}'
         - id: picture
           type: text_to_image
+          dependencies: ["mode"]
+          run_if: "{{ !nodes.mode.outputs.moving }}"
           input_mapping:
             visual: "{{ item.visual }}"
             model: "{{ item.image_model }}"
             size: "{{ item.image_size }}"
+          parameters:
+            prompt: "{{visual}}"
+        - id: clip
+          type: text_to_video
+          dependencies: ["mode"]
+          run_if: "{{ nodes.mode.outputs.moving }}"
+          input_mapping:
+            visual: "{{ item.visual }}"
+            model: "{{ item.video_model }}"
+            duration_seconds: "{{ item.video_seconds }}"
           parameters:
             prompt: "{{visual}}"
         - id: say
@@ -159,7 +195,7 @@ nodes:
     parameters:
       output_format: json
       template: |
-        {"scenes": [{% for r in made %}{% set s = plan.scenes | nth(n=loop.index0) %}{"image": {{ r.picture.Ok.picture_image.path | json_encode() }}, "audio": {{ r.say.Ok.say_output.path | json_encode() }}, "caption": {{ s.narration | json_encode() }}}{% if not loop.last %},{% endif %}{% endfor %}]}
+        {"scenes": [{% for r in made %}{% set s = plan.scenes | nth(n=loop.index0) %}{"audio": {{ r.say.Ok.say_output.path | json_encode() }}, "caption": {{ s.narration | json_encode() }}, {% if r.clip.Ok %}"video": {{ r.clip.Ok.clip_video.path | json_encode() }}{% else %}"image": {{ r.picture.Ok.picture_image.path | json_encode() }}{% endif %}}{% if not loop.last %},{% endif %}{% endfor %}]}
 
   - id: film
     type: render_video
