@@ -1034,13 +1034,17 @@ async fn google_live_streaming_reasoning() {
     model: model.clone(),
     messages: vec![json!({
       "role": "user",
-      "content": "What is 17 * 23? Reply with just the number."
+      // Gemini omits the thought summary on simple requests, so ask
+      // something that takes a few steps: 142 multiples of 7 below 1000,
+      // minus the 12 that are multiples of 77.
+      "content": "How many positive integers below 1000 are divisible by 7 but not by 11? \
+                  Reply with just the number."
     })],
     stream: true,
     parameters: HashMap::new(),
     tools: None,
     tool_choice: None,
-    thinking: Some(ThinkingConfig::Low),
+    thinking: Some(ThinkingConfig::Medium),
     response_format: None,
   };
 
@@ -1058,8 +1062,8 @@ async fn google_live_streaming_reasoning() {
     response.thinking.as_deref().map_or(0, str::len)
   );
   assert!(
-    response.content.contains("391"),
-    "google {model}: expected 391, got {:?}",
+    response.content.contains("130"),
+    "google {model}: expected 130, got {:?}",
     response.content
   );
   assert!(
