@@ -150,6 +150,13 @@ input_mapping:
   prompt: "{{ nodes.render_prompt.outputs.output }}"
 ```
 
+A node receives three kinds of input under one name space. When names
+collide, a value from `input_mapping` wins. Next come the workflow inputs
+(and, inside `map` / `while`, the loop variables such as `item`), which
+every node receives under their own names. The node's own `parameters`
+come last. A workflow input therefore never replaces a mapped value, but it
+does override a `parameters` entry of the same name.
+
 `timeout_ms` / `max_retries` example — the two node types most prone to
 transient failures in practice:
 

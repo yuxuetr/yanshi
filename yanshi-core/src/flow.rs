@@ -492,12 +492,9 @@ impl<'f> FlowExecutor<'f> {
           };
 
           match inputs_result {
-            Ok(mut inputs) => {
-              inputs.extend(graph_node.initial_inputs.clone());
-
-              // Inject initial inputs from execute_from_inputs (for while loops and map nodes)
-              // These provide loop variables and context that should be available to all nodes
-              inputs.extend(initial_inputs.clone());
+            Ok(mapped) => {
+              let mut inputs =
+                assemble_node_inputs(mapped, &graph_node.initial_inputs, &initial_inputs);
 
               // V1.2: a node being (re-)executed here was never skipped
               // above, so any `state_pool` entry it already has can only be
@@ -1031,7 +1028,7 @@ impl<'f> FlowExecutor<'f> {
           continue;
         }
 
-        let mut inputs = match &graph_node.input_mapping {
+        let mapped = match &graph_node.input_mapping {
           Some(mapping) => {
             match self.gather_inputs(&node_id, mapping, &state_pool, &initial_inputs) {
               Ok(inputs) => inputs,
@@ -1051,8 +1048,7 @@ impl<'f> FlowExecutor<'f> {
           }
           None => HashMap::new(),
         };
-        inputs.extend(graph_node.initial_inputs.clone());
-        inputs.extend(initial_inputs.clone());
+        let inputs = assemble_node_inputs(mapped, &graph_node.initial_inputs, &initial_inputs);
 
         tracing::info!("Executing node '{}'", node_id);
         let node_started_at = Instant::now();
@@ -1977,6 +1973,22 @@ impl<'f> FlowExecutor<'f> {
   }
 }
 
+/// The inputs a node runs with (Y8.1). Values resolved through the node's
+/// `input_mapping` are what its author wired explicitly, so they win.
+/// Flow-level inputs (workflow inputs, map / while loop variables) reach
+/// every node under their own names and fill the remaining keys, still
+/// overriding the node's static parameters as before.
+fn assemble_node_inputs(
+  mapped: AsyncNodeInputs,
+  node_parameters: &AsyncNodeInputs,
+  flow_inputs: &AsyncNodeInputs,
+) -> AsyncNodeInputs {
+  let mut inputs = node_parameters.clone();
+  inputs.extend(flow_inputs.iter().map(|(k, v)| (k.clone(), v.clone())));
+  inputs.extend(mapped);
+  inputs
+}
+
 /// F-A6-5: walk a dotted path inside the JSON value of the
 /// iteration `item` to resolve `{{ item.foo.bar }}` lookups in
 /// input_mapping. Returns `None` if any segment is missing or the
@@ -2856,6 +2868,76 @@ mod tests {
       child_outputs.get("value"),
       Some(&FlowValue::Json(json!("from-root")))
     );
+  }
+
+  /// Y8.1: a workflow input that happens to share a name with a node's
+  /// `input_mapping` key must not replace the mapped value (it used to,
+  /// silently, in both execution modes).
+  #[tokio::test]
+  async fn input_mapping_wins_over_a_same_named_workflow_input() {
+    struct EchoValue;
+
+    #[async_trait]
+    impl AsyncNode for EchoValue {
+      async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        let mut outputs = HashMap::new();
+        if let Some(value) = inputs.get("scenes") {
+          outputs.insert("scenes".to_string(), value.clone());
+        }
+        Ok(outputs)
+      }
+    }
+
+    // Stands in for the LLM that writes the scene list.
+    struct Planner;
+
+    #[async_trait]
+    impl AsyncNode for Planner {
+      async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+        Ok(HashMap::from([(
+          "scenes".to_string(),
+          FlowValue::Json(json!(["a", "b"])),
+        )]))
+      }
+    }
+
+    for config in [
+      FlowExecutionConfig::serial(),
+      FlowExecutionConfig::concurrent(2),
+    ] {
+      let planner = GraphNode {
+        id: "planner".to_string(),
+        node_type: NodeType::Standard(Arc::new(Planner)),
+        dependencies: vec![],
+        input_mapping: None,
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      };
+      let renderer = GraphNode {
+        id: "renderer".to_string(),
+        node_type: NodeType::Standard(Arc::new(EchoValue)),
+        dependencies: vec!["planner".to_string()],
+        input_mapping: Some(HashMap::from([(
+          "scenes".to_string(),
+          ("planner".to_string(), "scenes".to_string()),
+        )])),
+        run_if: None,
+        initial_inputs: HashMap::new(),
+      };
+      // Flow-level input with the same key: the scene *count* the user asked for.
+      let flow_inputs = HashMap::from([("scenes".to_string(), FlowValue::Json(json!(2)))]);
+
+      let state = Flow::new(vec![planner, renderer])
+        .execute_from_inputs_with_config(flow_inputs, config)
+        .await
+        .unwrap();
+
+      let renderer_outputs = state.get("renderer").unwrap().as_ref().unwrap();
+      assert_eq!(
+        renderer_outputs.get("scenes"),
+        Some(&FlowValue::Json(json!(["a", "b"])))
+      );
+    }
   }
 
   #[tokio::test]
