@@ -43,7 +43,8 @@ pub fn find_tool(name: &str) -> Option<PathBuf> {
 /// access: the install prefix of the path as found
 /// (`/opt/homebrew/bin/pandoc` → `/opt/homebrew`, where Homebrew's
 /// `opt/` links live) and of its canonical target
-/// (`/Library/TeX/texbin/lualatex` → `/usr/local/texlive/2026`).
+/// (`/Library/TeX/texbin/lualatex` → `/usr/local/texlive/2026`), plus
+/// the Homebrew root for a binary inside `Cellar/`.
 pub fn install_prefixes(binary: &Path) -> Vec<PathBuf> {
   let prefix = |path: &Path| -> Option<PathBuf> {
     let mut dir = path.parent()?;
@@ -63,6 +64,23 @@ pub fn install_prefixes(binary: &Path) -> Vec<PathBuf> {
     && !prefixes.contains(&p)
   {
     prefixes.push(p);
+  }
+  // A keg-only Homebrew formula lives in `<root>/Cellar/<name>/<ver>` and
+  // links against other formulae through `<root>/opt/`; a regular one
+  // already gets `<root>` from its `<root>/bin` link.
+  let roots: Vec<PathBuf> = prefixes
+    .iter()
+    .filter_map(|p| {
+      p.ancestors()
+        .find(|dir| dir.file_name().is_some_and(|name| name == "Cellar"))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+    })
+    .collect();
+  for root in roots {
+    if !prefixes.contains(&root) {
+      prefixes.push(root);
+    }
   }
   prefixes
 }
@@ -173,6 +191,21 @@ pub fn output_tail(output: &std::process::Output, lines: usize) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// A keg-only formula (`ffmpeg-full`) resolves into
+  /// `Cellar/<name>/<version>`, but links against libraries under the
+  /// Homebrew root's `opt/`; without the root the dynamic loader is
+  /// blocked before `main`.
+  #[test]
+  fn install_prefixes_of_a_keg_only_binary_include_the_homebrew_root() {
+    let prefixes = install_prefixes(Path::new(
+      "/nonexistent/homebrew/Cellar/ffmpeg-full/9.0.2_1/bin/ffmpeg",
+    ));
+    assert!(
+      prefixes.contains(&PathBuf::from("/nonexistent/homebrew")),
+      "{prefixes:?}"
+    );
+  }
 
   #[test]
   fn install_prefix_is_the_parent_of_the_nearest_bin_dir() {
