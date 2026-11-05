@@ -959,6 +959,53 @@ async fn moonshot_live_text_path() {
   .await;
 }
 
+/// `.thinking()` reaches StepFun as `reasoning_effort` and the reasoning
+/// text comes back. step-3.7-flash takes low / medium / high.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stepfun_live_reasoning_effort() {
+  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Llm).await else {
+    return;
+  };
+  let provider =
+    StepFunProvider::with_client(no_proxy_client(), &api_key, base_url).expect("stepfun provider");
+  let model = live_model("stepfun", "THINKING", "step-3.7-flash");
+  let request = ProviderRequest {
+    model: model.clone(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "What is 17 * 23? Reply with just the number."
+    })],
+    stream: false,
+    parameters: HashMap::new(),
+    tools: None,
+    tool_choice: None,
+    thinking: Some(ThinkingConfig::Low),
+    response_format: None,
+  };
+
+  let response = tokio::time::timeout(Duration::from_secs(120), provider.execute(&request))
+    .await
+    .unwrap_or_else(|_| panic!("stepfun {model}: reasoning request timed out after 120s"))
+    .unwrap_or_else(|e| panic!("stepfun {model}: reasoning request failed: {e}"));
+
+  eprintln!(
+    "[live] stepfun {model}: answer {:?}, reasoning {} chars",
+    response.content,
+    response.thinking.as_deref().map_or(0, str::len)
+  );
+  let ContentType::Text(answer) = &response.content else {
+    panic!("stepfun {model}: expected text, got {:?}", response.content);
+  };
+  assert!(
+    answer.contains("391"),
+    "stepfun {model}: expected 391, got {answer:?}"
+  );
+  assert!(
+    response.thinking.as_deref().is_some_and(|t| !t.is_empty()),
+    "stepfun {model}: expected reasoning text"
+  );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stepfun_live_text_path() {
   let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Llm).await else {
