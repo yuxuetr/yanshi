@@ -344,7 +344,10 @@ _New entries go here. Will roll into the next tag (likely
   `LLMResponse.thinking`, which streaming previously always left empty.
 - **Gemini reasoning text.** A thinking request now sets
   `includeThoughts: true`; `thought: true` parts fill `thinking` (whole
-  replies and streams) and are kept out of the answer.
+  replies and streams) and are kept out of the answer. Stream chunks
+  whose `usageMetadata` lacks a token count now parse; a thought-only
+  chunk has no `candidatesTokenCount`, and the required field used to
+  drop it.
 
 - `figure`'s `domain: block` takes `language: d2` as well as `tikz`: the
   prompt carries D2 conventions and the source is checked against the
