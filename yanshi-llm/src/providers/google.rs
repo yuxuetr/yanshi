@@ -604,12 +604,31 @@ pub(crate) struct GoogleInlineData {
   pub data: String,
 }
 
+/// Decode one `inlineData` part: audio MIME types become audio, anything
+/// else an image. Shared by the whole-reply and streaming parsers.
+fn inline_data_block(inline: &GoogleInlineData) -> Result<ContentBlock> {
+  use base64::{Engine as _, engine::general_purpose::STANDARD};
+  let data = STANDARD
+    .decode(inline.data.trim())
+    .map_err(|e| LLMError::ResponseParsingError {
+      message: format!(
+        "Gemini inlineData ({}) is not valid base64: {e}",
+        inline.mime_type
+      ),
+    })?;
+  let media_type = inline.mime_type.clone();
+  Ok(if media_type.starts_with("audio/") {
+    ContentBlock::Audio { data, media_type }
+  } else {
+    ContentBlock::Image { data, media_type }
+  })
+}
+
 /// Y6.6 (M7): a reply's parts as content, in order. Text only (the usual
 /// case) stays `ContentType::Text`; one image alone is
 /// `ContentType::Image`; text and images together are `Mixed`. Function
 /// calls are not content (they become `tool_calls`).
 pub(crate) fn google_parts_to_content(parts: &[GooglePart]) -> Result<ContentType> {
-  use base64::{Engine as _, engine::general_purpose::STANDARD};
   let mut blocks: Vec<ContentBlock> = Vec::new();
   for part in parts {
     if let Some(text) = &part.text {
@@ -618,21 +637,7 @@ pub(crate) fn google_parts_to_content(parts: &[GooglePart]) -> Result<ContentTyp
         _ => blocks.push(ContentBlock::Text(text.clone())),
       }
     } else if let Some(inline) = &part.inline_data {
-      let data =
-        STANDARD
-          .decode(inline.data.trim())
-          .map_err(|e| LLMError::ResponseParsingError {
-            message: format!(
-              "Gemini inlineData ({}) is not valid base64: {e}",
-              inline.mime_type
-            ),
-          })?;
-      let media_type = inline.mime_type.clone();
-      blocks.push(if media_type.starts_with("audio/") {
-        ContentBlock::Audio { data, media_type }
-      } else {
-        ContentBlock::Image { data, media_type }
-      });
+      blocks.push(inline_data_block(inline)?);
     }
   }
   Ok(match blocks.len() {
@@ -708,15 +713,19 @@ impl GoogleStreamingResponse {
   /// `&mut self` (not a free function, unlike the sibling OpenAI/Moonshot/
   /// StepFun parsers) because `next_tool_call_index` must persist across
   /// calls — see that field's doc comment.
-  fn parse_json_chunk(&mut self, line: &str) -> Option<StreamChunk> {
+  fn parse_json_chunk(&mut self, line: &str) -> Result<Option<StreamChunk>> {
     // SSE framing (`alt=sse`); a bare JSON line is still accepted.
     let line = line.strip_prefix("data:").unwrap_or(line).trim();
     if line.is_empty() {
-      return None;
+      return Ok(None);
     }
 
-    let response = serde_json::from_str::<GoogleResponse>(line).ok()?;
-    let candidate = response.candidates.first()?;
+    let Ok(response) = serde_json::from_str::<GoogleResponse>(line) else {
+      return Ok(None);
+    };
+    let Some(candidate) = response.candidates.first() else {
+      return Ok(None);
+    };
 
     // Previously this only ever inspected `parts.first()` and only handled
     // a `text` field — a `functionCall` part (whether alone or alongside a
@@ -724,9 +733,15 @@ impl GoogleStreamingResponse {
     // entirely, silently dropping every streamed tool call.
     let mut content_text = String::new();
     let mut tool_call_deltas = Vec::new();
+    let mut media = Vec::new();
     for part in &candidate.content.parts {
       if let Some(text) = &part.text {
         content_text.push_str(text);
+      }
+      // Y8.2: an image arrives as one complete part; a broken one fails
+      // the stream like it fails a whole reply.
+      if let Some(inline) = &part.inline_data {
+        media.push(inline_data_block(inline)?);
       }
       if let Some(call) = &part.function_call {
         let name = call.get("name").and_then(Value::as_str).map(str::to_string);
@@ -750,14 +765,18 @@ impl GoogleStreamingResponse {
     // the final marker — so a tool-call-only chunk (no text) doesn't get
     // silently dropped, mirroring the same fix already applied to OpenAI's
     // `parse_sse_chunk` for the identical class of bug.
-    if content_text.is_empty() && tool_call_deltas.is_empty() && !is_final {
-      return None;
+    if content_text.is_empty() && tool_call_deltas.is_empty() && media.is_empty() && !is_final {
+      return Ok(None);
     }
 
-    Some(StreamChunk {
+    let Ok(metadata) = serde_json::to_value(&response) else {
+      return Ok(None);
+    };
+    Ok(Some(StreamChunk {
+      media,
       content: content_text,
       is_final,
-      metadata: Some(serde_json::to_value(&response).ok()?),
+      metadata: Some(metadata),
       usage: response.usage_metadata.map(|u| TokenUsage {
         prompt_tokens: Some(u.prompt_token_count),
         completion_tokens: Some(u.candidates_token_count),
@@ -765,7 +784,7 @@ impl GoogleStreamingResponse {
       }),
       content_type: Some("text".to_string()),
       tool_call_deltas,
-    })
+    }))
   }
 }
 
@@ -789,7 +808,7 @@ impl StreamingResponse for GoogleStreamingResponse {
       // With `alt=sse` Gemini sends one `data: {json}` line per event.
       while let Some(line) = self.buffer.next_line() {
         if !line.is_empty()
-          && let Some(chunk) = self.parse_json_chunk(&line)
+          && let Some(chunk) = self.parse_json_chunk(&line)?
         {
           if chunk.is_final {
             self.finished = true;
@@ -1499,6 +1518,7 @@ mod tests {
     let line = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Tokyo"}}}],"role":"model"},"finishReason":null}]}"#;
     let chunk = response
       .parse_json_chunk(line)
+      .unwrap()
       .expect("must produce a chunk");
     assert!(chunk.content.is_empty());
     assert!(!chunk.is_final);
@@ -1517,7 +1537,7 @@ mod tests {
   fn parse_json_chunk_does_not_drop_tool_call_only_chunk() {
     let mut response = test_streaming_response();
     let line = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"noop","args":{}}}],"role":"model"}}]}"#;
-    let chunk = response.parse_json_chunk(line);
+    let chunk = response.parse_json_chunk(line).unwrap();
     assert!(
       chunk.is_some(),
       "a function-call-only chunk must not be dropped"
@@ -1531,7 +1551,7 @@ mod tests {
   fn parse_json_chunk_handles_text_and_multiple_function_calls_together() {
     let mut response = test_streaming_response();
     let line = r#"{"candidates":[{"content":{"parts":[{"text":"checking..."},{"functionCall":{"name":"get_weather","args":{"city":"Tokyo"}}},{"functionCall":{"name":"get_time","args":{"tz":"JST"}}}],"role":"model"}}]}"#;
-    let chunk = response.parse_json_chunk(line).unwrap();
+    let chunk = response.parse_json_chunk(line).unwrap().unwrap();
     assert_eq!(chunk.content, "checking...");
     assert_eq!(chunk.tool_call_deltas.len(), 2);
     assert_eq!(chunk.tool_call_deltas[0].index, 0);
@@ -1553,8 +1573,8 @@ mod tests {
     let mut response = test_streaming_response();
     let first = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{}}}],"role":"model"}}]}"#;
     let second = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_time","args":{}}}],"role":"model"}}]}"#;
-    let chunk1 = response.parse_json_chunk(first).unwrap();
-    let chunk2 = response.parse_json_chunk(second).unwrap();
+    let chunk1 = response.parse_json_chunk(first).unwrap().unwrap();
+    let chunk2 = response.parse_json_chunk(second).unwrap().unwrap();
     assert_eq!(chunk1.tool_call_deltas[0].index, 0);
     assert_eq!(chunk2.tool_call_deltas[0].index, 1);
   }

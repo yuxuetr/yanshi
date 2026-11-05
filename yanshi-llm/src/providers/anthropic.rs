@@ -618,6 +618,7 @@ impl AnthropicStreamingResponse {
             let id = block.get("id").and_then(|i| i.as_str()).map(String::from);
             let name = block.get("name").and_then(|n| n.as_str()).map(String::from);
             return Some(StreamChunk {
+              media: Vec::new(),
               content: String::new(),
               is_final: false,
               metadata: Some(event.clone()),
@@ -642,6 +643,7 @@ impl AnthropicStreamingResponse {
             {
               let index = event.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
               return Some(StreamChunk {
+                media: Vec::new(),
                 content: String::new(),
                 is_final: false,
                 metadata: Some(event.clone()),
@@ -660,6 +662,7 @@ impl AnthropicStreamingResponse {
               && let Some(text_str) = text.as_str()
             {
               return Some(StreamChunk {
+                media: Vec::new(),
                 content: text_str.to_string(),
                 is_final: false,
                 metadata: Some(event.clone()),
@@ -676,6 +679,7 @@ impl AnthropicStreamingResponse {
           // tool_use, …) and previously terminated the stream early, dropping
           // every block after the first one. Now only `message_stop` ends it.
           return Some(StreamChunk {
+            media: Vec::new(),
             content: String::new(),
             is_final: true,
             metadata: Some(event.clone()),

@@ -65,3 +65,67 @@ async fn gemini_reply_images_become_content_blocks() {
     "the image is not duplicated into metadata"
   );
 }
+
+/// Y8.2: a streamed reply keeps its image too. Gemini sends the image as
+/// one complete `inlineData` part inside an SSE event.
+#[tokio::test]
+async fn gemini_streamed_reply_images_reach_the_collected_response() {
+  let mut server = mockito::Server::new_async().await;
+  let event = |parts: serde_json::Value, finish: Option<&str>| {
+    let mut candidate = json!({"content": {"role": "model", "parts": parts}, "index": 0});
+    if let Some(reason) = finish {
+      candidate["finishReason"] = json!(reason);
+    }
+    format!("data: {}\r\n\r\n", json!({"candidates": [candidate]}))
+  };
+  let body = [
+    event(json!([{"text": "Here is the diagram: "}]), None),
+    event(
+      json!([{"inlineData": {"mimeType": "image/png", "data": PNG_1X1}}]),
+      None,
+    ),
+    event(json!([{"text": "done."}]), Some("STOP")),
+  ]
+  .concat();
+  server
+    .mock(
+      "POST",
+      mockito::Matcher::Regex(":streamGenerateContent".to_string()),
+    )
+    .with_header("content-type", "text/event-stream")
+    .with_body(body)
+    .create_async()
+    .await;
+  let client = reqwest::Client::builder()
+    .no_proxy()
+    .build()
+    .expect("client");
+  let provider =
+    GoogleProvider::with_client(client, "g-key", Some(server.url())).expect("provider");
+  let stream = provider
+    .execute_streaming(&ProviderRequest {
+      model: "gemini-2.5-flash-image".to_string(),
+      messages: vec![json!({"role": "user", "content": "draw a box"})],
+      stream: true,
+      parameters: HashMap::new(),
+      tools: None,
+      tool_choice: None,
+      thinking: None,
+      response_format: None,
+    })
+    .await
+    .expect("stream");
+  let mut chunk_media = 0;
+  let response = yanshi_llm::client::streaming::collect_streaming_response(stream, |chunk| {
+    chunk_media += chunk.media.len();
+    async {}
+  })
+  .await
+  .expect("collected");
+  assert_eq!(chunk_media, 1, "the image arrives in exactly one chunk");
+  assert_eq!(response.content, "Here is the diagram: done.");
+  assert!(
+    matches!(&response.media[..], [ContentBlock::Image { data, media_type }]
+    if media_type == "image/png" && data.starts_with(b"\x89PNG"))
+  );
+}

@@ -23,6 +23,10 @@ pub struct StreamChunk {
   /// when present (those fields are sent once at the start of a block).
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub tool_call_deltas: Vec<ToolCallDelta>,
+  /// Y8.2: non-text parts that arrived complete in this chunk (Gemini
+  /// streams an image as one whole `inlineData` part, never split).
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub media: Vec<crate::providers::ContentBlock>,
 }
 
 /// Incremental tool_call payload streamed by a provider. Multiple deltas
@@ -133,10 +137,12 @@ where
   let mut raw_metadata: Option<serde_json::Value> = None;
   let mut tool_call_order: Vec<u32> = Vec::new();
   let mut tool_call_acc: HashMap<u32, (Option<String>, Option<String>, String)> = HashMap::new();
+  let mut media = Vec::new();
 
   while let Some(chunk) = response.next_chunk().await? {
     on_chunk(&chunk).await;
     content.push_str(&chunk.content);
+    media.extend(chunk.media.iter().cloned());
     if chunk.usage.is_some() {
       usage = chunk.usage.clone();
     }
@@ -192,9 +198,7 @@ where
     usage,
     raw_metadata,
     thinking: None,
-    // Streamed replies carry text deltas only; inline images are parsed
-    // on the non-streaming path.
-    media: Vec::new(),
+    media,
   })
 }
 
@@ -247,6 +251,7 @@ mod collect_streaming_response_tests {
 
   fn text_chunk(text: &str) -> StreamChunk {
     StreamChunk {
+      media: Vec::new(),
       content: text.to_string(),
       is_final: false,
       metadata: None,
@@ -266,6 +271,7 @@ mod collect_streaming_response_tests {
       text_chunk("lo, "),
       text_chunk("wor"),
       StreamChunk {
+        media: Vec::new(),
         content: "ld!".to_string(),
         is_final: true,
         metadata: None,
@@ -304,6 +310,7 @@ mod collect_streaming_response_tests {
   async fn tool_call_deltas_reassemble_across_chunks_by_index() {
     let stream: Box<dyn StreamingResponse> = Box::new(FixedChunkStream(VecDeque::from(vec![
       StreamChunk {
+        media: Vec::new(),
         content: String::new(),
         is_final: false,
         metadata: None,
@@ -317,6 +324,7 @@ mod collect_streaming_response_tests {
         }],
       },
       StreamChunk {
+        media: Vec::new(),
         content: String::new(),
         is_final: true,
         metadata: None,
@@ -355,6 +363,7 @@ mod collect_streaming_response_tests {
   async fn single_final_chunk_round_trips_like_a_non_chunked_response() {
     let stream: Box<dyn StreamingResponse> =
       Box::new(FixedChunkStream(VecDeque::from(vec![StreamChunk {
+        media: Vec::new(),
         content: "the whole answer at once".to_string(),
         is_final: true,
         metadata: None,

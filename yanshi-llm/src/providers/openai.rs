@@ -625,6 +625,7 @@ impl OpenAIStreamingResponse {
 
     if data.trim() == "[DONE]" {
       return Some(StreamChunk {
+        media: Vec::new(),
         content: String::new(),
         is_final: true,
         metadata: None,
@@ -643,6 +644,7 @@ impl OpenAIStreamingResponse {
     // frame's raw metadata.
     if chunk.choices.is_empty() {
       return chunk.usage.map(|u| StreamChunk {
+        media: Vec::new(),
         content: String::new(),
         is_final: false,
         metadata: None,
@@ -676,6 +678,7 @@ impl OpenAIStreamingResponse {
       }
 
       return Some(StreamChunk {
+        media: Vec::new(),
         content: content_text,
         is_final: choice.finish_reason.is_some(),
         metadata: Some(serde_json::to_value(&chunk).ok()?),

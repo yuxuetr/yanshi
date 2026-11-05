@@ -479,6 +479,7 @@ impl StepFunStreamingResponse {
 
     if data.trim() == "[DONE]" {
       return Some(StreamChunk {
+        media: Vec::new(),
         content: String::new(),
         is_final: true,
         metadata: None,
@@ -514,6 +515,7 @@ impl StepFunStreamingResponse {
       }
 
       return Some(StreamChunk {
+        media: Vec::new(),
         content: content_text,
         is_final: choice.finish_reason.is_some(),
         metadata: Some(serde_json::to_value(&chunk).ok()?),
