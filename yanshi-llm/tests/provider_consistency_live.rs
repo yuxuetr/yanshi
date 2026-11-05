@@ -2287,10 +2287,13 @@ fn kling_base_url() -> Option<String> {
 
 // ── Y6.6: image-to-image, one call per vendor (YANSHI_LIVE_IMAGE_TESTS) ──
 
-/// A stable, freely licensed photo (Wikimedia Commons) large enough for
-/// every vendor's minimum input size.
+/// The sample image from Alibaba's own Wan image-edit API reference
+/// (1344x896 WebP, inside Wan's 384-5000 px window). DashScope fetches the
+/// URL itself and could not download the Wikimedia photo used before; the
+/// Alibaba CDN is also reachable from the GitHub runner, where OpenAI's
+/// path downloads it.
 const LIVE_SOURCE_IMAGE: &str =
-  "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg";
+  "https://img.alicdn.com/imgextra/i2/O1CN01vHOj4h28jOxUJPwY8_!!6000000007968-49-tps-1344-896.webp";
 
 async fn live_image2image(
   vendor: &str,
