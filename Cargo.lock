@@ -7324,6 +7324,7 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "tokio",
+ "uuid",
  "which",
  "yanshi-agents",
  "yanshi-core",
