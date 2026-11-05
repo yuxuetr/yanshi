@@ -22,9 +22,12 @@
 //!   dna_features_viewer, biopython, networkx. `YANSHI_FIGURE_PYTHON_IMAGE`
 //!   overrides the tag.
 //!
-//! Domains (`domain`, Y6.5): `circuit` (tikz only) adds circuitikz
-//! conventions to the prompt and, with a `spec` parts list, checks the
-//! source before rendering; see the `circuit` module.
+//! Domains (`domain`, all tikz only) add conventions to the prompt and,
+//! with a `spec`, check the source against it before every render, so a
+//! figure that compiles but leaves something out is sent back too:
+//! `circuit` (Y6.5, circuitikz, a parts list), `chemistry` (Y8.4,
+//! chemfig, molecules with formulas) and `block` (Y8.4, TikZ, blocks and
+//! links). See the module of each.
 //!
 //! The external renderers run under the OS sandbox
 //! (`yanshi_nodes::common::sandboxed`), writing only inside a per-call
@@ -47,6 +50,8 @@ use yanshi_core::{
 use yanshi_llm::Yanshi;
 use yanshi_nodes::common::{artifacts, sandboxed};
 
+mod block;
+mod chemistry;
 mod circuit;
 
 const DEFAULT_MAX_ATTEMPTS: u64 = 3;
@@ -109,6 +114,48 @@ impl Language {
          dna_features_viewer, biopython (Bio.Phylo trees drawn with matplotlib) and networkx \
          are installed; nothing else is, and there is no network."
       }
+    }
+  }
+}
+
+/// A figure domain with its parsed `spec`.
+enum Domain {
+  Circuit(Vec<circuit::Component>),
+  Chemistry(chemistry::Scheme),
+  Block(block::Diagram),
+}
+
+impl Domain {
+  fn parse(name: &str, language: Language, spec: Option<&Value>) -> Result<Self, String> {
+    let domain = match name {
+      "circuit" => Self::Circuit(circuit::parse_spec(spec)?),
+      "chemistry" => Self::Chemistry(chemistry::parse_spec(spec)?),
+      "block" => Self::Block(block::parse_spec(spec)?),
+      other => {
+        return Err(format!(
+          "unknown domain '{other}': expected circuit, chemistry or block"
+        ));
+      }
+    };
+    if language != Language::Tikz {
+      return Err(format!("domain {name} needs language tikz"));
+    }
+    Ok(domain)
+  }
+
+  fn instructions(&self) -> String {
+    match self {
+      Self::Circuit(parts) => circuit::instructions(parts),
+      Self::Chemistry(scheme) => chemistry::instructions(scheme),
+      Self::Block(diagram) => block::instructions(diagram),
+    }
+  }
+
+  fn check(&self, source: &str) -> Result<(), String> {
+    match self {
+      Self::Circuit(parts) => circuit::check(source, parts),
+      Self::Chemistry(scheme) => chemistry::check(source, scheme),
+      Self::Block(diagram) => block::check(source, diagram),
     }
   }
 }
@@ -436,10 +483,10 @@ impl AsyncNode for FigureNode {
       _ => DEFAULT_MAX_ATTEMPTS,
     }
     .clamp(1, 10);
-    // Y6.5: a domain's parts list, checked before every render.
-    let circuit = match string_input(inputs, "domain").map(str::trim) {
+    // Y6.5 / Y8.4: a domain's spec, checked before every render.
+    let domain = match string_input(inputs, "domain").map(str::trim) {
       None => None,
-      Some("circuit") if language == Language::Tikz => {
+      Some(name) => {
         let spec = match inputs.get("spec") {
           Some(FlowValue::Json(Value::String(text))) if !text.trim().is_empty() => Some(
             serde_json::from_str::<Value>(text)
@@ -449,14 +496,10 @@ impl AsyncNode for FigureNode {
           Some(FlowValue::Json(value)) => Some(value.clone()),
           Some(_) => return Err(self.input_error("spec must be JSON")),
         };
-        Some(circuit::parse_spec(spec.as_ref()).map_err(|e| self.input_error(e))?)
-      }
-      Some("circuit") => return Err(self.input_error("domain circuit needs language tikz")),
-      Some(other) => {
-        return Err(self.input_error(format!("unknown domain '{other}': expected circuit")));
+        Some(Domain::parse(name, language, spec.as_ref()).map_err(|e| self.input_error(e))?)
       }
     };
-    let domain_text = circuit.as_deref().map(circuit::instructions);
+    let domain_text = domain.as_ref().map(Domain::instructions);
     let can_generate = description.is_some() && model.is_some();
     if string_input(inputs, "source").is_none() && !can_generate {
       return Err(self.input_error("give 'source', or 'description' and 'model'"));
@@ -478,10 +521,7 @@ impl AsyncNode for FigureNode {
     };
     let mut attempt: u64 = 1;
     let svg = loop {
-      let rendered = match circuit
-        .as_deref()
-        .map(|parts| circuit::check(&source, parts))
-      {
+      let rendered = match domain.as_ref().map(|domain| domain.check(&source)) {
         Some(Err(violations)) => Err(violations),
         _ => self.render(language, &source).await?,
       };

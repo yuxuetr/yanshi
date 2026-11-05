@@ -214,8 +214,23 @@ skeleton. A `spec` parts list (`[{id, kind, value}]`) is also checked
 against the source: every part must be drawn as a bipole of its kind and
 labelled with its id. A missing or wrongly drawn part is fed back like a
 compile error. `examples/generators/circuit_diagram.yml` is the sample
-domain template. Other domains (chemfig molecules, block diagrams) follow
-the same shape when there is a generator that needs them.
+domain template. Y8.4 added two more domains of the same shape, both
+tikz only:
+
+- `chemistry`: chemfig, with a spec of molecules (`[{name, formula}]`, or
+  `{molecules, reaction: true}` for a `\schemestart` scheme). Each molecule
+  must be drawn as `\chemname{\chemfig{…}}{name}`, and its atoms other than
+  C and H must match the formula. Skeletal formulas leave C and H
+  implicit, but heteroatoms are always written out.
+- `block`: TikZ, with a spec of blocks (`[{id, label}]`) and links
+  (`[{from, to}]`). Each block must be a node named by its id that shows
+  its label. Each link needs a `\draw` path on which `from` comes directly
+  before `to`; a path drawn with `<-` counts reversed.
+
+The mermaid and D2 backends in the table above are not built. Neither
+binary is on the development machine, so a renderer for them could not be
+checked end to end. Revisit when a generator needs one and `mmdc` or `d2`
+is available where its tests run.
 
 Sandbox notes that follow from the experiments: TeX Live installs outside
 `PATH` on macOS (`/Library/TeX/texbin`), so the allowlist names full paths
