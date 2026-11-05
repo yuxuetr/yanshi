@@ -1050,7 +1050,27 @@ async fn google_live_streaming_reasoning() {
 
   let response = tokio::time::timeout(Duration::from_secs(120), async {
     let stream = provider.execute_streaming(&request).await?;
-    collect_streaming_response(stream, |_| async {}).await
+    collect_streaming_response(stream, |chunk| {
+      // Shape only, never text: which part keys arrived and how many
+      // thought tokens were billed, so a missing summary is diagnosable.
+      if let Some(meta) = &chunk.metadata {
+        let parts: Vec<Vec<String>> = meta["candidates"][0]["content"]["parts"]
+          .as_array()
+          .map(|parts| {
+            parts
+              .iter()
+              .filter_map(|p| p.as_object().map(|o| o.keys().cloned().collect()))
+              .collect()
+          })
+          .unwrap_or_default();
+        eprintln!(
+          "[live] google {model} chunk parts {parts:?} thoughtsTokenCount {}",
+          meta["usageMetadata"]["thoughtsTokenCount"]
+        );
+      }
+      async {}
+    })
+    .await
   })
   .await
   .unwrap_or_else(|_| panic!("google {model}: streaming reasoning timed out after 120s"))
