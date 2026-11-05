@@ -106,7 +106,7 @@ Status vocabulary: `supported`, `live_tested`, `mock_only`, `unsupported`,
 | Streaming | `live_tested` | `stepfun_live_streaming_path` |
 | Native tool calling / compatible fallback | `live_tested` | `stepfun_live_tool_calling_or_fallback_path`; adapter normalizes non-empty `tool_calls` to `StopReason::ToolCalls` even when StepFun returns `finish_reason: "stop"` |
 | Vision understanding | `live_tested` | `stepfun_live_vision_path` with a tiny base64 PNG |
-| Image generation | `live_tested` | `stepfun_live_image_generation_path` via `/images/generations` |
+| Image generation | `unsupported` | StepFun retired `step-2x-large` and `step-image-edit-2` and stopped its image APIs on 2026-10-10; the registry entries and the live test are gone |
 | TTS | `live_tested` | `stepfun_live_tts_path` via `/audio/speech` |
 | ASR | `live_tested` | `stepfun_live_asr_path`; generates a tiny TTS fixture, then transcribes it |
 | Video generation | `unsupported` | No StepFun video API is implemented in `yanshi-llm` |
@@ -114,7 +114,7 @@ Status vocabulary: `supported`, `live_tested`, `mock_only`, `unsupported`,
 StepFun live tests use deterministic model selection. Environment overrides
 still win (`YANSHI_LIVE_STEPFUN_TEXT_MODEL`,
 `YANSHI_LIVE_STEPFUN_TOOLS_MODEL`, `YANSHI_LIVE_STEPFUN_VISION_MODEL`,
-`YANSHI_LIVE_STEPFUN_IMAGE_MODEL`, `YANSHI_LIVE_STEPFUN_TTS_MODEL`,
+`YANSHI_LIVE_STEPFUN_TTS_MODEL`,
 `YANSHI_LIVE_STEPFUN_ASR_MODEL`); otherwise the harness picks from the
 loaded Yanshi model config using a low-cost preference order before falling
 back to built-in defaults.
@@ -337,7 +337,8 @@ YANSHI_LIVE_VIDEO_TESTS=1
 
 `YANSHI_LIVE_IMAGE_TESTS` gates the billed image jobs: text-to-image
 through the modality dispatcher on OpenAI, Google, DashScope and GLM,
-StepFun's own image path, image-to-image on OpenAI and DashScope Wan,
+image-to-image on OpenAI and DashScope Wan (both from Alibaba's sample
+image),
 and a Gemini chat reply that carries an image. The `llm-live.yml`
 manual run has an `image` checkbox for them.
 

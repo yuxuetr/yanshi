@@ -16,7 +16,7 @@ pub async fn execute(
   strength: Option<f32>,
   input_image: Option<String>,
 ) -> Result<()> {
-  let model = model.unwrap_or_else(|| "step-1x-medium".to_string());
+  let model = model.unwrap_or_else(|| "gpt-image-2".to_string());
 
   // Initialize Yanshi so the registry knows about all configured
   // models. The dispatcher resolves vendor + API key by model name.

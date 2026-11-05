@@ -87,10 +87,10 @@ const LIVE_PROVIDER_PROFILES: &[LiveProviderProfile] = &[
   },
   LiveProviderProfile {
     name: "stepfun",
+    // No Image: StepFun stopped its image APIs on 2026-10-10.
     capabilities: &[
       LiveCapability::Llm,
       LiveCapability::Multimodal,
-      LiveCapability::Image,
       LiveCapability::Audio,
     ],
   },
@@ -1086,41 +1086,6 @@ async fn stepfun_live_vision_path() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stepfun_live_image_generation_path() {
-  let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Image).await else {
-    return;
-  };
-  let client = StepFunSpecializedClient::with_client(no_proxy_client(), &api_key, base_url)
-    .expect("stepfun specialized client");
-  let model = stepfun_live_model("IMAGE", "step-2x-large", &["step-2x-large"], |model| {
-    matches!(model.model_type(), "generateimage" | "text2image" | "image") || model.is_image_model()
-  })
-  .await;
-
-  let request = Text2ImageBuilder::new(&model, "a tiny red square icon on a white background")
-    .size("512x512")
-    .response_format("b64_json")
-    .steps(1)
-    .build();
-
-  let response = tokio::time::timeout(Duration::from_secs(60), client.text_to_image(request))
-    .await
-    .unwrap_or_else(|_| panic!("stepfun: live image generation timed out after 60s"))
-    .unwrap_or_else(|e| panic!("stepfun: live image generation failed: {e}"));
-
-  let first = response
-    .data
-    .first()
-    .expect("stepfun: image generation response must contain at least one image");
-  assert!(
-    first.image.as_deref().is_some_and(|v| !v.is_empty())
-      || first.b64_json.as_deref().is_some_and(|v| !v.is_empty())
-      || first.url.as_deref().is_some_and(|v| !v.is_empty()),
-    "stepfun: image generation response must contain image, b64_json, or url"
-  );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stepfun_live_tts_path() {
   let Some((api_key, base_url)) = stepfun_live_context(LiveCapability::Audio).await else {
     return;
@@ -1507,7 +1472,8 @@ fn live_gate_truthy_values_are_explicit() {
 
 #[test]
 fn live_provider_profiles_probe_supported_capabilities() {
-  assert!(provider_supports_capability(
+  // StepFun stopped its image APIs on 2026-10-10.
+  assert!(!provider_supports_capability(
     "stepfun",
     LiveCapability::Image
   ));

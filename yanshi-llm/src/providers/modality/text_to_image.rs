@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// own request struct that the modality impl can take a closure into.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Text2ImageRequest {
-  /// Model identifier (e.g. `"step-2x-large"`, `"dall-e-3"`,
+  /// Model identifier (e.g. `"gpt-image-2"`, `"dall-e-3"`,
   /// `"imagen-3.0-generate-002"`).
   pub model: String,
   /// Text prompt describing the desired image.

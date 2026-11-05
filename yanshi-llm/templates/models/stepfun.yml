@@ -15,21 +15,6 @@ models:
     supports_tools: true
     supports_multimodal: true
     response_format: null
-  step-2x-large:
-    vendor: step
-    type: text_to_image
-    model_id: null
-    base_url: null
-    temperature: null
-    top_p: null
-    max_tokens: null
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: false
-    supports_tools: false
-    supports_multimodal: false
-    response_format: null
   step-3.5-flash:
     vendor: step
     type: chat
@@ -79,22 +64,6 @@ models:
   step-asr:
     vendor: step
     type: asr
-    model_id: null
-    base_url: null
-    temperature: null
-    top_p: null
-    max_tokens: null
-    frequency_penalty: null
-    stop: null
-    n: null
-    supports_streaming: false
-    supports_tools: false
-    supports_multimodal: true
-    response_format: null
-  step-image-edit-2:
-    vendor: step
-    type: image_edit
-    accepts: [text, image]
     model_id: null
     base_url: null
     temperature: null

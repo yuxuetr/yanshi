@@ -139,11 +139,8 @@ impl StepFunProvider {
       // Automatic Speech Recognition models
       "step-asr" => ModelType::ASR,
 
-      // Image generation models. step-1x-medium is no longer listed.
-      "step-2x-large" => ModelType::GenerateImage,
-
-      // Image editing models. step-1x-edit was renamed to step-image-edit-2.
-      "step-image-edit-2" => ModelType::EditImage,
+      // StepFun retired its image models (step-2x-large,
+      // step-image-edit-2) and stopped its image APIs on 2026-10-10.
 
       // Default to text for unknown models
       _ => ModelType::Text,
@@ -361,9 +358,6 @@ impl LLMProvider for StepFunProvider {
       "step-tts-vivid".to_string(),
       "step-tts-mini".to_string(),
       "step-asr".to_string(),
-      // Image generation models (for chat completions interface)
-      "step-2x-large".to_string(),
-      "step-image-edit-2".to_string(),
     ]
   }
 }

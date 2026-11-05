@@ -1740,9 +1740,19 @@ _New entries go here. Will roll into the next tag (likely
 - The `llm-live.yml` manual run has an `image` checkbox that sets
   `YANSHI_LIVE_IMAGE_TESTS`, so the billed image jobs can run on demand
   like the video ones; nightly runs still skip them.
+- OpenAI image generation and edit send `response_format` to DALL-E
+  only; `gpt-image-*` rejected it with a 400 and always returns
+  `b64_json`.
+- Provider requests carry a `yanshi-llm/<version>` User-Agent; Wikimedia
+  refused source-image downloads without one.
 
 ### Removed
 
+- StepFun image generation: StepFun retired `step-2x-large` and
+  `step-image-edit-2` and stopped its image APIs on 2026-10-10. Both
+  registry entries and the StepFun image live test are gone, and
+  `yanshi image generate` now defaults to `gpt-image-2` instead of the
+  long-gone `step-1x-medium`.
 - The ten retired Claude models are gone from the bundled registry
   (`templates/models/anthropic.yml`): the Claude 3 / 3.5 / 3.7 family,
   `claude-opus-4-20250514` and `claude-sonnet-4-20250514`. Anthropic

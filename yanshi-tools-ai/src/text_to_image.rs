@@ -46,7 +46,7 @@ impl Tool for Text2ImageTool {
       "properties": {
         "model": {
           "type": "string",
-          "description": "Text-to-image model name from the model registry (e.g. \"dall-e-3\", \"step-2x-large\")."
+          "description": "Text-to-image model name from the model registry (e.g. \"dall-e-3\", \"gpt-image-2\")."
         },
         "prompt": {
           "type": "string",
