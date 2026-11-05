@@ -2245,6 +2245,24 @@ mod tests {
       streams.contains("video") && !streams.contains("subtitle"),
       "{streams}"
     );
+    // The frame is one flat grey unless the caption was drawn (libass
+    // skips text silently when it can't read a font). Measured at this
+    // size: 0 pixels off the background plain, ~100 with the caption.
+    let frame = std::process::Command::new("ffmpeg")
+      .args(["-hide_banner", "-loglevel", "error", "-ss", "0.5", "-i"])
+      .arg(path)
+      .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+      .output()
+      .expect("ffmpeg");
+    let mut sorted = frame.stdout.clone();
+    sorted.sort_unstable();
+    let background = sorted.get(sorted.len() / 2).copied().unwrap_or(0);
+    let drawn = frame
+      .stdout
+      .iter()
+      .filter(|&&v| v.abs_diff(background) > 40)
+      .count();
+    assert!(drawn > 50, "no caption pixels in the frame ({drawn})");
     assert!(matches!(outputs["film_subtitles"], FlowValue::File { .. }));
   }
 
