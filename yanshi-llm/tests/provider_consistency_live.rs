@@ -2284,8 +2284,10 @@ async fn live_image2image(
     steps: None,
     cfg_scale: None,
   };
+  // Longer than the provider's own 300 s poll budget, so a slow task
+  // fails with the provider's timeout, not this one.
   let response = tokio::time::timeout(
-    Duration::from_secs(180),
+    Duration::from_secs(360),
     provider(&api_key).transform(request),
   )
   .await

@@ -43,7 +43,10 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-const MAX_WAIT: Duration = Duration::from_secs(60);
+/// How long to poll a Wan image task before giving up. 60 s was too short
+/// for `wan2.5-i2i-preview`, which ran past it in the live test; the task
+/// keeps running (and is billed) after we stop waiting.
+const MAX_WAIT: Duration = Duration::from_secs(300);
 
 pub struct DashScopeMediaProvider {
   client: Client,
