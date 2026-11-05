@@ -29,7 +29,7 @@ use yanshi_llm::providers::{
   ProviderRequest, StepFunProvider, TokenUsage,
 };
 use yanshi_llm::tool_calling::{StopReason, ToolChoice, ToolSpec};
-use yanshi_llm::{LLMConfig, Yanshi};
+use yanshi_llm::{LLMConfig, ThinkingConfig, Yanshi};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LiveCapability {
@@ -861,6 +861,54 @@ async fn anthropic_live_text_path() {
     |key| AnthropicProvider::new(key, None).expect("anthropic provider"),
   )
   .await;
+}
+
+/// Y9.1: current Claude models take `thinking: {type: "adaptive"}` plus
+/// `output_config.effort`; `budget_tokens` is a 400 on 4.7 and later.
+/// Haiku 5.5 is the cheapest adaptive model. No `temperature`: it rejects
+/// non-default sampling parameters.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_live_adaptive_thinking() {
+  if !prepare_live_provider("anthropic", LiveCapability::Llm).await {
+    return;
+  }
+  let key_envs = ["ANTHROPIC_API_KEY", "ANTHROPIC_KEY", "CLAUDE_API_KEY"];
+  let Some((_, api_key)) = pick_api_key(&key_envs) else {
+    eprintln!("[live] anthropic thinking: skipped (none of {key_envs:?} set; live gate is on)");
+    return;
+  };
+  let provider = AnthropicProvider::new(&api_key, None).expect("anthropic provider");
+  let model = live_model("anthropic", "THINKING", "claude-haiku-5-5");
+  let request = ProviderRequest {
+    model: model.clone(),
+    messages: vec![json!({
+      "role": "user",
+      "content": "What is 17 * 23? Reply with just the number."
+    })],
+    stream: false,
+    parameters: HashMap::from([("max_tokens".to_string(), json!(2048))]),
+    tools: None,
+    tool_choice: None,
+    thinking: Some(ThinkingConfig::Low),
+    response_format: None,
+  };
+
+  let response = tokio::time::timeout(Duration::from_secs(60), provider.execute(&request))
+    .await
+    .unwrap_or_else(|_| panic!("anthropic {model}: thinking request timed out after 60s"))
+    .unwrap_or_else(|e| panic!("anthropic {model}: thinking request failed: {e}"));
+
+  eprintln!(
+    "[live] anthropic {model}: answer {:?}, thinking {} chars",
+    response.content,
+    response.thinking.as_deref().map_or(0, str::len)
+  );
+  assert!(
+    response.content.contains("391"),
+    "anthropic {model}: expected 391, got {:?}",
+    response.content
+  );
+  assert_eq!(response.stop_reason, Some(StopReason::Stop));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
