@@ -1,4 +1,4 @@
-//! Y6.6: the DashScope (Wan), MiniMax (Hailuo) and Kling text-to-video
+//! Y6.6: the DashScope (Wan), MiniMax (Hailuo) and Kling (legacy and 4.0) text-to-video
 //! providers end to end against a local server speaking each vendor's
 //! documented wire shape: submit → poll → (MiniMax) file retrieve → URL.
 
@@ -168,4 +168,39 @@ async fn kling_signs_a_jwt_for_a_key_pair_and_polls_the_task() {
     .expect_err("1102");
   assert!(err.to_string().contains("balance not enough"), "{err}");
   plain.assert_async().await;
+}
+
+#[tokio::test]
+async fn kling_4_uses_the_current_api_and_the_tasks_query() {
+  let mut server = mockito::Server::new_async().await;
+  let submit = server
+    .mock("POST", "/text-to-video/kling-4.0-flash")
+    .match_header("authorization", "Bearer kling-api-key")
+    .match_body(mockito::Matcher::Json(serde_json::json!({
+      "prompt": "a fox in the snow",
+      "settings": {"duration": 5, "aspect_ratio": "16:9"}
+    })))
+    .with_body(
+      r#"{"code":0,"message":"SUCCEED","request_id":"r","data":{"id":"893","status":"submitted"}}"#,
+    )
+    .create_async()
+    .await;
+  let poll = server
+    .mock("GET", "/tasks")
+    .match_query(mockito::Matcher::UrlEncoded(
+      "task_ids".to_string(),
+      "893".to_string(),
+    ))
+    .match_header("authorization", "Bearer kling-api-key")
+    .with_body(r#"{"code":0,"message":"SUCCEED","request_id":"r","data":[{"id":"893","status":"succeeded","update_time":1781080794151,"outputs":[{"type":"video","id":"v","url":"https://kling.example/v4.mp4","duration":"5"}],"usage":{"output_duration":"5"}}]}"#)
+    .create_async()
+    .await;
+  let provider = KlingVideoProvider::with_client(client(), "kling-api-key", Some(server.url()))
+    .expect("provider");
+  assert_eq!(
+    wait(&provider, "kling-4.0-flash").await,
+    "https://kling.example/v4.mp4"
+  );
+  submit.assert_async().await;
+  poll.assert_async().await;
 }

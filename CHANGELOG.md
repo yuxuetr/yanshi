@@ -1721,6 +1721,11 @@ _New entries go here. Will roll into the next tag (likely
   the model's `base_url` to `https://api-singapore.klingai.com`. The live
   test reads `KLING_VIDEO_BASE_URL`, and its MiniMax case uses
   `MiniMax-Hailuo-2.3`.
+- Kling text-to-video supports `kling-4.0` and `kling-4.0-flash` through
+  Kling's current API (`POST /text-to-video/{model}`, `GET /tasks`); the
+  `kling-v*` models keep the legacy `/v1/videos/text2video` API. Resource
+  packs for 4.0 are only drawn on by the current API. The Kling live test
+  now generates 3 s of `kling-4.0-flash` at 720p.
 
 ### Removed
 

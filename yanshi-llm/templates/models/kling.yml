@@ -1,7 +1,42 @@
 # Kling (Y6.6): text-to-video only. `KLING_API_KEY` is an API key, or a
 # legacy `ACCESS_KEY:SECRET_KEY` pair (signed into a JWT per request).
-# The API takes `model_name` with hyphens (kling-v2-1-master).
+# The `kling-v*` models use the legacy API, which takes `model_name` with
+# hyphens (kling-v2-1-master); the others use the current API, which takes
+# the model in the path (`/text-to-video/kling-4.0`). Kling 4.0: 720p or
+# 1080p, 3-30 s; 4.0 Flash: 720p, 3-20 s.
 models:
+  kling-4.0:
+    vendor: kling
+    type: text_to_video
+    accepts: [text]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
+  kling-4.0-flash:
+    vendor: kling
+    type: text_to_video
+    accepts: [text]
+    model_id: null
+    base_url: null
+    temperature: 0.7
+    top_p: null
+    max_tokens: 4096
+    frequency_penalty: null
+    stop: null
+    n: null
+    supports_streaming: false
+    supports_tools: false
+    supports_multimodal: false
+    response_format: null
   kling-v2-6:
     vendor: kling
     type: text_to_video

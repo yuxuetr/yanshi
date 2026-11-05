@@ -2201,8 +2201,11 @@ fn minimax_base_url_sync() -> Option<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kling_text_to_video_live() {
-  let mut request = live_video_request("kling-v2-5-turbo");
-  request.duration_seconds = Some(5);
+  // The cheapest current model at its shortest length; the account's
+  // resource pack covers Kling 4.0 / 4.0 Flash, not the kling-v* models.
+  let mut request = live_video_request("kling-4.0-flash");
+  request.resolution = Some("720p".to_string());
+  request.duration_seconds = Some(3);
   live_video(
     "kling",
     "KLING_API_KEY",

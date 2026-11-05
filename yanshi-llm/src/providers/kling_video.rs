@@ -1,9 +1,22 @@
 //! Kling text-to-video (Y6.6).
 //!
-//! `POST {base_url}/v1/videos/text2video` → `data.task_id`; `GET
-//! {base_url}/v1/videos/text2video/{task_id}` until `data.task_status`
-//! is `succeed` (videos at `data.task_result.videos[].url`) or `failed`
-//! (`data.task_status_msg`). Responses carry `code`, non-zero on error.
+//! Kling runs two APIs, chosen here by model name:
+//!
+//! - The legacy one, for the `kling-v*` models: `POST
+//!   {base_url}/v1/videos/text2video` with `model_name` → `data.task_id`;
+//!   `GET {base_url}/v1/videos/text2video/{task_id}` until
+//!   `data.task_status` is `succeed` (videos at
+//!   `data.task_result.videos[].url`) or `failed` (`data.task_status_msg`).
+//! - The current one, for everything else (`kling-4.0`,
+//!   `kling-4.0-flash`): `POST {base_url}/text-to-video/{model}` with
+//!   `prompt` + `settings` → `data.id`; `GET {base_url}/tasks?task_ids=`
+//!   until `data[0].status` is `succeeded` (videos are the `outputs` of
+//!   type `video`) or `failed` (`message`). Resource packs bought for
+//!   these models are only drawn on by this API. Its task ids are handed
+//!   out as `tasks/{id}` so [`poll`](Text2VideoProvider::poll) knows which
+//!   API to ask.
+//!
+//! Responses of both carry `code`, non-zero on error.
 //!
 //! Credentials: Kling issues either an API key, sent as the bearer token,
 //! or a legacy access key / secret key pair, which signs a 30-minute
@@ -30,6 +43,13 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 
 const ENDPOINT: &str = "/v1/videos/text2video";
+/// Prefix of the task ids of the current API.
+const TASKS_PREFIX: &str = "tasks/";
+
+/// Whether `model` is served by the legacy API.
+fn is_legacy(model: &str) -> bool {
+  model.starts_with("kling-v")
+}
 
 /// How the provider authenticates.
 enum Credentials {
@@ -202,6 +222,84 @@ pub(crate) fn parse_status(body: &Value) -> Result<VideoGenerationStatus> {
   }
 }
 
+/// The create request of the current API. `resolution` is lower-cased
+/// (`720p`); `extra` (`options`, …) is merged in last.
+pub(crate) fn request_body_v4(request: &Text2VideoRequest) -> Value {
+  let mut settings = serde_json::Map::new();
+  if let Some(duration) = request.duration_seconds {
+    settings.insert("duration".to_string(), json!(duration));
+  }
+  if let Some(resolution) = &request.resolution {
+    settings.insert("resolution".to_string(), json!(resolution.to_lowercase()));
+  }
+  if let Some(ratio) = &request.aspect_ratio {
+    settings.insert("aspect_ratio".to_string(), json!(ratio));
+  }
+  let mut body = serde_json::Map::new();
+  body.insert("prompt".to_string(), json!(request.prompt));
+  if !settings.is_empty() {
+    body.insert("settings".to_string(), Value::Object(settings));
+  }
+  if let Some(Value::Object(extra)) = &request.extra {
+    body.extend(extra.clone());
+  }
+  Value::Object(body)
+}
+
+/// The status of task `id` in a `GET /tasks` response.
+pub(crate) fn parse_status_v4(body: &Value, id: &str) -> Result<VideoGenerationStatus> {
+  let task = body["data"]
+    .as_array()
+    .and_then(|tasks| tasks.iter().find(|task| task["id"].as_str() == Some(id)))
+    .ok_or_else(|| LLMError::ResponseParsingError {
+      message: format!("Kling task {id} missing from the query response: {body}"),
+    })?;
+  match task["status"].as_str().unwrap_or_default() {
+    "succeeded" => {
+      let videos: Vec<GeneratedVideo> = task["outputs"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|output| output["type"] == "video")
+        .filter_map(|video| {
+          Some(GeneratedVideo {
+            url: Some(video["url"].as_str()?.to_string()),
+            b64_data: None,
+            duration_seconds: video["duration"]
+              .as_str()
+              .and_then(|d| d.parse::<f64>().ok())
+              .map(|d| d.round() as u32),
+          })
+        })
+        .collect();
+      if videos.is_empty() {
+        return Err(LLMError::ResponseParsingError {
+          message: format!("Kling task succeeded without videos: {body}"),
+        });
+      }
+      Ok(VideoGenerationStatus::Completed(VideoGenerationResponse {
+        created: task["update_time"].as_u64().unwrap_or(0) / 1000,
+        videos,
+        metadata: Some(json!({
+          "task_id": id,
+          "request_id": body["request_id"],
+          "usage": task["usage"],
+          "billing": task["billing"],
+        })),
+      }))
+    }
+    "failed" => Ok(VideoGenerationStatus::Failed {
+      message: task["message"]
+        .as_str()
+        .filter(|m| !m.is_empty())
+        .unwrap_or("video generation failed")
+        .to_string(),
+    }),
+    _ => Ok(VideoGenerationStatus::Pending),
+  }
+}
+
 #[async_trait]
 impl Text2VideoProvider for KlingVideoProvider {
   fn name(&self) -> &str {
@@ -209,6 +307,26 @@ impl Text2VideoProvider for KlingVideoProvider {
   }
 
   async fn submit(&self, request: Text2VideoRequest) -> Result<VideoGenerationTask> {
+    if !is_legacy(&request.model) {
+      let response = self
+        .client
+        .post(format!("{}/text-to-video/{}", self.base_url, request.model))
+        .bearer_auth(self.token()?)
+        .json(&request_body_v4(&request))
+        .send()
+        .await?;
+      let body = checked_body(response).await?;
+      let id = body["data"]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| LLMError::ResponseParsingError {
+          message: format!("Kling submission returned no id: {body}"),
+        })?;
+      return Ok(VideoGenerationTask {
+        task_id: format!("{TASKS_PREFIX}{id}"),
+        metadata: None,
+      });
+    }
     let response = self
       .client
       .post(format!("{}{ENDPOINT}", self.base_url))
@@ -230,6 +348,16 @@ impl Text2VideoProvider for KlingVideoProvider {
   }
 
   async fn poll(&self, task: &VideoGenerationTask) -> Result<VideoGenerationStatus> {
+    if let Some(id) = task.task_id.strip_prefix(TASKS_PREFIX) {
+      let response = self
+        .client
+        .get(format!("{}/tasks", self.base_url))
+        .query(&[("task_ids", id)])
+        .bearer_auth(self.token()?)
+        .send()
+        .await?;
+      return parse_status_v4(&checked_body(response).await?, id);
+    }
     let response = self
       .client
       .get(format!("{}{ENDPOINT}/{}", self.base_url, task.task_id))
@@ -296,6 +424,49 @@ mod tests {
       body,
       json!({"model_name": "kling-v2-1-master", "prompt": "a fox", "aspect_ratio": "16:9", "duration": "5", "mode": "pro"})
     );
+  }
+
+  #[test]
+  fn the_current_api_serves_kling_4_and_reports_its_task_status() {
+    assert!(is_legacy("kling-v2-5-turbo"));
+    assert!(!is_legacy("kling-4.0-flash"));
+    let body = request_body_v4(&Text2VideoRequest {
+      model: "kling-4.0-flash".to_string(),
+      prompt: "a fox".to_string(),
+      aspect_ratio: Some("9:16".to_string()),
+      duration_seconds: Some(3),
+      resolution: Some("720P".to_string()),
+      seed: None,
+      extra: Some(json!({"options": {"watermark_info": {"enabled": false}}})),
+    });
+    assert_eq!(
+      body,
+      json!({"prompt": "a fox", "settings": {"duration": 3, "resolution": "720p", "aspect_ratio": "9:16"}, "options": {"watermark_info": {"enabled": false}}})
+    );
+    let tasks = |status: &str| {
+      json!({"code": 0, "request_id": "r", "data": [{"id": "893", "status": status, "message": "risk control", "update_time": 1_781_080_794_151u64, "outputs": [
+        {"type": "image", "url": "https://x/cover.png"},
+        {"type": "video", "id": "v", "url": "https://x/v.mp4", "duration": "3.04"}
+      ]}]})
+    };
+    assert!(matches!(
+      parse_status_v4(&tasks("processing"), "893").expect("ok"),
+      VideoGenerationStatus::Pending
+    ));
+    assert!(matches!(
+      parse_status_v4(&tasks("failed"), "893").expect("ok"),
+      VideoGenerationStatus::Failed { message } if message == "risk control"
+    ));
+    match parse_status_v4(&tasks("succeeded"), "893").expect("ok") {
+      VideoGenerationStatus::Completed(done) => {
+        assert_eq!(done.videos.len(), 1);
+        assert_eq!(done.videos[0].url.as_deref(), Some("https://x/v.mp4"));
+        assert_eq!(done.videos[0].duration_seconds, Some(3));
+        assert_eq!(done.created, 1_781_080_794);
+      }
+      other => panic!("{other:?}"),
+    }
+    assert!(parse_status_v4(&tasks("succeeded"), "other").is_err());
   }
 
   const REFERENCE_SIGNATURE: &str = "tMljlG8Xy1G8AKj5WkEZRcRIADvbH0FP6wgzpwHAfs4";
