@@ -75,7 +75,9 @@ impl OpenAIImageProvider {
     if let Some(n) = request.n {
       body.insert("n".to_string(), Value::Number(n.into()));
     }
-    if let Some(ref response_format) = request.response_format {
+    if let Some(ref response_format) = request.response_format
+      && accepts_response_format(&request.model)
+    {
       body.insert(
         "response_format".to_string(),
         Value::String(response_format.clone()),
@@ -103,11 +105,21 @@ impl OpenAIImageProvider {
     if let Some(ref size) = request.size {
       form = form.text("size", size.clone());
     }
-    if let Some(ref response_format) = request.response_format {
+    if let Some(ref response_format) = request.response_format
+      && accepts_response_format(&request.model)
+    {
       form = form.text("response_format", response_format.clone());
     }
     form
   }
+}
+
+/// Only DALL·E takes `response_format`; the GPT image models always
+/// return `b64_json` and answer the field with a 400 `unknown_parameter`.
+/// [`parse_image_response`] reads either shape, so dropping it loses
+/// nothing.
+fn accepts_response_format(model: &str) -> bool {
+  model.starts_with("dall-e")
 }
 
 /// Map a filename's extension to an image MIME type. Falls back to
@@ -370,6 +382,16 @@ mod tests {
     assert_eq!(body["prompt"], "a red square");
     assert_eq!(body["size"], "1024x1024");
     assert_eq!(body["n"], 2);
+    assert!(
+      body.get("response_format").is_none(),
+      "gpt-image-* rejects response_format with a 400"
+    );
+
+    let dalle = Text2ImageRequest {
+      model: "dall-e-3".into(),
+      ..request
+    };
+    let body = OpenAIImageProvider::build_generate_body(&dalle);
     assert_eq!(body["response_format"], "b64_json");
   }
 }
